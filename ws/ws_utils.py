@@ -3,6 +3,7 @@ import json
 
 from db.db import fetch_user_facts
 from llm.ollama_client import locked_fields
+from config.logger_config import logger
 
 
 async def enrich_profile(user_id):
@@ -30,6 +31,11 @@ async def enrich_profile(user_id):
 
 
 async def send_debug(websocket, message: str):
+    # Also logged (not just sent to the browser's Debug panel) so the
+    # Controller's A.L.E.X. tab — which only ever sees what's written to
+    # the log file — has the same visibility the browser does.
+    logger.info(f"[DEBUG] {message}")
+
     try:
         await websocket.send_text(f"__DEBUG__{message}")
     except:

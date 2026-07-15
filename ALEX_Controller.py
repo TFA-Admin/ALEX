@@ -2,6 +2,7 @@ import sys
 import os
 import glob
 import subprocess
+import sqlite3
 import psutil
 import re
 import time
@@ -10,9 +11,10 @@ import asyncio
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton,
     QTextEdit, QLabel, QHBoxLayout, QTabWidget,
-    QTableWidget, QTableWidgetItem, QMessageBox
+    QTableWidget, QTableWidgetItem, QMessageBox, QComboBox,
+    QAbstractItemView
 )
-from PySide6.QtCore import QThread, Signal, QTimer
+from PySide6.QtCore import QThread, Signal, QTimer, Qt
 from PySide6.QtGui import QGuiApplication
 
 from db.db import (
@@ -23,6 +25,15 @@ from db.db import (
 ALEX_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(ALEX_DIR, "config", "Logs")
 OLLAMA_LOG_PATH = os.path.join(LOG_DIR, "ollama_output.log")
+DB_PATH = os.path.join(ALEX_DIR, "db", "memory.db")
+
+# Columns the DB browser tab never edits/writes — pickled embeddings would
+# be corrupted by round-tripping through a text cell, so they're shown as
+# a placeholder and simply left out of every INSERT/UPDATE it builds.
+DB_BLOB_COLUMNS = {
+    ("vector_memory", "embedding"),
+    ("voice_profiles", "embedding"),
+}
 
 # Ollama lives outside this repo — env var lets this run on a machine with
 # a different drive/folder layout without editing code; default matches
@@ -189,22 +200,20 @@ class AlexController(QWidget):
         self.user_table.setColumnCount(2)
         self.user_table.setHorizontalHeaderLabels(["Session ID", "Connected (s)"])
 
-        # 🎭 PERSONALITY TAB — hard resets belong here, not in chat/voice
-        # (chat-based reset phrasing is fragile on a small local model; a
-        # button is unambiguous)
-        self.personality_tab = QWidget()
-        p_layout = QVBoxLayout()
+        # 🎭 A.L.E.X. TAB — personality display/reset live here as
+        # on-demand buttons rather than a separate tab: hard resets belong
+        # in the Controller, not chat/voice (fragile phrasing on a small
+        # local model), but they're still just actions on this one tab.
+        self.alex_tab = QWidget()
+        alex_layout = QVBoxLayout()
+        alex_layout.setContentsMargins(0, 0, 0, 0)
 
-        p_layout.addWidget(QLabel("Current personality:"))
+        alex_layout.addWidget(self.alex_log)
 
-        self.personality_display = QTextEdit()
-        self.personality_display.setReadOnly(True)
-        p_layout.addWidget(self.personality_display)
+        alex_btns = QHBoxLayout()
 
-        p_btns = QHBoxLayout()
-
-        self.refresh_personality_btn = QPushButton("🔄 Refresh")
-        self.refresh_personality_btn.clicked.connect(self.refresh_personality)
+        self.show_personality_btn = QPushButton("🎭 Show Personality")
+        self.show_personality_btn.clicked.connect(self.show_personality)
 
         self.reset_personality_btn = QPushButton("♻️ Reset Personality to Default")
         self.reset_personality_btn.clicked.connect(self.reset_personality)
@@ -212,15 +221,56 @@ class AlexController(QWidget):
         self.reset_phrases_btn = QPushButton("♻️ Reset All Phrases to Default")
         self.reset_phrases_btn.clicked.connect(self.reset_phrases)
 
-        for b in [self.refresh_personality_btn, self.reset_personality_btn, self.reset_phrases_btn]:
-            p_btns.addWidget(b)
+        for b in [self.show_personality_btn, self.reset_personality_btn, self.reset_phrases_btn]:
+            alex_btns.addWidget(b)
 
-        p_layout.addLayout(p_btns)
-        self.personality_tab.setLayout(p_layout)
+        alex_layout.addLayout(alex_btns)
+        self.alex_tab.setLayout(alex_layout)
+
+        # 🗄️ DATABASE TAB — direct read/write view of db/memory.db.
+        # Uses plain sqlite3 (not db.py's aiosqlite helpers) since this is
+        # a generic, table-agnostic browser rather than the specific
+        # queries db.py exposes; button-triggered, not on any hot path.
+        self.db_tab = QWidget()
+        db_layout = QVBoxLayout()
+
+        db_top = QHBoxLayout()
+        db_top.addWidget(QLabel("Table:"))
+
+        self.db_table_selector = QComboBox()
+        self.db_table_selector.currentTextChanged.connect(self.load_db_table_data)
+        db_top.addWidget(self.db_table_selector)
+
+        self.db_refresh_btn = QPushButton("🔄 Refresh")
+        self.db_refresh_btn.clicked.connect(self.load_db_table_data)
+        db_top.addWidget(self.db_refresh_btn)
+
+        db_layout.addLayout(db_top)
+
+        self.db_table = QTableWidget()
+        self.db_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        db_layout.addWidget(self.db_table)
+
+        db_btns = QHBoxLayout()
+
+        self.db_add_row_btn = QPushButton("➕ Add Row")
+        self.db_add_row_btn.clicked.connect(self.add_db_row)
+
+        self.db_delete_row_btn = QPushButton("🗑️ Delete Selected Row")
+        self.db_delete_row_btn.clicked.connect(self.delete_db_row)
+
+        self.db_save_btn = QPushButton("💾 Save Changes")
+        self.db_save_btn.clicked.connect(self.save_db_changes)
+
+        for b in [self.db_add_row_btn, self.db_delete_row_btn, self.db_save_btn]:
+            db_btns.addWidget(b)
+
+        db_layout.addLayout(db_btns)
+        self.db_tab.setLayout(db_layout)
 
         self.tabs.addTab(self.ollama_log, "Ollama")
-        self.tabs.addTab(self.alex_log, "A.L.E.X.")
-        self.tabs.addTab(self.personality_tab, "Personality")
+        self.tabs.addTab(self.alex_tab, "A.L.E.X.")
+        self.tabs.addTab(self.db_tab, "Database")
         self.tabs.addTab(self.user_table, "Users")
         self.tabs.addTab(self.system_log, "System")
 
@@ -237,7 +287,7 @@ class AlexController(QWidget):
         # ALEX — so it stays useful even when she's started some other way.
         self.start_log_tailing()
 
-        self.refresh_personality()
+        self.load_db_tables()
 
     # ---------------- STATUS ----------------
     def update_status(self):
@@ -331,21 +381,27 @@ class AlexController(QWidget):
     # ---------------- COPY ----------------
     def copy_logs(self):
         current = self.tabs.currentWidget()
+
+        # A.L.E.X. tab is a wrapper QWidget (log + buttons), not the
+        # QTextEdit directly — copy its log content specifically.
+        if current is self.alex_tab:
+            current = self.alex_log
+
         if isinstance(current, QTextEdit):
             QGuiApplication.clipboard().setText(current.toPlainText())
             self.system_log.append("Copied logs")
 
-    # ---------------- PERSONALITY ----------------
+    # ---------------- PERSONALITY (on-demand, lives on the A.L.E.X. tab) ----------------
     # Writes directly to the same sqlite DB the live ALEX process reads
     # from — no HTTP/WS round-trip needed since this Controller runs on the
     # same machine. Blocking asyncio.run() calls are fine here: these are
     # one-off admin actions from a button click, not a hot path.
-    def refresh_personality(self):
+    def show_personality(self):
         try:
             current = asyncio.run(get_personality())
-            self.personality_display.setPlainText(current)
+            self.alex_log.append(f"[SYSTEM] Current personality: {current}")
         except Exception as e:
-            self.system_log.append(f"⚠️ Failed to load personality: {e}")
+            self.alex_log.append(f"⚠️ Failed to load personality: {e}")
 
     def reset_personality(self):
         confirm = QMessageBox.question(
@@ -360,10 +416,9 @@ class AlexController(QWidget):
         try:
             asyncio.run(set_personality(DEFAULT_PERSONALITY))
             asyncio.run(log_personality_change(DEFAULT_PERSONALITY, "creator reset via Controller", kind="personality"))
-            self.system_log.append("[SYSTEM] Personality reset to default via Controller")
-            self.refresh_personality()
+            self.alex_log.append("[SYSTEM] Personality reset to default via Controller")
         except Exception as e:
-            self.system_log.append(f"⚠️ Failed to reset personality: {e}")
+            self.alex_log.append(f"⚠️ Failed to reset personality: {e}")
 
     def reset_phrases(self):
         confirm = QMessageBox.question(
@@ -377,9 +432,182 @@ class AlexController(QWidget):
         try:
             asyncio.run(reset_all_phrases())
             asyncio.run(log_personality_change("(all reset to defaults)", "creator reset via Controller", kind="phrases"))
-            self.system_log.append("[SYSTEM] All phrases reset to default via Controller")
+            self.alex_log.append("[SYSTEM] All phrases reset to default via Controller")
         except Exception as e:
-            self.system_log.append(f"⚠️ Failed to reset phrases: {e}")
+            self.alex_log.append(f"⚠️ Failed to reset phrases: {e}")
+
+    # ---------------- DATABASE BROWSER ----------------
+    # Plain sqlite3, not db.py's aiosqlite helpers — this is a generic
+    # table browser, not a specific query. Same DB file the live ALEX
+    # process uses; sqlite handles the concurrent access fine for these
+    # short, infrequent, button-triggered transactions.
+    NEW_ROW_MARKER = "(new)"
+
+    def load_db_tables(self):
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            )
+            tables = [r[0] for r in cursor.fetchall()]
+            conn.close()
+        except Exception as e:
+            self.alex_log.append(f"⚠️ Failed to list database tables: {e}")
+            return
+
+        self.db_table_selector.blockSignals(True)
+        self.db_table_selector.clear()
+        self.db_table_selector.addItems(tables)
+        self.db_table_selector.blockSignals(False)
+
+        self.load_db_table_data()
+
+    def load_db_table_data(self):
+        table = self.db_table_selector.currentText()
+        if not table:
+            self.db_table.setRowCount(0)
+            self.db_table.setColumnCount(0)
+            return
+
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            columns = [row[1] for row in conn.execute(f"PRAGMA table_info('{table}')")]
+            rows = conn.execute(f"SELECT rowid, * FROM '{table}'").fetchall()
+            conn.close()
+        except Exception as e:
+            self.alex_log.append(f"⚠️ Failed to load table '{table}': {e}")
+            return
+
+        self.db_current_table = table
+        self.db_current_columns = columns
+        blob_cols = {c for t, c in DB_BLOB_COLUMNS if t == table}
+        self.db_current_blob_cols = blob_cols
+
+        headers = ["rowid"] + columns
+        self.db_table.setColumnCount(len(headers))
+        self.db_table.setHorizontalHeaderLabels(headers)
+        self.db_table.setRowCount(len(rows))
+
+        for r, row in enumerate(rows):
+            for c, value in enumerate(row):
+                col_name = headers[c]
+
+                if col_name in blob_cols:
+                    item = QTableWidgetItem(f"<{len(value) if value else 0} bytes>" if value is not None else "")
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                else:
+                    item = QTableWidgetItem("" if value is None else str(value))
+
+                if col_name == "rowid":
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+
+                self.db_table.setItem(r, c, item)
+
+    def add_db_row(self):
+        if not getattr(self, "db_current_table", None):
+            return
+
+        headers = ["rowid"] + self.db_current_columns
+        row = self.db_table.rowCount()
+        self.db_table.insertRow(row)
+
+        for c, col_name in enumerate(headers):
+            if col_name == "rowid":
+                item = QTableWidgetItem(self.NEW_ROW_MARKER)
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+            elif col_name in self.db_current_blob_cols:
+                item = QTableWidgetItem("")
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+            else:
+                item = QTableWidgetItem("")
+
+            self.db_table.setItem(row, c, item)
+
+        self.db_table.scrollToBottom()
+
+    def delete_db_row(self):
+        table = getattr(self, "db_current_table", None)
+        if not table:
+            return
+
+        rows = sorted({idx.row() for idx in self.db_table.selectionModel().selectedRows()}, reverse=True)
+        if not rows:
+            return
+
+        real_rowids = [
+            self.db_table.item(r, 0).text() for r in rows
+            if self.db_table.item(r, 0).text() != self.NEW_ROW_MARKER
+        ]
+
+        if real_rowids:
+            confirm = QMessageBox.question(
+                self, "Delete Row(s)",
+                f"Permanently delete {len(real_rowids)} row(s) from '{table}'? This cannot be undone.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            if confirm != QMessageBox.Yes:
+                return
+
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                for rowid in real_rowids:
+                    conn.execute(f"DELETE FROM '{table}' WHERE rowid=?", (rowid,))
+                conn.commit()
+                conn.close()
+                self.alex_log.append(f"[SYSTEM] Deleted {len(real_rowids)} row(s) from '{table}' via Controller")
+            except Exception as e:
+                self.alex_log.append(f"⚠️ Failed to delete row(s): {e}")
+
+        # remove locally too (covers both real rows just deleted and any
+        # not-yet-saved "(new)" rows the user wants to discard)
+        for r in rows:
+            self.db_table.removeRow(r)
+
+    def save_db_changes(self):
+        table = getattr(self, "db_current_table", None)
+        if not table:
+            return
+
+        writable_cols = [c for c in self.db_current_columns if c not in self.db_current_blob_cols]
+        inserted = updated = 0
+
+        try:
+            conn = sqlite3.connect(DB_PATH)
+
+            for r in range(self.db_table.rowCount()):
+                rowid_item = self.db_table.item(r, 0)
+                rowid = rowid_item.text() if rowid_item else ""
+
+                values = []
+                for col_name in writable_cols:
+                    c = (["rowid"] + self.db_current_columns).index(col_name)
+                    cell = self.db_table.item(r, c)
+                    values.append(cell.text() if cell else "")
+
+                if rowid == self.NEW_ROW_MARKER:
+                    placeholders = ",".join("?" for _ in writable_cols)
+                    col_list = ",".join(f"'{c}'" for c in writable_cols)
+                    conn.execute(
+                        f"INSERT INTO '{table}' ({col_list}) VALUES ({placeholders})",
+                        values
+                    )
+                    inserted += 1
+                else:
+                    set_clause = ",".join(f"'{c}'=?" for c in writable_cols)
+                    conn.execute(
+                        f"UPDATE '{table}' SET {set_clause} WHERE rowid=?",
+                        values + [rowid]
+                    )
+                    updated += 1
+
+            conn.commit()
+            conn.close()
+            self.alex_log.append(f"[SYSTEM] Saved '{table}': {inserted} inserted, {updated} updated (via Controller)")
+        except Exception as e:
+            QMessageBox.critical(self, "Save Failed", f"Failed to save changes to '{table}':\n{e}")
+            return
+
+        self.load_db_table_data()
 
     # ---------------- ALWAYS-ON LOG TAILING ----------------
     def start_log_tailing(self):

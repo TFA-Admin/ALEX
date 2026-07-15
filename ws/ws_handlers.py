@@ -179,6 +179,8 @@ async def ws_text(websocket: WebSocket):
                         f"the sandbox since you last checked:\n" + "\n".join(lines)
                     )
 
+                    logger.info(summary)
+
                     await websocket.send_text("__START__")
                     await websocket.send_text(summary)
                     await websocket.send_text("__END__")
@@ -199,6 +201,8 @@ async def ws_text(websocket: WebSocket):
                         f"🎭 I've made {len(changes)} change(s) to myself since you last checked:\n"
                         + "\n".join(lines)
                     )
+
+                    logger.info(summary)
 
                     await websocket.send_text("__START__")
                     await websocket.send_text(summary)
