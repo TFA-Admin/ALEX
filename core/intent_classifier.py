@@ -36,6 +36,39 @@ def _is_hypothetical(text: str) -> bool:
     return "?" in lower or any(m in lower for m in HYPOTHETICAL_MARKERS)
 
 
+# Fact keys (alias/favorite_color/job) are their own top-level "intent"
+# values in the prompt below, NOT nested under a "fact" wrapper — this is
+# what Qwen2.5 naturally wants to produce under JSON-constrained decoding
+# (confirmed live: asking for {"intent": "fact", "key": "alias", ...}
+# made it collapse to {"intent": "none"} on plain cases like "call me
+# Craig", while it reliably gets the flat shape right). classify_intent()
+# normalizes the flat shape back into the {"intent": "fact", "key": ...}
+# contract below so callers (facts/system.py etc.) don't need to change.
+INTENT_PROMPT_TEMPLATE = """You are A.L.E.X, an AI assistant. The user said: "{text}"
+
+Classify this message into EXACTLY ONE of these categories:
+
+1. "alias" — the user is stating THEIR OWN name or nickname (e.g. "my name is X", "call me X", "you can call me X", "I go by X"). This is about the USER's name, not A.L.E.X.'s (statements like "your name is X" or "you are X" describe A.L.E.X. and are "none").
+
+2. "favorite_color" — the user is stating their favorite color (e.g. "my favorite color is blue").
+
+3. "job" — the user is stating their job/profession (e.g. "my job is a teacher", "I work as an engineer").
+
+4. "status_check" — the user is asking A.L.E.X. to check, test, run, or report on her OWN operational status or systems, in ANY phrasing, including short/casual ones (e.g. "are you okay", "are you working correctly", "check your systems", "is everything working", "run/perform/do a diagnostic (on yourself)", "system check"). This is NOT about the user's own status or feelings — only hers.
+
+5. "permission_command" — the user is asking to update a stored value AND provides an authorization code together in the same message (e.g. "set my job to teacher with code 1234").
+
+6. "none" — anything else: normal conversation, questions, hypotheticals ("what if", "suppose", "imagine"), requests unrelated to the above.
+
+Respond with ONLY a JSON object, matching the category exactly:
+- alias: {{"intent": "alias", "value": "<name>"}}
+- favorite_color: {{"intent": "favorite_color", "value": "<color>"}}
+- job: {{"intent": "job", "value": "<job>"}}
+- status_check: {{"intent": "status_check"}}
+- permission_command: {{"intent": "permission_command", "key": "<field name>", "value": "<new value>", "code": "<code>"}}
+- none: {{"intent": "none"}}"""
+
+
 async def classify_intent(text: str) -> dict:
     """
     Returns a dict with at least {"intent": "fact"|"permission_command"|"status_check"|"none"},
@@ -45,32 +78,18 @@ async def classify_intent(text: str) -> dict:
     that need robustness against the LLM being briefly down should keep
     their own cheap deterministic fallback, not treat "none" as certain.
     """
-    prompt = f"""You are A.L.E.X, an AI assistant. The user said: "{text}"
-
-Classify this message into EXACTLY ONE of these categories:
-
-1. "status_check" — the user is asking A.L.E.X. to check, test, run, or report on her OWN operational status or systems, in ANY phrasing, including short/casual ones (e.g. "are you okay", "are you working correctly", "check your systems", "is everything working", "run/perform/do a diagnostic (on yourself)", "system check"). This is NOT about the user's own status or feelings — only hers.
-
-2. "fact" — the user is stating a real, current, declarative personal fact about themselves that fits one of:
-   - "favorite_color": their favorite color
-   - "alias": what THEY want to be called or addressed as (e.g. "my name is X", "call me X", "I go by X") — NOT when they're telling YOU (A.L.E.X.) what YOUR name is, like "your name is X" or "you are X"
-   - "job": their job or profession
-   NOT a question, NOT hypothetical ("what if", "suppose", "imagine").
-
-3. "permission_command" — the user is asking to update a stored value AND provides an authorization code together in the same message (e.g. "set my job to teacher with code 1234").
-
-4. "none" — anything else: normal conversation, questions, requests unrelated to the above.
-
-Respond with ONLY a JSON object, matching the category exactly:
-- fact: {{"intent": "fact", "key": "<one of {ALLOWED_FACT_KEYS}>", "value": "<value>"}}
-- permission_command: {{"intent": "permission_command", "key": "<field name>", "value": "<new value>", "code": "<code>"}}
-- status_check: {{"intent": "status_check"}}
-- none: {{"intent": "none"}}"""
+    prompt = INTENT_PROMPT_TEMPLATE.format(text=text)
 
     result = await ollama_manager.generate_json(prompt, timeout=20.0, temperature=0)
 
     if not result or "intent" not in result:
         return {"intent": "none"}
+
+    raw_intent = result.get("intent")
+
+    # normalize the flat fact-key shape back into the public contract
+    if raw_intent in ALLOWED_FACT_KEYS:
+        result = {"intent": "fact", "key": raw_intent, "value": result.get("value")}
 
     if result.get("intent") == "fact" and _is_hypothetical(text):
         return {"intent": "none"}

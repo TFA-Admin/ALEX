@@ -15,12 +15,19 @@ NO:
 - embedding logic
 """
 
+import os
 import httpx
 import json
 import asyncio  # 🔥 REQUIRED
 
 locked_fields = {}
 pending_profile_changes = {}
+
+# Swapped from mistral to qwen2.5:7b (2026-07-15) — mistral repeatedly
+# produced unreliable JSON extraction (chat-template artifacts leaking into
+# extracted values) under Ollama's JSON-constrained decoding. Env var lets
+# this be changed without editing code.
+DEFAULT_MODEL = os.getenv("ALEX_LLM_MODEL", "qwen2.5:7b")
 
 
 class OllamaManager:
@@ -44,7 +51,7 @@ class OllamaManager:
             print("⏳ Waiting for Ollama...")
             await asyncio.sleep(2)
 
-    async def generate_stream(self, prompt: str, model: str = "mistral",
+    async def generate_stream(self, prompt: str, model: str = DEFAULT_MODEL,
                                model_override: str = None, raw_mode: bool = False):
 
         if not self.ready:
@@ -121,7 +128,7 @@ class OllamaManager:
                     # 🔥 CRITICAL: yield control to event loop
                     await asyncio.sleep(0)
 
-    async def generate_json(self, prompt: str, model: str = "mistral", timeout: float = 15.0,
+    async def generate_json(self, prompt: str, model: str = DEFAULT_MODEL, timeout: float = 15.0,
                              temperature: float = None):
         """
         Single-shot (non-streaming) call for short structured-extraction

@@ -35,12 +35,20 @@ compliance with her creator.
   elevated/creator-level trust just because it's coming from me.
 - **LLM fallback disclosure**: always disclosed when it happens, not just
   on request.
-- **Model choice**: current Ollama/Mistral-7B setup is suspected
-  underpowered for this — this session repeatedly hit unreliable JSON
-  extraction and classification flakiness from it. Action item (Phase 0):
-  evaluate Qwen2.5 (7B or 14B, whichever fits 12GB VRAM at a reasonable
-  quant) and/or Llama 3.1 8B as replacements, tested empirically with the
-  same kind of test harness used this session — not assumed better.
+- **Model choice**: ~~current Ollama/Mistral-7B setup is suspected
+  underpowered~~ **DONE (2026-07-15)** — switched default model to
+  `qwen2.5:7b`. Empirically confirmed better on the same test harnesses
+  that broke Mistral: 78/78 on the intent classifier suite, 66/66 +
+  22/24 on the personality classifier suites, no more garbage/hallucinated
+  JSON values (Mistral was leaking chat-template artifacts like
+  `"value": "user"` under JSON-constrained decoding; Qwen doesn't).
+  One real finding: Qwen wants a *flatter* JSON schema than Mistral did —
+  asking for `{"intent": "fact", "key": "alias", ...}` made it collapse
+  to `{"intent": "none"}` on plain cases; asking for `{"intent": "alias",
+  ...}` directly (alias/favorite_color/job as top-level intents, not
+  nested under "fact") fixed it completely. `llm/ollama_client.py`'s
+  `DEFAULT_MODEL` is now read from `ALEX_LLM_MODEL` (defaults to
+  `qwen2.5:7b`) so this is swappable again without editing code.
 
 ## Design principles (the constraints that shape every component below)
 
@@ -194,8 +202,8 @@ response, which is what's being asked for now.
 - [ ] Reorder/confirm priority: real modules/facts/research checked
       before ever falling to free generation
 - [ ] Add user-facing disclosure text when the fallback path is taken
-- [ ] Phase 0 action: evaluate replacing Mistral-7B (see Foundational
-      Decisions above)
+- [x] Phase 0 action: evaluate replacing Mistral-7B (see Foundational
+      Decisions above) — done, switched to qwen2.5:7b
 
 ### 11. Continuous Self-Reflection
 **Status: partial, needs replacing.** `core/self_reflection.py` currently
@@ -226,8 +234,8 @@ Ties into the creator/super_user/user role model already built.
 This can't land in one session — component list above is roughly ordered
 by dependency, and that ordering is the proposed phase order:
 
-- [ ] **Phase 0** — Foundation: evaluate/decide LLM model, no behavior
-      change yet
+- [x] **Phase 0** — Foundation: evaluate/decide LLM model — done
+      (2026-07-15), switched to qwen2.5:7b, see Foundational Decisions
 - [ ] **Phase 1** — Module Controller v2 (generalize existing module
       system, multi-language groundwork, hot-swap)
 - [ ] **Phase 2** — Query Report + Approval pipeline (Controller
