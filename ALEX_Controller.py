@@ -130,6 +130,13 @@ def find_orphan_processes():
     separate process. Only matches the exact "ollama.exe" binary name
     (not the "ollama app" tray/updater helper, a legitimate singleton) and
     "python.exe" processes whose command line names ALEX.py specifically.
+
+    Deliberately requires "serve" in the command line for Ollama —
+    confirmed live that Ollama spawns a separate "ollama.exe runner ..."
+    child process per loaded model, which also reports as "ollama.exe" by
+    name but is NOT a duplicate server; matching on name alone would have
+    let this flag (and let someone terminate) a legitimately in-use model
+    runner, not an orphan.
     """
     active_ollama_pid = find_pid_by_port(11434)
     active_alex_pid = find_pid_by_port(5000)
@@ -140,12 +147,13 @@ def find_orphan_processes():
         try:
             name = (proc.info["name"] or "").lower()
             pid = proc.info["pid"]
+            cmdline = proc.info["cmdline"] or []
+            cmdline_str = " ".join(str(c) for c in cmdline).lower()
 
-            if name == "ollama.exe" and pid != active_ollama_pid:
+            if name == "ollama.exe" and "serve" in cmdline_str and pid != active_ollama_pid:
                 orphans.append(("Ollama", pid))
 
             elif name == "python.exe":
-                cmdline = proc.info["cmdline"] or []
                 if any("alex.py" in str(c).lower() for c in cmdline) and pid != active_alex_pid:
                     orphans.append(("A.L.E.X", pid))
 
@@ -845,7 +853,10 @@ class AlexController(QWidget):
             self, "Orphaned Processes Found",
             f"Found {len(orphans)} orphaned process(es) not serving their expected port "
             f"(leftover from a restart that wasn't cleanly stopped):\n\n{lines}\n\n"
-            f"Terminate them now? Each one can be holding a full model copy in VRAM.",
+            f"Terminate them now? Each one can be holding a full model copy in VRAM.\n\n"
+            f"Caution: in one observed case, terminating a confirmed orphan A.L.E.X. "
+            f"process also took down the real active server, cause unclear — be ready "
+            f"to restart A.L.E.X. afterward if that happens.",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
         )
 
