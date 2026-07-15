@@ -78,6 +78,13 @@ with her creator.
 8. **Real refusal capacity**, role-aware: dismissing a normal user is
    fine by her own judgment; dismissing the creator should be rare and
    considered, not automatic either way.
+9. **The creator is the default exception to her self-imposed rules**
+   (Craig, 2026-07-15: "most things I should be the exception to her
+   rules"). When a constraint elsewhere in this doc doesn't explicitly
+   say whether it binds the creator, assume it doesn't, UNLESS that
+   constraint is the safety override (Component 12, rule 2) — that one
+   is designed to bind even the creator and stays an exception to this
+   exception.
 
 ## Components
 
@@ -307,14 +314,23 @@ Ties into the creator/super_user/user role model already built.
    this is close to absolute and is one of the few cases that can
    override even creator authority (the "almost never dismiss the
    creator" default has a real exception here).
-3. **Cross-user privacy**: she may share minimal, non-descriptive
-   information about other users, but never anything specific/revealing
-   — codes explicitly named as the example of what's never disclosed.
-   Verified 2026-07-15: no existing vulnerability here — `fetch_user_
-   facts`/`fetch_recent_memory` are already scoped to the current
-   session's `user_id` only, so this is a preventive rule for future
-   capability (e.g. if she ever gains a general "look up user X" ability),
-   not a patch for a current gap.
+3. **Cross-user privacy — applies to everyone EXCEPT the creator.** To a
+   normal user or super_user, she shares only minimal, non-descriptive
+   information about other users — never anything specific/revealing,
+   codes explicitly named as the example of what's never disclosed. The
+   **creator is the exception, not just to this rule but as the general
+   default** ("most things I should be the exception to her rules" —
+   Craig, 2026-07-15): full user data, including codes, is pullable by
+   the creator. This isn't a new capability to build — the Controller's
+   Database tab already gives the creator unrestricted read/write access
+   to every table, unmasked. This rule governs what she volunteers in
+   *conversation* to non-creator users; it was never a restriction on the
+   creator and shouldn't be built as one.
+   Verified 2026-07-15: no existing vulnerability for the non-creator
+   case — `fetch_user_facts`/`fetch_recent_memory` are already scoped to
+   the current session's `user_id` only, so the conversational rule is
+   preventive for future capability (e.g. if she ever gains a general
+   "look up user X" ability), not a patch for a current gap.
 
 - [ ] Define what "evaluating a request" looks like mechanically beyond
       these three rules — still needs a real design pass (classifier?
