@@ -27,7 +27,10 @@ from module_runtime.module_generator import generate_module_code
 from module_runtime.module_installer import install_module
 
 from core.intent_classifier import classify_module_gap
-from db.db import get_module_state, set_module_state, get_user_role, create_module_build_request
+from db.db import (
+    get_module_state, set_module_state, get_user_role, create_module_build_request,
+    register_module_version, get_module_registry_entry
+)
 from config.logger_config import logger
 
 
@@ -140,8 +143,18 @@ class System(BaseSystem):
             }
 
         # -------------------------
-        # RUN MODULE
+        # RUN MODULE (respect enable/disable from the registry — same
+        # "checked at invocation time, not unloaded from memory" pattern
+        # the systems/* tier already uses for disabled_systems)
         # -------------------------
+        registry_entry = await get_module_registry_entry(module_name)
+
+        if registry_entry and registry_entry["status"] == "disabled":
+            return {
+                "type": "response",
+                "content": f"{module_name} is currently disabled."
+            }
+
         state = await get_module_state(user_id, module_name)
 
         result, new_state = run_module(module, text, state)
@@ -184,8 +197,11 @@ class System(BaseSystem):
                     }
 
                 load_module(module_name)
+                version = await register_module_version(
+                    module_name, fallback, user_id, source="fallback_template"
+                )
 
-                logger.info(f"[ACTION] Built module '{module_name}' (fallback template, requested by {user_id})")
+                logger.info(f"[ACTION] Built module '{module_name}' v{version} (fallback template, requested by {user_id})")
 
                 return {
                     "type": "response",
@@ -201,8 +217,11 @@ class System(BaseSystem):
                 }
 
             load_module(module_name)
+            version = await register_module_version(
+                module_name, code, user_id, source="generated"
+            )
 
-            logger.info(f"[ACTION] Built module '{module_name}' (generated, requested by {user_id})")
+            logger.info(f"[ACTION] Built module '{module_name}' v{version} (generated, requested by {user_id})")
 
             return {
                 "type": "response",

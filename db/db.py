@@ -124,6 +124,36 @@ async def init_db():
             resolved_at TIMESTAMP
         )''')
 
+        # 🧩 MODULE REGISTRY (Phase 1: the module interface/contract's
+        # bookkeeping — what's installed, what's enabled, current version,
+        # where it came from. Enable/disable is enforced by
+        # systems/modules/system.py checking this at invocation time, not
+        # by unloading code from module_loader's cache — same pattern the
+        # systems/* tier already uses for its own disabled_systems set.)
+        await db.execute('''
+        CREATE TABLE IF NOT EXISTS module_registry (
+            name TEXT PRIMARY KEY,
+            version INTEGER DEFAULT 1,
+            status TEXT DEFAULT 'enabled',
+            language TEXT DEFAULT 'python',
+            source TEXT,
+            requested_by TEXT,
+            build_request_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+
+        # 🧩 MODULE VERSIONS (full code snapshot per version — what
+        # rollback restores from)
+        await db.execute('''
+        CREATE TABLE IF NOT EXISTS module_versions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            module_name TEXT,
+            version INTEGER,
+            code TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+
         await db.commit()
         await ensure_weight_column(db)
 
@@ -716,3 +746,101 @@ async def resolve_module_build_request(request_id, status, result=None):
             WHERE id=?
         """, (status, result, request_id))
         await db.commit()
+
+
+# -------------------------
+# MODULE REGISTRY (Phase 1)
+# -------------------------
+async def register_module_version(name, code, requested_by, source="generated",
+                                    language="python", build_request_id=None):
+    """
+    Registers a new version of a module — first install (version 1) or an
+    update (version N+1). Always snapshots the code into module_versions
+    so rollback has something real to restore. Returns the new version
+    number.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT version FROM module_registry WHERE name=?", (name,))
+        row = await cursor.fetchone()
+        new_version = (row[0] + 1) if row else 1
+
+        await db.execute("""
+            INSERT INTO module_registry (name, version, status, language, source, requested_by, build_request_id, updated_at)
+            VALUES (?, ?, 'enabled', ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(name) DO UPDATE SET
+                version=excluded.version,
+                status='enabled',
+                language=excluded.language,
+                source=excluded.source,
+                requested_by=excluded.requested_by,
+                build_request_id=excluded.build_request_id,
+                updated_at=CURRENT_TIMESTAMP
+        """, (name, new_version, language, source, requested_by, build_request_id))
+
+        await db.execute("""
+            INSERT INTO module_versions (module_name, version, code)
+            VALUES (?, ?, ?)
+        """, (name, new_version, code))
+
+        await db.commit()
+
+    return new_version
+
+
+async def get_module_registry_entry(name):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT name, version, status, language, source, requested_by, created_at, updated_at "
+            "FROM module_registry WHERE name=?",
+            (name,)
+        )
+        row = await cursor.fetchone()
+
+    if not row:
+        return None
+
+    keys = ["name", "version", "status", "language", "source", "requested_by", "created_at", "updated_at"]
+    return dict(zip(keys, row))
+
+
+async def list_module_registry():
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT name, version, status, language, source, requested_by, created_at, updated_at "
+            "FROM module_registry ORDER BY name"
+        )
+        rows = await cursor.fetchall()
+
+    keys = ["name", "version", "status", "language", "source", "requested_by", "created_at", "updated_at"]
+    return [dict(zip(keys, r)) for r in rows]
+
+
+async def set_module_status(name, status):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE module_registry SET status=?, updated_at=CURRENT_TIMESTAMP WHERE name=?",
+            (status, name)
+        )
+        await db.commit()
+
+
+async def fetch_module_versions(name):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT version, created_at FROM module_versions WHERE module_name=? ORDER BY version DESC",
+            (name,)
+        )
+        rows = await cursor.fetchall()
+
+    return [{"version": r[0], "created_at": r[1]} for r in rows]
+
+
+async def get_module_version_code(name, version):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT code FROM module_versions WHERE module_name=? AND version=?",
+            (name, version)
+        )
+        row = await cursor.fetchone()
+
+    return row[0] if row else None

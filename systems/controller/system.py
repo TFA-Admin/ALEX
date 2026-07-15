@@ -16,7 +16,8 @@ from core.intent_classifier import classify_personality_set
 from db.db import (
     get_user_role, set_personality, get_personality, DEFAULT_PERSONALITY,
     log_personality_change, reset_all_phrases, fetch_user_facts, update_fact,
-    profile_exists, find_profile_by_prefix
+    profile_exists, find_profile_by_prefix,
+    get_module_registry_entry, set_module_status, list_module_registry
 )
 from config.logger_config import logger
 
@@ -160,6 +161,59 @@ class System(BaseSystem):
                 "type": "response",
                 "content": f"Disabled systems: {list(disabled)}"
             }
+
+        # -------------------------
+        # MODULE ENABLE/DISABLE/LIST (Phase 1 registry — durable, DB-backed,
+        # not a session-scoped set like the systems/* toggles above, since
+        # modules are creator-built artifacts meant to persist)
+        # -------------------------
+        if msg.startswith("disable module"):
+            denial = await self._require_privileged(user_id, session)
+            if denial:
+                return denial
+
+            name = msg.replace("disable module", "").strip()
+
+            if not name:
+                return {"type": "response", "content": "Specify a module name."}
+
+            entry = await get_module_registry_entry(name)
+            if not entry:
+                return {"type": "response", "content": f"I don't have a module called '{name}'."}
+
+            await set_module_status(name, "disabled")
+            logger.info(f"[ACTION] Module '{name}' disabled (by {user_id})")
+
+            return {"type": "response", "content": f"Module '{name}' disabled."}
+
+        if msg.startswith("enable module"):
+            denial = await self._require_privileged(user_id, session)
+            if denial:
+                return denial
+
+            name = msg.replace("enable module", "").strip()
+
+            entry = await get_module_registry_entry(name)
+            if not entry:
+                return {"type": "response", "content": f"I don't have a module called '{name}'."}
+
+            await set_module_status(name, "enabled")
+            logger.info(f"[ACTION] Module '{name}' enabled (by {user_id})")
+
+            return {"type": "response", "content": f"Module '{name}' enabled."}
+
+        if msg.startswith("list modules"):
+            denial = await self._require_privileged(user_id, session)
+            if denial:
+                return denial
+
+            modules = await list_module_registry()
+
+            if not modules:
+                return {"type": "response", "content": "No modules built yet."}
+
+            lines = [f"{m['name']} (v{m['version']}, {m['status']})" for m in modules]
+            return {"type": "response", "content": "\n".join(lines)}
 
         # -------------------------
         # RELOAD SYSTEM (creator only — this re-executes code from disk)

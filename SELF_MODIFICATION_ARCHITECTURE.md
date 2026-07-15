@@ -248,20 +248,46 @@ with:**
   scoped-down passes: two-stage approval is a Design Principle 3
   consequence, not optional even for a "first pass."
 
-- [ ] Define the module interface/contract (inputs, outputs, lifecycle
-      hooks: install/enable/disable/update/remove) — the current
-      "install → load → run" shape still isn't this
-- [ ] Module registry (DB-backed): what's installed, what's enabled,
-      version history — `module_build_requests` covers the *request* trail
-      now, not a full registry of installed modules yet
+- [x] **Module registry — done (2026-07-15).** `db.py`'s
+      `module_registry` + `module_versions` tables:
+      name/version/status/language/source/requested_by, plus a full code
+      snapshot per version. `register_module_version()` is called on
+      every successful build (both the generated and fallback-template
+      paths), auto-incrementing version. Verified directly: register →
+      update (version increments, old code preserved in
+      `module_versions`) → disable → list, all correct.
+- [x] **Enable/disable — done (2026-07-15).** New creator/super_user
+      commands `"disable module X"` / `"enable module X"` / `"list
+      modules"` in `systems/controller/system.py` (same
+      `_require_privileged` gate as the existing systems/* toggles).
+      Enforced at invocation time in `systems/modules/system.py` — a
+      disabled module's registry status is checked before `run_module()`
+      is ever called, same "checked at the point of use, not unloaded
+      from memory" pattern the systems/* tier already uses. Verified
+      live end-to-end through the real WS pipeline via
+      `tools/claude_client.py`: `"list modules"` from the unprivileged
+      "claude" identity was correctly denied by the privilege gate.
+      Not yet tested: the creator-authorized path itself, since that
+      needs real live voice verification `tools/claude_client.py` can't
+      provide.
+- [ ] Define the module interface/contract more formally (inputs,
+      outputs, lifecycle hooks) — `init()`/`handle()` is still the whole
+      contract; the registry now tracks metadata *about* modules, but
+      doesn't yet enforce or formalize the calling convention itself
 - [ ] Multi-language execution: sandboxed runner per language, not just
       Python — needs per-language sandboxing research (what's safe to
       support first? Python + one more, e.g. JS/Node, before going wider?)
-- [ ] Hot enable/disable/reload with no process restart (systems-layer
-      hot-reload already proves this is possible for Python; extend the
-      pattern)
-- [ ] Versioning + rollback (needed for "apply what she learned" to be
-      safely reversible if the update breaks something)
+      The registry's `language` column is already there for this, unused
+      until a second runner exists.
+- [ ] Hot reload for an *updated* existing module (systems-layer
+      hot-reload already proves this is possible for Python generally;
+      `module_loader.py`'s `load_module()` does a fresh
+      `importlib.util` load every call rather than caching via
+      `sys.modules`, so a new version should already pick up on next
+      invocation without a restart — not yet explicitly verified with a
+      real update-and-reload cycle)
+- [ ] Rollback: `get_module_version_code()` can already fetch any prior
+      version's code — reinstalling it as current isn't wired up yet
 - [ ] **Presentation modules** (clarified 2026-07-15): "everything is a
       module" explicitly includes her voice, avatar, and UI, not just
       skills/knowledge. Currently all three are fixed, hardcoded, single
@@ -509,13 +535,15 @@ by dependency, and that ordering is the proposed phase order:
       (2026-07-15), switched to qwen2.5:7b, see Foundational Decisions
 - [~] **Phase 1** — Module Controller v2. **Partial (2026-07-15)**: real
       classifier gate, two-stage creator approval, execution-based
-      validation, and build observability are done and live-verified.
-      Still open: formal module interface/contract, DB-backed registry
-      with versioning/enable/disable/remove, multi-language execution,
-      presentation modules (voice/avatar/UI — full reshape still wanted),
-      and migrating existing `systems/*` in (resolved to do this, not
-      started). Compliance Scan Pass 1 done; expect more passes as this
-      continues.
+      validation, build observability, and now a DB-backed registry with
+      versioning + enforced enable/disable are done and live-verified.
+      Still open: formal module interface/contract beyond init()/handle(),
+      multi-language execution, rollback wiring (the data's there, the
+      restore-a-prior-version action isn't), presentation modules
+      (voice/avatar/UI — full reshape still wanted, diagnostics flagged
+      as the first self-built migration target), and migrating existing
+      `systems/*` in (resolved to do this, not started). Compliance Scan
+      Pass 1 done; expect more passes as this continues.
 - [ ] **Phase 2** — Query Report + Approval pipeline (Controller
       "Approvals" tab, full state machine) for the general case. Note:
       `module_build_requests` (built alongside Phase 1) is a narrow,
