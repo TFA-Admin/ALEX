@@ -101,7 +101,12 @@ under the new Module Controller rather than a separate hardcoded tier.
 ### 2. Module Controller (the big new piece)
 **Status: partial.** `module_runtime/*` already does sandboxed generation
 and execution, but Python-only, and it's one feature among many rather
-than the central mechanism. This generalizes it.
+than the central mechanism. This generalizes it. **Scan Pass 1
+(2026-07-15, see Compliance scan log below) found the existing module
+system's entry point is hardcoded-keyword-gated (`"play"`/`"build"`/
+`"create"`) — the same anti-pattern already fixed everywhere else in
+this codebase. That makes migrating this the highest-priority Phase 1
+target, not just a generalization exercise.**
 
 - [ ] Define the module interface/contract (inputs, outputs, lifecycle
       hooks: install/enable/disable/update/remove)
@@ -293,13 +298,113 @@ more about what's actually hard once we're in it.
 
 Findings from auditing the current codebase against "everything is a
 module" — append an entry per scan pass so passes don't get silently
-redone next session. Not started yet.
+redone next session.
 
 **Policy for findings**: anything found out of alignment gets modified to
 comply, and the old implementation gets removed — not kept around as a
 legacy fallback or dead code path. No backwards-compat shims.
 
-- (none yet)
+**Important note on sequencing**: this pass is documentation only — no
+code was changed. Modifying these to comply means migrating them onto a
+real module contract, and that contract doesn't exist yet (it's what
+Phase 1 builds). Ripping out the working TTS engine, avatar, or systems
+tier *before* their replacement exists would just break the live
+assistant. So: findings recorded now, fixed as Phase 1 actually builds
+the thing they need to comply with.
+
+### Scan Pass 1 (2026-07-15)
+
+Scope: voice, avatar/UI, the existing module system (`module_runtime/*`
++ `systems/modules/system.py`), the `systems/*` tier, and the other
+fixed-backend infrastructure (STT, embeddings, LLM, storage).
+
+**1. Voice — not compliant.** `speech/tts_engine.py` hardcodes one Piper
+binary + one GLaDOS voice model (`PIPER_PATH`/`MODEL_PATH`, now path-
+configurable via `ALEX_PIPER_PATH`/`ALEX_PIPER_MODEL` env vars, but
+that's deployment config, not a module — there is exactly one voice,
+chosen at process start, no registry, no swap-while-running). `speak()`
+is a bare module-level function, not behind any interface a second
+implementation could satisfy.
+
+**2. Avatar — not compliant.** `static/avatar.html` has one hardcoded
+canvas-drawn face (circle + eyes + mouth, driven by the `__AUDIO__`
+level signal broadcast over the WS). No abstraction between "what signal
+does the backend send" and "how is it drawn" — a second avatar would
+mean a second hand-built HTML file with no shared contract.
+
+**3. UI — not compliant.** `main.py`'s `/` route (line 97) does
+`return FileResponse("static/avatar.html")` — a single hardcoded path.
+`/static` is mounted as a directory (line 88) but nothing selects
+*which* UI is active; there's only ever the one file.
+
+**4. Module system — not compliant, and the most significant finding.**
+The existing `module_runtime/*` + `systems/modules/system.py` is the
+direct ancestor of the new Module Controller, and it has real, specific
+problems beyond "not generalized yet":
+   - **Hardcoded keyword gate at the entry point.** `systems/modules/
+     system.py`'s `detect_module_name()` (line 171) only fires on the
+     literal substrings `"play"`, `"build"`, or `"create"` appearing in
+     the message. This is the exact hardcoded-trigger-phrase pattern
+     that's been rejected everywhere else in this project (facts,
+     permissions, diagnostics, personality all moved to classifier-based
+     detection specifically to get away from this). As written, asking
+     "I need a calculator" or "can you help me convert temperatures"
+     would never reach module detection at all — it doesn't contain any
+     of the three magic words. This directly blocks the "never guess,
+     propose building it instead" vision from Component 4.
+   - **Python-only.** `module_loader.py` loads modules via
+     `importlib.util` directly — no other language is possible. Real
+     work needed for Component 2's multi-language goal.
+   - **No lifecycle beyond load.** Modules are `install → load → run`;
+     there's no `enable`/`disable`/`update`/`remove`, no version history,
+     no record of which query report (if any) produced a given module.
+   - **State is a local dict, not durable.** `self.pending_builds` (the
+     "want me to build it? yes/no" confirmation flow) is an in-memory
+     dict on the System instance — a server restart mid-confirmation
+     silently loses it. `self.user_active_module` is declared and never
+     used anywhere in the file — dead code.
+   - **Blocking sync I/O inside async handlers.** `db.get_module_state`/
+     `set_module_state` (`db/db.py` lines 619, 645) use plain `sqlite3.
+     connect()` — not `aiosqlite` like the rest of `db.py` — called
+     directly from `systems/modules/system.py`'s async `handle()` with
+     no `await`/executor. Every module invocation blocks the whole
+     server's event loop for that connect+query+close. Pre-dates the
+     rest of `db.py`'s async conversion.
+   - The sandbox's `validator.py` blocklist (network modules, `eval`/
+     `exec`, etc.) is worth keeping conceptually once gated research
+     exists (Component 5) — modules still shouldn't get their own
+     network access; only the dedicated research pathway should. Not a
+     compliance problem, just a note for Phase 3 so the two don't get
+     conflated.
+
+**5. `systems/*` tier — partially compliant, and the closest thing to a
+working example.** `core/alex_core.py`'s `init_systems()` (line 30) hot-
+loads a hardcoded, fixed list of 9 systems in a fixed order, each with
+just a `name`/`priority` class attribute — no manifest, no version, no
+registry beyond "is this name currently a key in `SystemManager.
+systems`." But hot-reload itself (`reload_system`, backed by
+`importlib.reload`) genuinely works today and is the one piece of this
+whole scan that's proof-of-concept for "swap live, no restart." The open
+question from Component 1 stands: migrate these into the new module
+system, or keep them a privileged built-in tier.
+
+**6. Other fixed-backend infrastructure — same shape of problem, lower
+priority than voice/avatar/UI/modules.** STT (`speech/stt_engine.py`,
+one faster-whisper model), embeddings (`core/embedding_engine.py`, one
+sentence-transformers model, not even path-configurable, hardcoded
+`"all-MiniLM-L6-v2"`), and the LLM backend (`llm/ollama_client.py`, one
+Ollama instance — the model tag is configurable via `ALEX_LLM_MODEL` as
+of Phase 0, but swapping to a non-Ollama backend entirely would still be
+a code change) are all single fixed implementations with no swap
+mechanism. Ties into Component 9 (self-directed storage/implementation
+choice) as well — `db/db.py` is hardcoded to sqlite the same way.
+
+**Net read of this pass**: the module system isn't just "not generalized
+yet" — its entry point actively contradicts a design principle already
+enforced everywhere else in the codebase (no hardcoded trigger phrases).
+That makes it the highest-priority target once Phase 1 starts, ahead of
+voice/avatar/UI, since it's not just missing the new capability, it's
+actively broken relative to a *standing* rule.
 
 ## Open questions (not yet answered — surface these before they block a phase)
 
