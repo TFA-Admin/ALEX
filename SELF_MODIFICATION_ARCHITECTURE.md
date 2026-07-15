@@ -16,10 +16,13 @@ creator's Controller for approval. Approved research happens over real
 approval before she disables the affected module, applies what she
 learned, and re-enables it. This applies to everything — language,
 domain knowledge, eventually physical devices — nothing is predefined.
-The LLM becomes a fallback of last resort, always disclosed when used.
-She reflects continuously, not on a schedule. She has real judgment about
-when to refuse a request, weighted heavily (not absolutely) toward
-compliance with her creator.
+"Everything is a module" also includes her own presentation, not just her
+skills/knowledge: her voice (TTS engine/model), her avatar, and her UI are
+all loadable/swappable modules too, not fixed code. The LLM becomes a
+fallback of last resort, always disclosed when used. She reflects
+continuously, not on a schedule. She has real judgment about when to
+refuse a request, weighted heavily (not absolutely) toward compliance
+with her creator.
 
 ## Foundational decisions (settled — don't relitigate without a real reason)
 
@@ -112,6 +115,32 @@ than the central mechanism. This generalizes it.
       pattern)
 - [ ] Versioning + rollback (needed for "apply what she learned" to be
       safely reversible if the update breaks something)
+- [ ] **Presentation modules** (clarified 2026-07-15): "everything is a
+      module" explicitly includes her voice, avatar, and UI, not just
+      skills/knowledge. Currently all three are fixed, hardcoded, single
+      implementations with no swap mechanism at all:
+  - **Voice**: `speech/tts_engine.py` hardcodes one Piper binary + one
+    GLaDOS voice model (`ALEX_PIPER_PATH`/`ALEX_PIPER_MODEL` env vars
+    added 2026-07-15 make the *path* configurable, but that's deployment
+    config, not a swappable module — there's still only ever one voice
+    active, chosen at process start, not hot-swappable). Needs a defined
+    "voice module" contract (something like `speak(text) -> audio`) with
+    Piper+GLaDOS as the first implementation, not the only one.
+  - **Avatar**: `static/avatar.html` has one hardcoded canvas-drawn face
+    (circle, eyes, mouth driven by the `__AUDIO__` level signal). Needs
+    a defined avatar contract (what signals does the backend send it —
+    audio level, speaking/listening state, emotion?) so different avatar
+    implementations can render those differently, swappable without
+    editing the page.
+  - **UI**: `static/avatar.html` is also the *entire* frontend (chat,
+    profile panel, mic controls, debug panel) as one fixed page. Needs
+    thinking about whether "UI module" means swappable skins of the same
+    page, or genuinely different frontend bundles she could switch
+    between.
+  - Open question: do these go through the same query-report/approval
+    pipeline as knowledge modules (e.g. she could research and propose a
+    new voice), or are they creator-only swaps via the Controller (closer
+    to how personality reset works today)? Not yet decided.
 
 ### 3. Knowledge Gap Detection
 **Status: not built.** Nothing today distinguishes "I should say I don't
@@ -237,7 +266,11 @@ by dependency, and that ordering is the proposed phase order:
 - [x] **Phase 0** — Foundation: evaluate/decide LLM model — done
       (2026-07-15), switched to qwen2.5:7b, see Foundational Decisions
 - [ ] **Phase 1** — Module Controller v2 (generalize existing module
-      system, multi-language groundwork, hot-swap)
+      system, multi-language groundwork, hot-swap). Includes a
+      compliance audit of the current codebase against "everything is a
+      module" (voice, avatar, UI, and the existing `systems/*` tier) —
+      expect several scanning passes, not one; log findings below as
+      they're done so a pass doesn't get silently redone next session.
 - [ ] **Phase 2** — Query Report + Approval pipeline (Controller
       "Approvals" tab, full state machine) — can be built and tested
       before research is wired to real internet, using a stub research
@@ -256,6 +289,18 @@ by dependency, and that ordering is the proposed phase order:
 Phasing is a proposal, not a commitment — revise this section as we learn
 more about what's actually hard once we're in it.
 
+## Compliance scan log (Phase 1 prerequisite)
+
+Findings from auditing the current codebase against "everything is a
+module" — append an entry per scan pass so passes don't get silently
+redone next session. Not started yet.
+
+**Policy for findings**: anything found out of alignment gets modified to
+comply, and the old implementation gets removed — not kept around as a
+legacy fallback or dead code path. No backwards-compat shims.
+
+- (none yet)
+
 ## Open questions (not yet answered — surface these before they block a phase)
 
 - Knowledge Gap Detection's trigger mechanism (component 3) — needs a
@@ -267,3 +312,6 @@ more about what's actually hard once we're in it.
   remain a separate privileged tier (component 1)
 - Validation step in the apply-learning pipeline (component 6) — what
   actually counts as "safe to re-enable"?
+- Presentation modules (component 2) — do voice/avatar/UI changes go
+  through the same query-report/approval pipeline as knowledge modules,
+  or are they a creator-only swap via the Controller?
