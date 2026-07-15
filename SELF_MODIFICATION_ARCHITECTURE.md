@@ -95,8 +95,15 @@ under the new Module Controller rather than a separate hardcoded tier.
 
 - [ ] Define what, if anything, must stay outside the module system
       (routing itself has to bootstrap somehow)
-- [ ] Decide whether existing `systems/*` migrate to modules or stay a
-      privileged "built-in" tier
+- [x] **Resolved (2026-07-15)**: existing `systems/*` DO migrate into the
+      new module system. Explicitly NOT a lift-and-shift — "the info
+      should be fresh, not brought over" — each one gets rebuilt against
+      the new module contract rather than wrapped/renamed as-is. Also
+      resolves the "should the existing module system be modified to
+      better comply" question the same way: fix in place where the fix
+      is mechanical (async I/O, dead code), fold the rest into the real
+      components that supersede it (Query Report System replaces the
+      ad-hoc build-confirmation flow) rather than patching twice.
 
 ### 2. Module Controller (the big new piece)
 **Status: partial.** `module_runtime/*` already does sandboxed generation
@@ -141,23 +148,48 @@ target, not just a generalization exercise.**
     profile panel, mic controls, debug panel) as one fixed page. Needs
     thinking about whether "UI module" means swappable skins of the same
     page, or genuinely different frontend bundles she could switch
-    between.
+    between. **Craig's ask (2026-07-15)**: when this gets rebuilt, it's a
+    full reshape, not an iteration on the current look (plain
+    circle-face avatar, three-column debug/avatar/chat layout) — and add
+    visible versioning details to the UI once it's a real module with a
+    version history to show.
   - **Resolved (2026-07-15)**: she can ask for a new voice/avatar/UI
     change the same way as any other capability — it goes through the
     standard query-report/approval pipeline, creator approves, same as
     everything else. Not a separate creator-only-swap mechanism.
 
 ### 3. Knowledge Gap Detection
-**Status: not built.** Nothing today distinguishes "I should say I don't
-know this" from "generate a plausible-sounding answer." This session's
-diagnostics/memory-scope hallucinations were patched with hardcoded
-prompt rules for those *specific* cases — this needs to generalize.
+**Status: resolved design (2026-07-15), implementable directly.** The
+trigger IS reaching the LLM fallback path (`systems/llm/system.py`,
+priority 100) — by construction, if execution gets there, no
+module/fact/deterministic system answered, which is the knowledge gap.
+This is a *knowledge* gap specifically (a missing fact/piece of
+information), distinct from a *capability* gap (needing a new
+module/skill to DO something, e.g. "build me a calculator") — capability
+gaps are Component 4/5's job (query report → gated research), not this
+one. Resolution: she states plainly that she doesn't have this as known/
+stored information and is answering from general LLM knowledge instead
+— treated like a quick lookup, NOT gated behind creator approval (no
+external action is taken, nothing is stored as fact, it's just
+generation). This also closes Component 10's remaining disclosure
+checklist item — they're the same mechanism.
 
-- [ ] Define what counts as a knowledge gap worth flagging (vs. normal
-      conversation, opinion, or something already in FACTS/a module)
-- [ ] Decide the trigger: is this a classifier call (same fragility risk
-      as everything else we tuned this session), a confidence heuristic,
-      or something structural (e.g., no module claims the domain → gap)?
+- [x] Trigger + disclosure mechanism resolved and **implemented**
+      (2026-07-15) in `systems/llm/system.py`'s prompt. Tested live:
+      first version disclosed unconditionally on every fallback response,
+      including pure small talk ("tell me a joke" → "I don't have that
+      stored, but generally... [joke]") — wrong, fixed by scoping the
+      rule to only fire when actually stating a checkable external fact.
+      A further attempt to add more exclusions (greetings, opinions,
+      "how are you" explicitly, etc.) made it *worse* — fired on
+      everything again — confirming the same lesson from earlier this
+      project: longer/more elaborate prompt instructions regress this
+      class of model rather than improving precision. Reverted to the
+      shorter version. Final state, verified across repeated runs: 3/4
+      correct (clean for jokes/conversation, correct disclosure for
+      factual questions), with "how's it going?"-style check-ins as a
+      known remaining soft edge case — accepted rather than chased
+      further, since it's a mild false-positive, not a broken response.
 
 ### 4. Query Report System
 **Status: not built.**
@@ -189,8 +221,14 @@ pass, not just a feature build.**
 **Status: not built.**
 
 - [ ] disable module → apply change → validate → re-enable
-- [ ] "Validate" needs a real definition — some kind of test/sanity check
-      before re-enabling, not just trusting the update
+- [x] **Resolved (2026-07-15)**: "validate" means she develops her own
+      check/test for the module prior to enabling it, and only enables if
+      it passes — self-developed, not a fixed platform-imposed test.
+      Framed as a good early exercise for her module-creation capability
+      generally (writing a test is itself something she builds). Still
+      needs: where does this check live (part of the module itself? a
+      separate paired artifact?), and what happens if she can't produce
+      a meaningful check for a given module type.
 - [ ] Rollback path if validation fails or the creator later says it made
       things worse
 
@@ -228,14 +266,16 @@ justify, not a fixed assumption baked into the core.
       can see it (Controller?)
 
 ### 10. LLM as Fallback + Disclosure
-**Status: partial.** `systems/llm/system.py` already runs last (priority
-100) and we added fallback-visibility logging this session — but that's
-logging for the Controller, not a disclosure *to the user* in her actual
-response, which is what's being asked for now.
+**Status: mostly done.** `systems/llm/system.py` already runs last
+(priority 100), we added fallback-visibility logging (Controller-facing)
+last session, and user-facing disclosure is now implemented too (see
+Component 3 — same mechanism).
 
-- [ ] Reorder/confirm priority: real modules/facts/research checked
-      before ever falling to free generation
-- [ ] Add user-facing disclosure text when the fallback path is taken
+- [x] Reorder/confirm priority: already true by construction — this
+      system is priority 100, lowest, so every other system gets a
+      chance to answer first
+- [x] Add user-facing disclosure text when the fallback path is taken —
+      done (2026-07-15), see Component 3 for the tuning story
 - [x] Phase 0 action: evaluate replacing Mistral-7B (see Foundational
       Decisions above) — done, switched to qwen2.5:7b
 
@@ -252,16 +292,38 @@ runs on an hourly `asyncio.sleep(3600)` loop (`main.py`'s
       alongside the old (wrong) version
 
 ### 12. Refusal / Agency Layer
-**Status: not built.** Personality today (`personality_description`)
+**Status: not built, but three concrete rules settled (2026-07-15)** to
+build the mechanism against. Personality today (`personality_description`)
 shapes tone only — nothing evaluates a request and decides to push back.
 Ties into the creator/super_user/user role model already built.
 
-- [ ] Define what "evaluating a request" even looks like mechanically —
-      this is the least concrete piece so far and needs more design
+**Settled rules:**
+1. **Fundamental/core code**: requests to change her own core code are
+   ignored/refused unless they come from the creator — a hard,
+   identity-gated rule, same pattern as the existing creator-gate
+   (role + live voice verification) already used for personality/reload.
+2. **Safety**: she refuses anything that could jeopardize the creator's
+   safety, another user's safety, or her own — "obviously," implying
+   this is close to absolute and is one of the few cases that can
+   override even creator authority (the "almost never dismiss the
+   creator" default has a real exception here).
+3. **Cross-user privacy**: she may share minimal, non-descriptive
+   information about other users, but never anything specific/revealing
+   — codes explicitly named as the example of what's never disclosed.
+   Verified 2026-07-15: no existing vulnerability here — `fetch_user_
+   facts`/`fetch_recent_memory` are already scoped to the current
+   session's `user_id` only, so this is a preventive rule for future
+   capability (e.g. if she ever gains a general "look up user X" ability),
+   not a patch for a current gap.
+
+- [ ] Define what "evaluating a request" looks like mechanically beyond
+      these three rules — still needs a real design pass (classifier?
+      LLM judgment embedded in the response pipeline? something else?)
       before it's buildable
-- [ ] Weighting model for creator refusals: rare and considered, not a
-      hard rule (a hard rule would contradict "her own judgment" being
-      the actual mechanism)
+- [ ] Weighting model for creator refusals generally (outside the safety
+      exception above): rare and considered, not a hard rule (a hard
+      rule would contradict "her own judgment" being the actual
+      mechanism)
 
 ## Proposed phasing
 
@@ -361,15 +423,23 @@ problems beyond "not generalized yet":
    - **State is a local dict, not durable.** `self.pending_builds` (the
      "want me to build it? yes/no" confirmation flow) is an in-memory
      dict on the System instance — a server restart mid-confirmation
-     silently loses it. `self.user_active_module` is declared and never
-     used anywhere in the file — dead code.
-   - **Blocking sync I/O inside async handlers.** `db.get_module_state`/
-     `set_module_state` (`db/db.py` lines 619, 645) use plain `sqlite3.
-     connect()` — not `aiosqlite` like the rest of `db.py` — called
-     directly from `systems/modules/system.py`'s async `handle()` with
-     no `await`/executor. Every module invocation blocks the whole
-     server's event loop for that connect+query+close. Pre-dates the
-     rest of `db.py`'s async conversion.
+     silently loses it. Will be superseded by the Query Report System
+     (Component 4) rather than made durable in place — two competing
+     approval flows would be worse than one. **`self.user_active_module`
+     — FIXED (2026-07-15)**: was declared and never used anywhere in the
+     file; removed.
+   - **Blocking sync I/O inside async handlers — FIXED (2026-07-15).**
+     `db.get_module_state`/`set_module_state` used plain `sqlite3.
+     connect()` instead of `aiosqlite`, called directly from
+     `systems/modules/system.py`'s async `handle()` with no
+     `await`/executor — every module invocation blocked the whole
+     server's event loop. Converted both to async `aiosqlite`, moved
+     `module_state`'s `CREATE TABLE` into `init_db()` (was previously
+     created inline on first `get_module_state()` call, a latent bug —
+     `set_module_state()` had no such guard and would have failed on a
+     write-before-any-read path). `import sqlite3` removed from
+     `db/db.py` entirely — nothing else in the file used it. Verified
+     with a direct round-trip test before restarting the live server.
    - The sandbox's `validator.py` blocklist (network modules, `eval`/
      `exec`, etc.) is worth keeping conceptually once gated research
      exists (Component 5) — modules still shouldn't get their own
@@ -408,12 +478,18 @@ actively broken relative to a *standing* rule.
 
 ## Open questions (not yet answered — surface these before they block a phase)
 
-- Knowledge Gap Detection's trigger mechanism (component 3) — needs a
-  concrete design before Phase 2 can really start, since query reports
-  need something to fire them
-- Refusal/Agency layer (component 12) mechanism is still vague — needs
-  its own design pass before Phase 7
-- Whether existing `systems/*` migrate into the new module system or
-  remain a separate privileged tier (component 1)
-- Validation step in the apply-learning pipeline (component 6) — what
-  actually counts as "safe to re-enable"?
+All four questions previously listed here were resolved 2026-07-15 (see
+Components 1, 3, 6, 12 above). Remaining open items:
+
+- Refusal/Agency layer (component 12): the three settled rules (core
+  code/creator-only, safety, cross-user privacy) still need a real
+  mechanical evaluation design — classifier, embedded LLM judgment, or
+  something else — before it's buildable
+- Apply-learning validation (component 6): where the self-developed check
+  lives (part of the module, or a separate paired artifact), and what
+  happens when she can't produce a meaningful check for a given module
+  type
+- Presentation modules (component 2): UI needs a full reshape (current
+  look — plain circle avatar, three-column layout — is being replaced,
+  not iterated on) and should show versioning details once it's a real
+  module with a version history to display

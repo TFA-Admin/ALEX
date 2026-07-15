@@ -1,7 +1,6 @@
 import aiosqlite
 import os
 import pickle
-import sqlite3
 import json
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "memory.db")
@@ -98,6 +97,15 @@ async def init_db():
             reason TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             acknowledged INTEGER DEFAULT 0
+        )''')
+
+        # 🧩 MODULE STATE (per-user state blob for generated modules)
+        await db.execute('''
+        CREATE TABLE IF NOT EXISTS module_state (
+            user_id TEXT,
+            module TEXT,
+            state TEXT,
+            PRIMARY KEY (user_id, module)
         )''')
 
         await db.commit()
@@ -616,40 +624,23 @@ async def create_profile(username: str):
         )
         await db.commit()
 
-def get_module_state(user_id, module_name):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS module_state (
-            user_id TEXT,
-            module TEXT,
-            state TEXT,
-            PRIMARY KEY (user_id, module)
+async def get_module_state(user_id, module_name):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT state FROM module_state WHERE user_id=? AND module=?",
+            (user_id, module_name)
         )
-    """)
-
-    cursor.execute(
-        "SELECT state FROM module_state WHERE user_id=? AND module=?",
-        (user_id, module_name)
-    )
-
-    row = cursor.fetchone()
-    conn.close()
+        row = await cursor.fetchone()
 
     if row:
         return json.loads(row[0])
     return {}
 
 
-def set_module_state(user_id, module_name, state):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        INSERT OR REPLACE INTO module_state (user_id, module, state)
-        VALUES (?, ?, ?)
-    """, (user_id, module_name, json.dumps(state)))
-
-    conn.commit()
-    conn.close()
+async def set_module_state(user_id, module_name, state):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT OR REPLACE INTO module_state (user_id, module, state)
+            VALUES (?, ?, ?)
+        """, (user_id, module_name, json.dumps(state)))
+        await db.commit()

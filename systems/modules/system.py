@@ -38,7 +38,6 @@ class System(BaseSystem):
 
     def __init__(self):
         self.pending_builds = {}
-        self.user_active_module = {}
         self.generation_lock = asyncio.Lock()
 
     async def init(self):
@@ -98,12 +97,12 @@ class System(BaseSystem):
         # -------------------------
         # RUN MODULE
         # -------------------------
-        state = get_module_state(user_id, module_name)
+        state = await get_module_state(user_id, module_name)
 
         result, new_state = run_module(module, text, state)
 
         if new_state is not None:
-            set_module_state(user_id, module_name, new_state)
+            await set_module_state(user_id, module_name, new_state)
 
         if result:
             return {
