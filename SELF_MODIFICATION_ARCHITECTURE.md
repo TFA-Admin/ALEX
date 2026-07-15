@@ -137,10 +137,10 @@ than the central mechanism. This generalizes it.
     thinking about whether "UI module" means swappable skins of the same
     page, or genuinely different frontend bundles she could switch
     between.
-  - Open question: do these go through the same query-report/approval
-    pipeline as knowledge modules (e.g. she could research and propose a
-    new voice), or are they creator-only swaps via the Controller (closer
-    to how personality reset works today)? Not yet decided.
+  - **Resolved (2026-07-15)**: she can ask for a new voice/avatar/UI
+    change the same way as any other capability — it goes through the
+    standard query-report/approval pipeline, creator approves, same as
+    everything else. Not a separate creator-only-swap mechanism.
 
 ### 3. Knowledge Gap Detection
 **Status: not built.** Nothing today distinguishes "I should say I don't
@@ -312,6 +312,3 @@ legacy fallback or dead code path. No backwards-compat shims.
   remain a separate privileged tier (component 1)
 - Validation step in the apply-learning pipeline (component 6) — what
   actually counts as "safe to re-enable"?
-- Presentation modules (component 2) — do voice/avatar/UI changes go
-  through the same query-report/approval pipeline as knowledge modules,
-  or are they a creator-only swap via the Controller?
