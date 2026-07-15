@@ -137,9 +137,30 @@ def find_orphan_processes():
     name but is NOT a duplicate server; matching on name alone would have
     let this flag (and let someone terminate) a legitimately in-use model
     runner, not an orphan.
+
+    Also walks the active A.L.E.X. process's full parent chain and
+    excludes every ancestor — confirmed live (root-caused after an
+    earlier incident where killing a "confirmed orphan" also took the
+    real server down) that launching "python ALEX.py" through Windows'
+    Python launcher stub (PyManager's python.exe) runs the real
+    interpreter as a CHILD process; the parent must stay alive for the
+    child to keep running, so it's not a true orphan even though it
+    doesn't itself own port 5000.
     """
     active_ollama_pid = find_pid_by_port(11434)
     active_alex_pid = find_pid_by_port(5000)
+
+    protected_alex_pids = {active_alex_pid}
+    try:
+        if active_alex_pid:
+            proc = psutil.Process(active_alex_pid)
+            while True:
+                proc = proc.parent()
+                if not proc:
+                    break
+                protected_alex_pids.add(proc.pid)
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        pass
 
     orphans = []
 
@@ -154,7 +175,7 @@ def find_orphan_processes():
                 orphans.append(("Ollama", pid))
 
             elif name == "python.exe":
-                if any("alex.py" in str(c).lower() for c in cmdline) and pid != active_alex_pid:
+                if any("alex.py" in str(c).lower() for c in cmdline) and pid not in protected_alex_pids:
                     orphans.append(("A.L.E.X", pid))
 
         except (psutil.NoSuchProcess, psutil.AccessDenied):

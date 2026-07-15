@@ -2,6 +2,7 @@ import re
 import ast
 import asyncio
 from llm.ollama_client import ollama_manager
+from module_runtime.validator import check_safety
 from config.logger_config import logger
 
 
@@ -43,6 +44,8 @@ async def generate_module_code(name, description, model_override=None):
             best_code = code
 
         # ✅ Only validate when meaningful
+        exec_error = None
+
         if score >= 6:
 
             if not is_syntax_valid(code):
@@ -53,12 +56,22 @@ async def generate_module_code(name, description, model_override=None):
 
             if code and is_syntax_valid(code):
                 valid, _ = validate_module_code(code)
+
                 if valid:
-                    logger.info(f"[ACTION] Module '{name}': accepted on cycle {cycle}")
-                    return code
+                    # Structural checks (parses, has init/handle) passing
+                    # isn't enough on its own — confirmed live that an
+                    # empty-but-structurally-plausible result can get this
+                    # far. Actually run it before accepting.
+                    ok, exec_error = execution_test(code)
+
+                    if ok:
+                        logger.info(f"[ACTION] Module '{name}': accepted on cycle {cycle} (execution-tested)")
+                        return code
+
+                    logger.info(f"[ACTION] Module '{name}': cycle {cycle} failed execution test: {exec_error}")
 
         logger.info(f"[ACTION] Module '{name}': refining cycle {cycle}")
-        refined = await refine_code(code, name)
+        refined = await refine_code(code, name, error=exec_error)
 
         if not refined:
             logger.info(f"[ACTION] Module '{name}': refinement failed on cycle {cycle}")
@@ -89,14 +102,21 @@ async def generate_module_code(name, description, model_override=None):
         # so this used to silently "succeed" with a near-empty module.
         # Confirmed live: a real build reported success and installed a
         # 4-byte file (just blank lines) after all 3 cycles failed to
-        # produce a real candidate. Requiring the same init/handle check
-        # the normal path uses means a genuinely empty result correctly
+        # produce a real candidate. Requiring the same execution test the
+        # normal path uses means a genuinely empty/broken result correctly
         # falls through to the caller's fallback-template instead.
         if best_code and is_syntax_valid(best_code):
             valid, _ = validate_module_code(best_code)
+
             if valid:
-                return best_code
-            logger.info(f"[ACTION] Module '{name}': best attempt has no real init/handle functions, discarding")
+                ok, exec_error = execution_test(best_code)
+
+                if ok:
+                    return best_code
+
+                logger.info(f"[ACTION] Module '{name}': best attempt failed execution test: {exec_error}")
+            else:
+                logger.info(f"[ACTION] Module '{name}': best attempt has no real init/handle functions")
 
     return None
 
@@ -190,9 +210,20 @@ def handle(command, state):
 # =========================
 # 🔁 REFINEMENT
 # =========================
-async def refine_code(code, name):
+async def refine_code(code, name, error=None):
 
-    prompt = f"""{code}
+    # raw_mode has no chat template — for real failure feedback (from
+    # execution_test, not just the heuristic score) to actually reach the
+    # model, it has to be phrased as a code comment ahead of the
+    # completion seed, since there's no separate instruction channel here.
+    if error:
+        prompt = f"""# The code below was tested and failed: {error}
+# Fix that specific problem, then continue the module below.
+{code}
+
+"""
+    else:
+        prompt = f"""{code}
 
 """
 
@@ -321,6 +352,51 @@ def validate_module_code(code):
 
     except Exception as e:
         return False, str(e)
+
+
+def execution_test(code):
+    """
+    Actually RUNS the generated code, rather than just checking it parses
+    and has the right function names — that weaker check is exactly what
+    let a completely empty module report success (confirmed live: a
+    4-byte file with no real code passed every check that existed before
+    this). Runs check_safety() first since this executes model output
+    that hasn't gone through install_module()'s own safety gate yet.
+
+    Returns (ok, reason) — reason is None on success, otherwise a short,
+    concrete description of what actually broke, meant to be fed back
+    into a refinement prompt as real signal instead of a guess.
+    """
+    safe, reason = check_safety(code)
+    if not safe:
+        return False, f"blocked by sandbox: {reason}"
+
+    namespace = {}
+    try:
+        exec(code, namespace)
+    except Exception as e:
+        return False, f"code raised an exception on load: {e}"
+
+    handle_fn = namespace.get("handle")
+    if not callable(handle_fn):
+        return False, "no callable handle() after running the code"
+
+    # Every generated module is seeded from the same scaffold (see
+    # generate_once()'s base_prompt below) that always defines a "start"
+    # command — a real module should handle it without crashing.
+    try:
+        result = handle_fn("start", {})
+    except Exception as e:
+        return False, f"handle('start', {{}}) raised: {e}"
+
+    if not isinstance(result, tuple) or len(result) != 2:
+        return False, f"handle() returned {result!r}, expected a (response, state) tuple"
+
+    response, _ = result
+    if not response:
+        return False, "handle() ran but returned an empty response"
+
+    return True, None
 
 
 # =========================
