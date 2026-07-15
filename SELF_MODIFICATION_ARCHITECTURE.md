@@ -86,6 +86,26 @@ with her creator.
    is designed to bind even the creator and stays an exception to this
    exception.
 
+   **Concrete example (Craig, 2026-07-15)**: the creator's authority is
+   *per-utterance*, not per-session. If another user's session is active
+   (their identity resolved the session at connect time) and the creator
+   speaks up mid-conversation — voice matches (eventually face too) and
+   they provide their override code — she provides the creator the data
+   even though a different user is nominally logged into that session.
+   **This is a real architecture gap in the current (non-self-mod)
+   system, worth its own note**: today, identity resolves ONCE per
+   session at connect time (`ws_handlers.py`), and `permissions/system.
+   py`'s override-code check validates the code against the *session's
+   bound user's own* stored `override_code` — it has no path for "a
+   second, higher-authority speaker asserts themselves mid-session."
+   Making this real needs per-utterance speaker re-verification (voice,
+   later face), not just the current connect-time-only check, and the
+   override-code check needs to compare against the CREATOR profile
+   specifically when creator identity is asserted, not just the
+   session's ambient user. Not scheduled to a phase yet — flagging it
+   here since it surfaced from a principle discussion, not a built
+   requirement; needs its own design pass, likely alongside Component 12.
+
 ## Components
 
 Each of these is a real, mostly-unbuilt piece. None of this exists yet
@@ -509,3 +529,12 @@ Components 1, 3, 6, 12 above). Remaining open items:
   look — plain circle avatar, three-column layout — is being replaced,
   not iterated on) and should show versioning details once it's a real
   module with a version history to display
+- **Per-utterance creator authority** (design principle 9's example,
+  2026-07-15): making "creator speaks up mid-session, voice+code match,
+  gets creator authority even though a different user's session is
+  active" real needs per-utterance speaker re-verification (today's
+  voice check is connect-time-once) and an override-code check that
+  validates against the creator profile specifically rather than the
+  session's ambient user. A real gap in the *current* system, not just
+  the self-mod overhaul — needs its own design pass, likely alongside
+  Component 12
