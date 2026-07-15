@@ -103,13 +103,12 @@ def handle(command, state):
 
 """
 
-    print("🧠 [Stage 1] Mistral")
+    print("🧠 [Stage 1] Generating")
 
     response = ""
 
     async for chunk in ollama_manager.generate_stream(
         base_prompt,
-        model_override="mistral",
         raw_mode=True
     ):
         response += chunk

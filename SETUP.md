@@ -16,7 +16,8 @@ in it, and a few external pieces need to be in place before she'll run.
 ## 1. Prerequisites
 
 - Python 3.12
-- [Ollama](https://ollama.com), with the model pulled: `ollama pull mistral`
+- [Ollama](https://ollama.com), with the model pulled: `ollama pull qwen2.5:7b`
+  (set `ALEX_LLM_MODEL` if you use a different tag/size)
 - [Piper](https://github.com/rhasspy/piper) binary + a voice model (this
   project uses the GLaDOS voice from
   [DavesArmoury/GLaDOS_TTS](https://huggingface.co/DavesArmoury/GLaDOS_TTS),
@@ -40,6 +41,7 @@ code:
 | `ALEX_PIPER_PATH` | `speech/tts_engine.py` | `D:\project_ALEX\piper\piper.exe` |
 | `ALEX_PIPER_MODEL` | `speech/tts_engine.py` | `D:\project_ALEX\piper\models\glados_piper_medium.onnx` |
 | `ALEX_STT_MODEL` | `speech/stt_engine.py` | `base` (faster-whisper model size) |
+| `ALEX_LLM_MODEL` | `llm/ollama_client.py` | `qwen2.5:7b` (Ollama model tag) |
 
 (If you launch `ALEX.py` directly rather than through
 `ALEX_Controller.py`, Ollama just needs to already be running —
