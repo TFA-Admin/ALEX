@@ -1,0 +1,19 @@
+# Secrets
+certs/*.pem
+
+# Personal data / runtime state
+db/*.db
+db/*.db.backup_*
+config/Logs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# OS
+Thumbs.db
+.DS_Store

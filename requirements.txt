@@ -1,0 +1,24 @@
+fastapi
+uvicorn[standard]
+aiosqlite
+psutil
+httpx
+pydantic
+cryptography
+
+# ML / speech
+torch
+sentence-transformers
+faster-whisper
+numpy
+sounddevice
+resemblyzer
+librosa
+setuptools<81  # resemblyzer -> webrtcvad needs pkg_resources, removed in setuptools 81+
+
+# Controller UI (ALEX_Controller.py)
+PySide6
+
+# Ollama model storage locations (not pip packages — left here for reference):
+# D:\project_ALEX\Ollama Models
+# old: C:\Users\Gaming Server\.ollama\models\manifests\registry.ollama.ai\library
