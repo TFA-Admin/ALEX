@@ -2,6 +2,7 @@ import re
 import ast
 import asyncio
 from llm.ollama_client import ollama_manager
+from config.logger_config import logger
 
 
 MAX_RETRIES = 2
@@ -13,25 +14,29 @@ MAX_CYCLES = 3
 # =========================
 async def generate_module_code(name, description, model_override=None):
 
-    print("🧠 [SYSTEM] Starting module generation loop")
+    # logger.info (not print) so this shows up in the Controller's A.L.E.X.
+    # tab — a build genuinely takes a couple of minutes (it swaps between
+    # two different Ollama models across up to 3 cycles), and there was
+    # previously zero visibility into whether it was progressing or stuck.
+    logger.info(f"[ACTION] Module generation starting for '{name}'")
 
     best_code = None
     best_score = -1
 
     for cycle in range(1, MAX_CYCLES + 1):
 
-        print(f"\n🔁 GENERATION CYCLE {cycle}/{MAX_CYCLES}")
+        logger.info(f"[ACTION] Module '{name}': generation cycle {cycle}/{MAX_CYCLES}")
 
         code = await generate_once(name)
 
         if not code:
-            print("⚠️ No code generated — skipping")
+            logger.info(f"[ACTION] Module '{name}': cycle {cycle} produced no code, skipping")
             continue
 
         code = clean_pipeline(code)
 
         score = score_module_quality(code, name)
-        print(f"🧠 Score: {score}")
+        logger.info(f"[ACTION] Module '{name}': cycle {cycle} score {score}")
 
         if score > best_score:
             best_score = score
@@ -41,7 +46,7 @@ async def generate_module_code(name, description, model_override=None):
         if score >= 6:
 
             if not is_syntax_valid(code):
-                print("⚠️ Syntax failed — repairing")
+                logger.info(f"[ACTION] Module '{name}': syntax failed, repairing")
                 code = await repair_code(code)
 
             code = clean_pipeline(code)
@@ -49,38 +54,49 @@ async def generate_module_code(name, description, model_override=None):
             if code and is_syntax_valid(code):
                 valid, _ = validate_module_code(code)
                 if valid:
-                    print("✅ Final module accepted")
+                    logger.info(f"[ACTION] Module '{name}': accepted on cycle {cycle}")
                     return code
 
-        print("⚠️ Refining...")
+        logger.info(f"[ACTION] Module '{name}': refining cycle {cycle}")
         refined = await refine_code(code, name)
 
         if not refined:
-            print("⚠️ Refinement failed")
+            logger.info(f"[ACTION] Module '{name}': refinement failed on cycle {cycle}")
             continue
 
         refined = clean_pipeline(refined)
 
         score = score_module_quality(refined, name)
-        print(f"🧠 Post-refine score: {score}")
+        logger.info(f"[ACTION] Module '{name}': post-refine score {score}")
 
         if score > best_score:
             best_score = score
             best_code = refined
 
-    print("⚠️ Returning best attempt")
+    logger.info(f"[ACTION] Module '{name}': no cycle produced a fully valid result, using best attempt")
 
     if best_code:
         best_code = clean_pipeline(best_code)
 
         if not is_syntax_valid(best_code):
-            print("⚠️ Repairing best attempt...")
+            logger.info(f"[ACTION] Module '{name}': repairing best attempt")
             best_code = await repair_code(best_code)
 
         best_code = clean_pipeline(best_code)
 
+        # is_syntax_valid() alone isn't enough here — an empty string (or
+        # any fragment with no functions) parses as valid Python syntax,
+        # so this used to silently "succeed" with a near-empty module.
+        # Confirmed live: a real build reported success and installed a
+        # 4-byte file (just blank lines) after all 3 cycles failed to
+        # produce a real candidate. Requiring the same init/handle check
+        # the normal path uses means a genuinely empty result correctly
+        # falls through to the caller's fallback-template instead.
         if best_code and is_syntax_valid(best_code):
-            return best_code
+            valid, _ = validate_module_code(best_code)
+            if valid:
+                return best_code
+            logger.info(f"[ACTION] Module '{name}': best attempt has no real init/handle functions, discarding")
 
     return None
 

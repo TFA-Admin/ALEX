@@ -12,7 +12,6 @@ Handles:
 Replaces ALL module logic previously in ws_chat.py
 """
 
-import re
 import asyncio
 import textwrap
 
@@ -27,7 +26,8 @@ from module_runtime.module_executor import run_module
 from module_runtime.module_generator import generate_module_code
 from module_runtime.module_installer import install_module
 
-from db.db import get_module_state, set_module_state
+from core.intent_classifier import classify_module_gap
+from db.db import get_module_state, set_module_state, get_user_role, create_module_build_request
 from config.logger_config import logger
 
 
@@ -56,9 +56,70 @@ class System(BaseSystem):
         msg = text.lower()
 
         # -------------------------
+        # CONFIRMATION PHASE — checked FIRST, independent of the gap
+        # classifier below. A real bug (pre-existing, not introduced by the
+        # classifier swap): the old keyword gate (detect_module_name) ran
+        # on EVERY message including "yes"/"no" replies, and "yes" alone
+        # never contained "play"/"build"/"create" — so it returned None
+        # before ever reaching this confirmation logic, meaning a build
+        # could be proposed but never actually confirmed. Checking pending
+        # state first fixes that regardless of what the reply text itself
+        # looks like.
+        # -------------------------
+        if user_id in self.pending_builds:
+
+            if msg.startswith(("yes", "y", "yeah", "confirm")):
+                module_name = self.pending_builds.pop(user_id)
+
+                # Creator confirming their own request IS the approval —
+                # no extra step. Anyone else's "yes" only queues it; she
+                # never builds anything a non-creator asked for without
+                # the creator approving it first (via the Controller).
+                is_creator = (
+                    await get_user_role(user_id) == "creator"
+                    and session.get("creator_verified")
+                )
+
+                if is_creator:
+                    logger.info(f"[ACTION] Build confirmed by creator {user_id}: '{module_name}'")
+                    return await self._build_module(module_name, user_id, text)
+
+                request_id = await create_module_build_request(user_id, module_name, text)
+                logger.info(
+                    f"[ACTION] Build requested by {user_id}: '{module_name}' "
+                    f"(request #{request_id}, awaiting creator approval)"
+                )
+
+                return {
+                    "type": "response",
+                    "content": f"I've sent the {module_name} request to my creator for approval — I won't build it until they say yes."
+                }
+
+            if msg.startswith(("no", "n")):
+                module_name = self.pending_builds.pop(user_id)
+
+                logger.info(f"[ACTION] Build declined by {user_id}: '{module_name}'")
+
+                return {
+                    "type": "response",
+                    "content": "Okay, I won’t build it."
+                }
+
+            # Neither yes nor no — leave the pending build in place and let
+            # this message fall through to whatever else might handle it
+            # (e.g. a genuine change of subject), same as before.
+            return None
+
+        # -------------------------
         # DETECT MODULE NAME
         # -------------------------
-        module_name = self.detect_module_name(msg)
+        gap = await classify_module_gap(text)
+        logger.info(f"[ACTION] Module gap check for {user_id}: {gap} (from: {text!r})")
+
+        if not gap.get("wants_module"):
+            return None
+
+        module_name = gap.get("name")
 
         if not module_name:
             return None
@@ -69,30 +130,14 @@ class System(BaseSystem):
         # BUILD IF MISSING
         # -------------------------
         if not module:
+            self.pending_builds[user_id] = module_name
 
-            if user_id not in self.pending_builds:
-                self.pending_builds[user_id] = module_name
+            logger.info(f"[ACTION] Build proposed to {user_id}: '{module_name}' (awaiting confirmation)")
 
-                return {
-                    "type": "response",
-                    "content": f"I don’t have {module_name}. Want me to build it?"
-                }
-
-            # confirmation phase
-            if msg.startswith(("yes", "y", "yeah", "confirm")):
-                module_name = self.pending_builds.pop(user_id)
-
-                return await self._build_module(module_name, user_id, text)
-
-            if msg.startswith(("no", "n")):
-                self.pending_builds.pop(user_id)
-
-                return {
-                    "type": "response",
-                    "content": "Okay, I won’t build it."
-                }
-
-            return None
+            return {
+                "type": "response",
+                "content": f"I don’t have {module_name}. Want me to build it?"
+            }
 
         # -------------------------
         # RUN MODULE
@@ -163,25 +208,3 @@ class System(BaseSystem):
                 "type": "response",
                 "content": f"{module_name} module ready."
             }
-
-    # -------------------------
-    # NAME DETECTION
-    # -------------------------
-    def detect_module_name(self, msg: str):
-
-        if "play" in msg:
-            name = msg.split("play")[-1]
-        elif "build" in msg:
-            name = msg.split("build")[-1]
-        elif "create" in msg:
-            name = msg.split("create")[-1]
-        else:
-            return None
-
-        name = name.strip()
-        name = re.sub(r"[^\w\s]", "", name)
-        name = re.sub(r"\b(a|an|the)\b", "", name)
-        name = name.strip()
-        name = name.replace(" ", "_")
-
-        return name if name else None

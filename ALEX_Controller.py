@@ -19,7 +19,8 @@ from PySide6.QtGui import QGuiApplication
 
 from db.db import (
     get_personality, set_personality, DEFAULT_PERSONALITY,
-    log_personality_change, reset_all_phrases
+    log_personality_change, reset_all_phrases,
+    fetch_pending_module_build_requests, resolve_module_build_request
 )
 
 ALEX_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -119,6 +120,41 @@ def find_pid_by_port(port: int):
     return None
 
 
+def find_orphan_processes():
+    """
+    Finds stray Ollama/ALEX processes that aren't the one actually serving
+    their port — leftovers from restarts that were never cleanly killed.
+    Confirmed real: earlier this session two orphaned "ollama" processes
+    were each holding a full model copy in VRAM (~5GB each) despite
+    neither one owning port 11434 — the active listener was a third,
+    separate process. Only matches the exact "ollama.exe" binary name
+    (not the "ollama app" tray/updater helper, a legitimate singleton) and
+    "python.exe" processes whose command line names ALEX.py specifically.
+    """
+    active_ollama_pid = find_pid_by_port(11434)
+    active_alex_pid = find_pid_by_port(5000)
+
+    orphans = []
+
+    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            name = (proc.info["name"] or "").lower()
+            pid = proc.info["pid"]
+
+            if name == "ollama.exe" and pid != active_ollama_pid:
+                orphans.append(("Ollama", pid))
+
+            elif name == "python.exe":
+                cmdline = proc.info["cmdline"] or []
+                if any("alex.py" in str(c).lower() for c in cmdline) and pid != active_alex_pid:
+                    orphans.append(("A.L.E.X", pid))
+
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    return orphans
+
+
 # -----------------------------
 # 🧠 Main UI
 # -----------------------------
@@ -179,8 +215,12 @@ class AlexController(QWidget):
         self.copy_btn = QPushButton("📋 Copy Current Tab")
         self.copy_btn.clicked.connect(self.copy_logs)
 
+        self.check_orphans_btn = QPushButton("🧹 Check for Orphans")
+        self.check_orphans_btn.clicked.connect(lambda: self.check_for_orphans(prompt_if_none=True))
+
         for b in [self.start_ollama_btn, self.stop_ollama_btn,
-                  self.start_alex_btn, self.stop_alex_btn, self.copy_btn]:
+                  self.start_alex_btn, self.stop_alex_btn, self.copy_btn,
+                  self.check_orphans_btn]:
             btns.addWidget(b)
 
         layout.addLayout(btns)
@@ -268,10 +308,46 @@ class AlexController(QWidget):
         db_layout.addLayout(db_btns)
         self.db_tab.setLayout(db_layout)
 
-        self.tabs.addTab(self.ollama_log, "Ollama")
+        # 📋 REQUESTS TAB — module build requests awaiting creator
+        # approval. She never builds anything a non-creator asked for
+        # without this being approved here first (or in-conversation, if
+        # the creator is the one confirming their own request).
+        self.requests_tab = QWidget()
+        requests_layout = QVBoxLayout()
+
+        requests_layout.addWidget(QLabel("Pending module build requests:"))
+
+        self.requests_table = QTableWidget()
+        self.requests_table.setColumnCount(5)
+        self.requests_table.setHorizontalHeaderLabels(
+            ["ID", "Requested By", "Module", "Prompt", "Requested At"]
+        )
+        self.requests_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.requests_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        requests_layout.addWidget(self.requests_table)
+
+        requests_btns = QHBoxLayout()
+
+        self.requests_refresh_btn = QPushButton("🔄 Refresh")
+        self.requests_refresh_btn.clicked.connect(self.refresh_requests)
+
+        self.requests_approve_btn = QPushButton("✅ Approve Selected")
+        self.requests_approve_btn.clicked.connect(lambda: self.resolve_request("approved"))
+
+        self.requests_deny_btn = QPushButton("❌ Deny Selected")
+        self.requests_deny_btn.clicked.connect(lambda: self.resolve_request("denied"))
+
+        for b in [self.requests_refresh_btn, self.requests_approve_btn, self.requests_deny_btn]:
+            requests_btns.addWidget(b)
+
+        requests_layout.addLayout(requests_btns)
+        self.requests_tab.setLayout(requests_layout)
+
         self.tabs.addTab(self.alex_tab, "A.L.E.X.")
+        self.tabs.addTab(self.requests_tab, "Requests")
         self.tabs.addTab(self.db_tab, "Database")
         self.tabs.addTab(self.user_table, "Users")
+        self.tabs.addTab(self.ollama_log, "Ollama")
         self.tabs.addTab(self.system_log, "System")
 
         layout.addWidget(self.tabs)
@@ -282,12 +358,22 @@ class AlexController(QWidget):
         self.timer.timeout.connect(self.update_metrics)
         self.timer.start(1000)
 
+        # Separate, slower timer for the requests queue — no need to hit
+        # the DB every second for something that changes rarely.
+        self.requests_timer = QTimer()
+        self.requests_timer.timeout.connect(self.refresh_requests)
+        self.requests_timer.start(5000)
+
         # ---------------- ALWAYS-ON LOG TAILING ----------------
         # Starts watching regardless of whether this Controller launched
         # ALEX — so it stays useful even when she's started some other way.
         self.start_log_tailing()
 
         self.load_db_tables()
+        self.refresh_requests()
+
+        # Silent unless it finds something — no need to nag on a clean start.
+        self.check_for_orphans(prompt_if_none=False)
 
     # ---------------- STATUS ----------------
     def update_status(self):
@@ -609,6 +695,48 @@ class AlexController(QWidget):
 
         self.load_db_table_data()
 
+    # ---------------- MODULE BUILD REQUESTS ----------------
+    def refresh_requests(self):
+        try:
+            requests = asyncio.run(fetch_pending_module_build_requests())
+        except Exception as e:
+            self.alex_log.append(f"⚠️ Failed to load build requests: {e}")
+            return
+
+        self.requests_table.setRowCount(len(requests))
+
+        for row, r in enumerate(requests):
+            values = [r["id"], r["requested_by"], r["module_name"], r["prompt"], r["created_at"]]
+            for col, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                self.requests_table.setItem(row, col, item)
+
+    def resolve_request(self, status: str):
+        rows = sorted({idx.row() for idx in self.requests_table.selectionModel().selectedRows()})
+
+        if not rows:
+            return
+
+        for r in rows:
+            id_item = self.requests_table.item(r, 0)
+            module_item = self.requests_table.item(r, 2)
+            if not id_item:
+                continue
+
+            request_id = int(id_item.text())
+            module_name = module_item.text() if module_item else "?"
+
+            try:
+                asyncio.run(resolve_module_build_request(request_id, status))
+                self.alex_log.append(
+                    f"[SYSTEM] Build request #{request_id} ('{module_name}') {status} via Controller"
+                )
+            except Exception as e:
+                self.alex_log.append(f"⚠️ Failed to resolve request #{request_id}: {e}")
+
+        self.refresh_requests()
+
     # ---------------- ALWAYS-ON LOG TAILING ----------------
     def start_log_tailing(self):
         if not self.alex_tailer:
@@ -701,6 +829,35 @@ class AlexController(QWidget):
                     self.log(f"[SYSTEM] Failed to stop A.L.E.X: {e}")
 
         self.update_status()
+
+    # ---------------- ORPHAN PROCESS CHECK ----------------
+    def check_for_orphans(self, prompt_if_none=False):
+        orphans = find_orphan_processes()
+
+        if not orphans:
+            if prompt_if_none:
+                QMessageBox.information(self, "No Orphans Found", "No orphaned Ollama/A.L.E.X. processes found.")
+            return
+
+        lines = "\n".join(f"- {label} (PID {pid})" for label, pid in orphans)
+
+        confirm = QMessageBox.question(
+            self, "Orphaned Processes Found",
+            f"Found {len(orphans)} orphaned process(es) not serving their expected port "
+            f"(leftover from a restart that wasn't cleanly stopped):\n\n{lines}\n\n"
+            f"Terminate them now? Each one can be holding a full model copy in VRAM.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+        )
+
+        if confirm != QMessageBox.Yes:
+            return
+
+        for label, pid in orphans:
+            try:
+                psutil.Process(pid).terminate()
+                self.log(f"[SYSTEM] Terminated orphaned {label} process (PID {pid})")
+            except Exception as e:
+                self.log(f"[SYSTEM] Failed to terminate orphaned {label} process (PID {pid}): {e}")
 
 
 # -----------------------------

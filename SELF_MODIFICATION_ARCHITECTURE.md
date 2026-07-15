@@ -133,19 +133,83 @@ under the new Module Controller rather than a separate hardcoded tier.
       ad-hoc build-confirmation flow) rather than patching twice.
 
 ### 2. Module Controller (the big new piece)
-**Status: partial.** `module_runtime/*` already does sandboxed generation
-and execution, but Python-only, and it's one feature among many rather
-than the central mechanism. This generalizes it. **Scan Pass 1
-(2026-07-15, see Compliance scan log below) found the existing module
-system's entry point is hardcoded-keyword-gated (`"play"`/`"build"`/
-`"create"`) — the same anti-pattern already fixed everywhere else in
-this codebase. That makes migrating this the highest-priority Phase 1
-target, not just a generalization exercise.**
+**Status: partial, first real slice built and verified live (2026-07-15).**
+`module_runtime/*` already does sandboxed generation and execution, but
+Python-only, and it's one feature among many rather than the central
+mechanism. This generalizes it.
+
+**Done (2026-07-15) — the "build module" first pass Craig asked to start
+with:**
+- Replaced the hardcoded keyword gate (`"play"`/`"build"`/`"create"`)
+  with `core/intent_classifier.py`'s `classify_module_gap()`, a dedicated
+  classifier (kept separate from the shared 4-category one — same
+  regression risk as always with this model). Tested: ~82% raw accuracy,
+  with most of the "failures" actually harmless in the live pipeline
+  since `controller`/`diagnostics` run earlier (lower priority number)
+  and already intercept personality/status messages before `modules`
+  ever sees them.
+- **Found and fixed a real pre-existing bug, not introduced by the
+  classifier swap**: the old gate ran on EVERY message including "yes"/
+  "no" confirmation replies, and "yes" alone never contained "play"/
+  "build"/"create" — so a build could be *proposed* but the confirmation
+  logic nested inside the same gated block was never reachable to
+  actually *confirm* it. Fixed by checking pending-confirmation state
+  first, independent of the gap classifier.
+- **Two-stage creator approval, enforced for real** (not just logged):
+  confirming a build only executes immediately if the confirmer is the
+  creator (role + live voice verification, same check as everywhere
+  else). Anyone else's confirmation creates a durable
+  `module_build_requests` DB row (status `pending`) instead of building
+  — she does not build anything a non-creator asked for until the
+  creator approves it. New Controller "Requests" tab shows pending
+  requests with Approve/Deny buttons (writes `approved`/`denied` to the
+  same row); a new `periodic_module_builds()` loop in `main.py` (polls
+  every 10s) is what actually performs the build once approved, since
+  the Controller is a separate process and can only mark the DB row, not
+  run in-process `module_runtime` code itself.
+  Verified end-to-end live: proposed → confirmed by non-creator ("claude")
+  → correctly refused to build, created request #1 instead → approved
+  via direct DB call (simulating the Controller's Approve button) →
+  picked up by the poller within one cycle → generation ran (~7 minutes,
+  see below).
+- **Build observability was zero — fixed.** `module_runtime/
+  module_generator.py` only used `print()`, which goes nowhere useful
+  (stdout is redirected to DEVNULL for however this gets launched) — so
+  while that 7-minute build was running, GPU sat at 97-98% with no way
+  for Craig to tell "still working" from "stuck" except watching the
+  gauge. Converted the meaningful progress prints (cycle number, score,
+  stage, final outcome) to `logger.info("[ACTION] ...")` calls so builds
+  now show real progress in the Controller's A.L.E.X. tab.
+- **Found a second, more serious bug from that same live test**: the
+  build reported success ("Built module 'calculator'") but the installed
+  file was 4 bytes — just two blank lines, no actual code. Root cause:
+  after all `MAX_CYCLES` fail to produce a candidate that scores well
+  AND validates, the fallback "best attempt" path only checked
+  `is_syntax_valid()` (does it parse?) — and an empty string parses as
+  valid Python, so a completely empty generation attempt could still be
+  installed and reported as a success. Fixed by requiring the same
+  `validate_module_code()` check (real `init`/`handle` functions) the
+  normal path already uses; a genuinely empty result now correctly falls
+  through to the caller's minimal-but-functional fallback template
+  instead of installing nothing. The broken test module and its DB
+  artifacts were deleted; not yet re-tested end-to-end after the fix
+  (a real build takes several minutes each time).
+- **Found this only from live testing, not before**: this two-stage gate
+  was NOT part of the original scoped-down plan — the first version let
+  the original requester's own "yes" build immediately, same as the old
+  code. Craig caught this live ("she should not build anything without
+  submitting it to me for approval first") after a build was already
+  mid-flight; it was stopped before completing (confirmed: `modules/`
+  stayed empty, no success log line). Worth remembering for future
+  scoped-down passes: two-stage approval is a Design Principle 3
+  consequence, not optional even for a "first pass."
 
 - [ ] Define the module interface/contract (inputs, outputs, lifecycle
-      hooks: install/enable/disable/update/remove)
+      hooks: install/enable/disable/update/remove) — the current
+      "install → load → run" shape still isn't this
 - [ ] Module registry (DB-backed): what's installed, what's enabled,
-      version history, which query report (if any) produced it
+      version history — `module_build_requests` covers the *request* trail
+      now, not a full registry of installed modules yet
 - [ ] Multi-language execution: sandboxed runner per language, not just
       Python — needs per-language sandboxing research (what's safe to
       support first? Python + one more, e.g. JS/Node, before going wider?)
@@ -271,14 +335,45 @@ device as they come up, not speculatively now.**
       creator for docs first, research herself only if none exist
 
 ### 8. Claude ↔ A.L.E.X. Channel
-**Status: not built.**
+**Status: built and verified live (2026-07-15).** `tools/claude_client.py`
+— a text-only WebSocket client. Registers as an ordinary `"claude"` user
+profile, no special role, no elevated trust (exactly the "advisory only"
+decision already settled). Two commands: `register` (one-time) and
+`chat "message"` (one round trip, fresh connection each time — resolves
+instantly on repeat since the profile now exists).
 
-- [ ] Define the technical shape: does my environment connect to her
-      running WS/API as a client? What does that session look like?
-- [ ] Authentication — how does she know it's genuinely me, not something
-      spoofing the channel?
-- [ ] Confirmed: advisory only — my input enters the same query-
-      report/approval pipeline as her own research, no bypass
+- [x] Technical shape: a plain WSS client (she runs over WSS with a local
+      self-signed cert — `ALEX_Controller.py`'s existing cert-handling
+      was the clue; the client just disables CA verification, same local-
+      trust model as the rest of this project) connecting to her real
+      `/ws` endpoint as an ordinary client — no special API needed.
+- [x] **Turned out to need no backend changes at all.** She's voice-first,
+      but `identity/identity_manager.py`'s `receive_voice_sample()`
+      already treated typed text arriving where audio was expected as
+      "give up this attempt, no sample" rather than blocking — so a
+      microphone-less client completes onboarding in a handful of text
+      round trips (name → confirm → up to 6 harmlessly-skipped voice
+      prompts), lands as a normal `role="user"` profile.
+- [x] Authentication: not a real bypass-resistant scheme — trust is
+      implicit in "this connects from the same local machine," matching
+      how `bootstrap_creator.py` is already trusted for the same reason.
+      No stronger authentication built, since the role is already
+      unprivileged (nothing to protect beyond what any other unprivileged
+      user could already do).
+- [x] Confirmed live: advisory only, no bypass — when "claude" confirmed
+      a module build, it did NOT build immediately; it went into the same
+      creator-approval queue as any other non-creator user (see
+      Component 2's build-approval story above, discovered via this
+      exact channel).
+- Known rough edge: each `chat` call triggers her normal `speak()` — the
+  response is audibly spoken through the server's real speakers, same as
+  any live session, since TTS is a shared/global engine, not session-
+  scoped. Confirmed harmless (Craig: "it was kind of neat to hear you two
+  communicating with one another") but worth knowing before scripting
+  many rapid-fire calls — could get noisy, and shares Ollama's request
+  queue with real usage (rapid-fire testing was the likely cause of a
+  transient classification miss during testing, resolved by spacing
+  requests out).
 
 ### 9. Self-Directed Storage & Implementation Choice
 **Status: not built.** Today everything is hardcoded to sqlite via

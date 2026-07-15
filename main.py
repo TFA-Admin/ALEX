@@ -7,7 +7,10 @@ import sys
 from api.routes import router as api_router
 from ws.ws_handlers import register_ws
 from utils.utils import get_lan_ip
-from db.db import init_db, decay_memory
+from db.db import (
+    init_db, decay_memory,
+    fetch_approved_module_build_requests, resolve_module_build_request
+)
 from llm.ollama_client import ollama_manager
 from core.self_reflection import run_self_reflection
 from config.logger_config import logger
@@ -40,6 +43,42 @@ async def periodic_self_reflection():
         await asyncio.sleep(3600)  # every hour
 
 
+# -------------------------
+# MODULE BUILD APPROVAL LOOP (creator approves via the Controller's DB
+# tab or in-conversation; this is what actually performs the build once
+# approved — the Controller is a separate process and can only mark the
+# DB row, not run in-process module_runtime code itself)
+# -------------------------
+async def periodic_module_builds():
+    from core.alex_core import alex_core
+
+    while True:
+        try:
+            requests = await fetch_approved_module_build_requests()
+            modules_system = alex_core.systems.systems.get("modules")
+
+            if modules_system:
+                for req in requests:
+                    logger.info(
+                        f"[ACTION] Building approved module '{req['module_name']}' "
+                        f"(request #{req['id']}, originally requested by {req['requested_by']})"
+                    )
+
+                    result = await modules_system._build_module(
+                        req["module_name"], req["requested_by"], req["prompt"]
+                    )
+                    content = result.get("content", "") if result else "Build failed."
+                    success = "failed" not in content.lower()
+
+                    await resolve_module_build_request(
+                        req["id"], "built" if success else "failed", content
+                    )
+        except Exception as e:
+            logger.exception(f"❌ Module build approval loop failed: {e}")
+
+        await asyncio.sleep(10)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
@@ -70,6 +109,7 @@ async def lifespan(app: FastAPI):
     # -------------------------
     asyncio.create_task(periodic_decay())
     asyncio.create_task(periodic_self_reflection())
+    asyncio.create_task(periodic_module_builds())
 
     yield
 

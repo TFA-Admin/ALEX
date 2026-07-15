@@ -108,6 +108,22 @@ async def init_db():
             PRIMARY KEY (user_id, module)
         )''')
 
+        # 🧩 MODULE BUILD REQUESTS (creator approval queue — she never
+        # builds anything a non-creator user asked for without this being
+        # approved first; a creator-initiated request still gets a row for
+        # the audit trail, just auto-approved)
+        await db.execute('''
+        CREATE TABLE IF NOT EXISTS module_build_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            requested_by TEXT,
+            module_name TEXT,
+            prompt TEXT,
+            status TEXT DEFAULT 'pending',
+            result TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            resolved_at TIMESTAMP
+        )''')
+
         await db.commit()
         await ensure_weight_column(db)
 
@@ -643,4 +659,60 @@ async def set_module_state(user_id, module_name, state):
             INSERT OR REPLACE INTO module_state (user_id, module, state)
             VALUES (?, ?, ?)
         """, (user_id, module_name, json.dumps(state)))
+        await db.commit()
+
+
+# -------------------------
+# MODULE BUILD REQUESTS (creator approval queue)
+# -------------------------
+async def create_module_build_request(requested_by, module_name, prompt, status="pending"):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("""
+            INSERT INTO module_build_requests (requested_by, module_name, prompt, status)
+            VALUES (?, ?, ?, ?)
+        """, (requested_by, module_name, prompt, status))
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def fetch_pending_module_build_requests():
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("""
+            SELECT id, requested_by, module_name, prompt, created_at
+            FROM module_build_requests WHERE status='pending'
+            ORDER BY created_at
+        """)
+        rows = await cursor.fetchall()
+
+    return [
+        {"id": r[0], "requested_by": r[1], "module_name": r[2], "prompt": r[3], "created_at": r[4]}
+        for r in rows
+    ]
+
+
+async def fetch_approved_module_build_requests():
+    """Approved but not yet built — the live server polls this to actually
+    perform the build (the Controller can mark approval, but building
+    needs the live process's in-memory module_runtime state)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("""
+            SELECT id, requested_by, module_name, prompt
+            FROM module_build_requests WHERE status='approved'
+            ORDER BY created_at
+        """)
+        rows = await cursor.fetchall()
+
+    return [
+        {"id": r[0], "requested_by": r[1], "module_name": r[2], "prompt": r[3]}
+        for r in rows
+    ]
+
+
+async def resolve_module_build_request(request_id, status, result=None):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            UPDATE module_build_requests
+            SET status=?, result=?, resolved_at=CURRENT_TIMESTAMP
+            WHERE id=?
+        """, (status, result, request_id))
         await db.commit()
