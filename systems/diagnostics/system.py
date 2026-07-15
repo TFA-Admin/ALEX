@@ -19,6 +19,18 @@ import httpx
 
 from core.system_base import BaseSystem
 
+# Deterministic, not a classifier call — a casual presence/hearing check
+# ("can you hear me?") is a small, enumerable phrase space (same reasoning
+# as the personality "reset" trigger list), and it needs a different
+# ANSWER than a real diagnostic request, not a different classification.
+# status_check stays broad on purpose (it's what stops "are you okay"
+# from reaching the LLM and getting hallucinated advice) — this only
+# changes what she says once she's already been routed here.
+CASUAL_PRESENCE_CHECKS = (
+    "can you hear me", "can you hear", "are you there",
+    "are you listening", "do you hear me", "are you hearing me",
+)
+
 
 class System(BaseSystem):
 
@@ -40,6 +52,18 @@ class System(BaseSystem):
 
         if intent.get("intent") != "status_check":
             return None
+
+        lower = text.strip().lower()
+
+        if any(phrase in lower for phrase in CASUAL_PRESENCE_CHECKS):
+            # Grounded, not a guess: the message was received, transcribed,
+            # and reached this handler at all, which IS the confirmation —
+            # no need for the full system-by-system dump for a question
+            # this narrow.
+            return {
+                "type": "response",
+                "content": "Yes, I can hear you."
+            }
 
         status = await self._gather()
 

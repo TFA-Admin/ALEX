@@ -131,6 +131,22 @@ under the new Module Controller rather than a separate hardcoded tier.
       is mechanical (async I/O, dead code), fold the rest into the real
       components that supersede it (Query Report System replaces the
       ad-hoc build-confirmation flow) rather than patching twice.
+- **Concrete first migration target (Craig, 2026-07-15): diagnostics.**
+      Not migrated by Claude rewriting it as a module — she builds her
+      own replacement, on request, once the module system is mature
+      enough. Real tension to design for when that happens: the current
+      `systems/diagnostics/system.py` is deterministic Python on purpose
+      — an earlier attempt to let the LLM phrase status reports kept
+      inventing fake troubleshooting advice never present in the actual
+      gathered data. A self-built diagnostics module has to preserve that
+      property structurally (its `handle()` genuinely queries system
+      state in code — loaded systems, Ollama reachability, DB
+      reachability, etc.) rather than narrating a plausible-sounding
+      status. `execution_test()` (Component 6) verifies generated code
+      *runs*, not that it's *checking real things* — that's a real gap
+      between "the module executes without crashing" and "the module is
+      honest," worth having a concrete design answer for before this
+      migration is attempted, not after.
 
 ### 2. Module Controller (the big new piece)
 **Status: partial, first real slice built and verified live (2026-07-15).**
