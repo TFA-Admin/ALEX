@@ -491,25 +491,35 @@ by dependency, and that ordering is the proposed phase order:
 
 - [x] **Phase 0** — Foundation: evaluate/decide LLM model — done
       (2026-07-15), switched to qwen2.5:7b, see Foundational Decisions
-- [ ] **Phase 1** — Module Controller v2 (generalize existing module
-      system, multi-language groundwork, hot-swap). Includes a
-      compliance audit of the current codebase against "everything is a
-      module" (voice, avatar, UI, and the existing `systems/*` tier) —
-      expect several scanning passes, not one; log findings below as
-      they're done so a pass doesn't get silently redone next session.
+- [~] **Phase 1** — Module Controller v2. **Partial (2026-07-15)**: real
+      classifier gate, two-stage creator approval, execution-based
+      validation, and build observability are done and live-verified.
+      Still open: formal module interface/contract, DB-backed registry
+      with versioning/enable/disable/remove, multi-language execution,
+      presentation modules (voice/avatar/UI — full reshape still wanted),
+      and migrating existing `systems/*` in (resolved to do this, not
+      started). Compliance Scan Pass 1 done; expect more passes as this
+      continues.
 - [ ] **Phase 2** — Query Report + Approval pipeline (Controller
-      "Approvals" tab, full state machine) — can be built and tested
-      before research is wired to real internet, using a stub research
-      step, IF that turns out to be a safer way to prove the pipeline;
-      otherwise built together with Phase 3
+      "Approvals" tab, full state machine) for the general case. Note:
+      `module_build_requests` (built alongside Phase 1) is a narrow,
+      single-purpose proof of exactly this pattern — propose, queue,
+      creator approves, apply — just not yet generalized to knowledge
+      gaps or anything beyond "build a module."
 - [ ] **Phase 3** — Gated web research capability (the security-critical
       piece — gets its own hardening pass)
-- [ ] **Phase 4** — Apply-learning pipeline with validation + rollback
-- [ ] **Phase 5** — LLM fallback disclosure (user-facing) + priority
-      ordering
+- [~] **Phase 4** — Apply-learning pipeline with validation + rollback.
+      **Partial**: `execution_test()` (Phase 1 work) proves the *pattern*
+      — a real, run-the-code check before accepting — but it's a fixed
+      platform-authored test, not yet "she develops her own check" per
+      the resolved design. No rollback path yet either.
+- [x] **Phase 5** — LLM fallback disclosure (user-facing) + priority
+      ordering — done (2026-07-15), see Component 3/10
 - [ ] **Phase 6** — Continuous self-reflection replacing the scheduled loop
-- [ ] **Phase 7** — Refusal / agency layer
-- [ ] **Phase 8** — Claude ↔ A.L.E.X. channel
+- [ ] **Phase 7** — Refusal / agency layer — three rules settled, no
+      mechanism built
+- [x] **Phase 8** — Claude ↔ A.L.E.X. channel — done (2026-07-15),
+      `tools/claude_client.py`, see Component 8
 - [ ] **Phase 9** — Physical/hardware I/O (per-device, as they arise)
 
 Phasing is a proposal, not a commitment — revise this section as we learn
