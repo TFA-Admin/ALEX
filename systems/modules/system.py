@@ -4,34 +4,75 @@
 Module System
 
 Handles:
-- module detection
-- module generation
-- module execution
+- running already-installed modules by name
 - module state
 
 Replaces ALL module logic previously in ws_chat.py
+
+2026-07-16: no longer does gap DETECTION or build PROPOSALS — see
+KNOWN_MODULE_TRIGGERS below for why. Actual module building now happens
+entirely through Claude authoring code directly in a dev session
+(tools/pending_builds.py), not through any live voice/chat flow.
 """
 
-import asyncio
-import textwrap
+import time
 
 from core.system_base import BaseSystem
 
 from module_runtime.module_loader import (
-    get_module,
     load_module,
     load_all_modules
 )
 from module_runtime.module_executor import run_module
-from module_runtime.module_generator import generate_module_code
-from module_runtime.module_installer import install_module
 
-from core.intent_classifier import classify_module_gap
+from core.phrasebook import get_phrase
 from db.db import (
-    get_module_state, set_module_state, get_user_role, create_module_build_request,
-    register_module_version, get_module_registry_entry
+    get_module_state, set_module_state,
+    get_module_registry_entry, list_module_registry
 )
 from config.logger_config import logger
+
+# 2026-07-16 (Craig: "I'd almost rather it not be there then... 99% of it
+# probably isn't going to prompt a build") — removed classify_module_gap(),
+# an LLM classifier call this system used to run on EVERY single message
+# (~2s each, same model as the main conversation, so not a reload cost —
+# just unconditional per-turn latency) specifically to catch IMPLICIT
+# build requests ("I shoot guns" -> proposed 'firearm_simulation') that
+# essentially never turn into a real build anymore now that building
+# actually happens through Claude directly, not through her own live
+# conversational gap-detection. That same classifier output was ALSO how
+# an already-installed module got invoked by name — but in practice that
+# only ever mattered for 'recall': diagnostic_tool and inquiry both
+# already have their own dedicated, deterministic trigger systems running
+# at a HIGHER priority (9, vs. this system's 10), so a relevant message
+# would already have been claimed before ever reaching here. A small
+# fixed trigger list for the one remaining real case is both faster and,
+# per the standing project-wide lesson about this model's classifiers,
+# more reliable than an LLM call for something this narrow and enumerable.
+KNOWN_MODULE_TRIGGERS = {
+    "recall": ("remember", "recall", "your memories", "memories"),
+}
+
+
+def _detect_known_module(text: str):
+    lowered = text.lower()
+    for name, triggers in KNOWN_MODULE_TRIGGERS.items():
+        if any(t in lowered for t in triggers):
+            return name
+    return None
+
+
+_MODULE_QUESTION_STARTS = (
+    "tell me about", "what is", "what does", "what's", "whats",
+    "how do", "how does", "do you have", "can you tell me", "describe",
+)
+
+
+def _looks_like_module_question(text):
+    t = text.strip().lower()
+    if t.endswith("?"):
+        return True
+    return t.startswith(_MODULE_QUESTION_STARTS)
 
 
 class System(BaseSystem):
@@ -39,13 +80,18 @@ class System(BaseSystem):
     name = "modules"
     priority = 10  # 🔥 higher priority than LLM
 
-    def __init__(self):
-        self.pending_builds = {}
-        self.generation_lock = asyncio.Lock()
-
     async def init(self):
-        load_all_modules()
+        await load_all_modules()
         print("🧩 Module system ready")
+
+    async def diagnose(self):
+        """Real check: running an already-installed module depends on
+        list_module_registry() to know what actually exists."""
+        try:
+            await list_module_registry()
+        except Exception as e:
+            return False, f"list_module_registry() raised: {e}"
+        return True, ""
 
     # -------------------------
     # MAIN HANDLER
@@ -56,108 +102,65 @@ class System(BaseSystem):
         if not text:
             return None
 
-        msg = text.lower()
-
-        # -------------------------
-        # CONFIRMATION PHASE — checked FIRST, independent of the gap
-        # classifier below. A real bug (pre-existing, not introduced by the
-        # classifier swap): the old keyword gate (detect_module_name) ran
-        # on EVERY message including "yes"/"no" replies, and "yes" alone
-        # never contained "play"/"build"/"create" — so it returned None
-        # before ever reaching this confirmation logic, meaning a build
-        # could be proposed but never actually confirmed. Checking pending
-        # state first fixes that regardless of what the reply text itself
-        # looks like.
-        # -------------------------
-        if user_id in self.pending_builds:
-
-            if msg.startswith(("yes", "y", "yeah", "confirm")):
-                module_name = self.pending_builds.pop(user_id)
-
-                # Creator confirming their own request IS the approval —
-                # no extra step. Anyone else's "yes" only queues it; she
-                # never builds anything a non-creator asked for without
-                # the creator approving it first (via the Controller).
-                is_creator = (
-                    await get_user_role(user_id) == "creator"
-                    and session.get("creator_verified")
-                )
-
-                if is_creator:
-                    logger.info(f"[ACTION] Build confirmed by creator {user_id}: '{module_name}'")
-                    return await self._build_module(module_name, user_id, text)
-
-                request_id = await create_module_build_request(user_id, module_name, text)
-                logger.info(
-                    f"[ACTION] Build requested by {user_id}: '{module_name}' "
-                    f"(request #{request_id}, awaiting creator approval)"
-                )
-
-                return {
-                    "type": "response",
-                    "content": f"I've sent the {module_name} request to my creator for approval — I won't build it until they say yes."
-                }
-
-            if msg.startswith(("no", "n")):
-                module_name = self.pending_builds.pop(user_id)
-
-                logger.info(f"[ACTION] Build declined by {user_id}: '{module_name}'")
-
-                return {
-                    "type": "response",
-                    "content": "Okay, I won’t build it."
-                }
-
-            # Neither yes nor no — leave the pending build in place and let
-            # this message fall through to whatever else might handle it
-            # (e.g. a genuine change of subject), same as before.
-            return None
-
-        # -------------------------
-        # DETECT MODULE NAME
-        # -------------------------
-        gap = await classify_module_gap(text)
-        logger.info(f"[ACTION] Module gap check for {user_id}: {gap} (from: {text!r})")
-
-        if not gap.get("wants_module"):
-            return None
-
-        module_name = gap.get("name")
-
+        module_name = _detect_known_module(text)
         if not module_name:
             return None
 
-        module = get_module(module_name)
-
-        # -------------------------
-        # BUILD IF MISSING
-        # -------------------------
-        if not module:
-            self.pending_builds[user_id] = module_name
-
-            logger.info(f"[ACTION] Build proposed to {user_id}: '{module_name}' (awaiting confirmation)")
-
-            return {
-                "type": "response",
-                "content": f"I don’t have {module_name}. Want me to build it?"
-            }
+        registry_entry = await get_module_registry_entry(module_name)
+        if not registry_entry:
+            return None
 
         # -------------------------
         # RUN MODULE (respect enable/disable from the registry — same
         # "checked at invocation time, not unloaded from memory" pattern
         # the systems/* tier already uses for disabled_systems)
         # -------------------------
-        registry_entry = await get_module_registry_entry(module_name)
-
-        if registry_entry and registry_entry["status"] == "disabled":
+        if registry_entry["status"] == "disabled":
             return {
                 "type": "response",
-                "content": f"{module_name} is currently disabled."
+                "content": await get_phrase("module_currently_disabled", module_name=module_name)
+            }
+
+        module = await load_module(module_name)
+
+        if not module:
+            logger.warning(f"[ACTION] Module '{module_name}' exists but failed to load (blocked or broken)")
+            return {
+                "type": "response",
+                "content": await get_phrase("module_blocked_or_broken", module_name=module_name)
+            }
+
+        # Meta/conversational questions about a module ("tell me about X",
+        # "what does X do?") shouldn't be piped into the module's own
+        # handle() as a raw command. Confirmed live: egg_timer's handle()
+        # correctly didn't recognize "tell me about the egg timer you
+        # made" as a command and returned its own "Unknown command: ..."
+        # fallback verbatim — which reads exactly like she'd forgotten
+        # building it, seconds after actually building it. Deliberately a
+        # small deterministic check, not a classifier: a false positive
+        # here just falls through to a description instead of running the
+        # module, a low-cost failure, while the real bug (a genuine
+        # question misrouted as a command) is the one actually observed.
+        if _looks_like_module_question(text):
+            module_help = None
+            try:
+                if hasattr(module, "help"):
+                    module_help = module.help()
+            except Exception:
+                module_help = None
+
+            if module_help:
+                return {"type": "response", "content": await get_phrase("module_description", module_name=module_name, module_help=module_help)}
+
+            version_note = f" (v{registry_entry['version']})" if registry_entry else ""
+            return {
+                "type": "response",
+                "content": await get_phrase("module_built_no_description", module_name=module_name, version_note=version_note)
             }
 
         state = await get_module_state(user_id, module_name)
 
-        result, new_state = run_module(module, text, state)
+        result, new_state = await run_module(module, text, state, user_id)
 
         if new_state is not None:
             await set_module_state(user_id, module_name, new_state)
@@ -169,61 +172,3 @@ class System(BaseSystem):
             }
 
         return None
-
-    # -------------------------
-    # MODULE BUILD
-    # -------------------------
-    async def _build_module(self, module_name, user_id, prompt):
-
-        async with self.generation_lock:
-
-            code = await generate_module_code(module_name, prompt)
-
-            if not code:
-                fallback = textwrap.dedent(f"""
-                def init():
-                    return "{module_name} ready"
-
-                def handle(command, state):
-                    return "Basic {module_name} module created.", state
-                """)
-
-                success, _ = await install_module(module_name, fallback, user_id)
-
-                if not success:
-                    return {
-                        "type": "response",
-                        "content": "Module build failed."
-                    }
-
-                load_module(module_name)
-                version = await register_module_version(
-                    module_name, fallback, user_id, source="fallback_template"
-                )
-
-                logger.info(f"[ACTION] Built module '{module_name}' v{version} (fallback template, requested by {user_id})")
-
-                return {
-                    "type": "response",
-                    "content": f"Created basic {module_name} module."
-                }
-
-            success, _ = await install_module(module_name, code, user_id)
-
-            if not success:
-                return {
-                    "type": "response",
-                    "content": "Module build failed."
-                }
-
-            load_module(module_name)
-            version = await register_module_version(
-                module_name, code, user_id, source="generated"
-            )
-
-            logger.info(f"[ACTION] Built module '{module_name}' v{version} (generated, requested by {user_id})")
-
-            return {
-                "type": "response",
-                "content": f"{module_name} module ready."
-            }

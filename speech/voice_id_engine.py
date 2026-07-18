@@ -64,12 +64,39 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
 
-def best_match(candidate: np.ndarray, enrolled: list) -> float:
-    """Highest similarity between candidate and any of a profile's enrolled samples."""
+TOP_K_FOR_MATCH = 2
+
+
+def best_match(candidate: np.ndarray, enrolled: list, top_k: int = TOP_K_FOR_MATCH) -> float:
+    """Average of the top `top_k` individual similarities, not just the
+    single best one.
+
+    2026-07-17 (Craig, after learning MATCH_THRESHOLD had been lowered
+    from 0.75 to 0.68 specifically to stop rejecting his own real voice):
+    a bare max meant every newly enrolled sample (continuous reinforcement
+    keeps adding more over time) was purely another lottery ticket for a
+    lucky high-scoring match — enrollment growing made verification
+    structurally EASIER to pass over time, not more reliable. Averaging
+    the top few scores means multiple samples actually have to resemble
+    the candidate, not just one outlier, while still not being dragged
+    down by a single old/noisy sample the way a full average across
+    every enrolled sample ever recorded would be. Falls back to the
+    single best score when there's only one enrolled sample (nothing to
+    average yet).
+
+    Note: this changes the SCORING METHOD, not MATCH_THRESHOLD itself
+    (still 0.68) — a top-2 average is generally lower than a bare max for
+    the same samples, so this makes verification meaningfully stricter in
+    practice even with the same threshold number. Flagged, not silently
+    absorbed: watch for this reintroducing false rejections on real
+    speech (the exact problem that got the threshold lowered in the
+    first place) — can't be verified without live mic testing."""
     if candidate is None or not enrolled:
         return 0.0
 
-    return max(_cosine(candidate, e) for e in enrolled)
+    scores = sorted((_cosine(candidate, e) for e in enrolled), reverse=True)
+    top = scores[:top_k]
+    return sum(top) / len(top)
 
 
 def is_match(candidate: np.ndarray, enrolled: list, threshold: float = MATCH_THRESHOLD) -> bool:

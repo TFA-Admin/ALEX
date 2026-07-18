@@ -7,10 +7,7 @@ import sys
 from api.routes import router as api_router
 from ws.ws_handlers import register_ws
 from utils.utils import get_lan_ip
-from db.db import (
-    init_db, decay_memory,
-    fetch_approved_module_build_requests, resolve_module_build_request
-)
+from db.db import init_db, decay_memory
 from llm.ollama_client import ollama_manager
 from core.self_reflection import run_self_reflection
 from config.logger_config import logger
@@ -34,49 +31,47 @@ async def periodic_decay():
 # SELF-REFLECTION LOOP (personality — fully autonomous, no approval gate)
 # -------------------------
 async def periodic_self_reflection():
+    # 2026-07-16: found live — this used to fire immediately on every
+    # startup with zero delay, meaning its own real Ollama calls (curiosity
+    # check + personality check, and up to 5 phrase re-voices if
+    # personality actually changes) directly competed with whatever the
+    # creator asked right after restarting — exactly the window Craig
+    # tests in every time. A cold delay before the first pass keeps this
+    # loop out of the way of the immediate post-restart conversation.
+    await asyncio.sleep(180)
+
     while True:
         try:
             await run_self_reflection()
         except Exception as e:
             logger.exception(f"❌ Self-reflection failed: {e}")
 
-        await asyncio.sleep(3600)  # every hour
+        # 2026-07-17: shortened again, from 900s to 120s — run_self_reflection()
+        # itself now gates the actual work behind a real idle check
+        # (IDLE_BEFORE_REFLECTION_S in core/self_reflection.py: no LLM
+        # call at all unless there's been a genuine lull in conversation),
+        # so polling more often just means noticing a real downtime
+        # window sooner, not doing more work more often. Craig: "have her
+        # know if there's room for her to make changes, like a downtime,
+        # and kick off the things she wants to adjust" — this is the
+        # mechanism. The earlier 900s interval was a blind timer with no
+        # idea whether Craig was mid-conversation; this one only ever
+        # acts during an actual quiet stretch.
+        await asyncio.sleep(120)
 
 
 # -------------------------
-# MODULE BUILD APPROVAL LOOP (creator approves via the Controller's DB
-# tab or in-conversation; this is what actually performs the build once
-# approved — the Controller is a separate process and can only mark the
-# DB row, not run in-process module_runtime code itself)
+# MODULE BUILDING (2026-07-16): no longer automated. Approved requests
+# just wait in module_build_requests (status='approved') until Claude
+# picks them up directly in an active session — reads module_name/prompt,
+# writes the code, determines if it needs elevated access, and installs
+# it. See SELF_MODIFICATION_ARCHITECTURE.md's Component 2 addendum and
+# tools/pending_builds.py. This used to be a periodic loop calling local
+# deepseek-coder generation (module_runtime/dormant/module_generator.py,
+# still in the codebase but dormant) — removed because that generation approach
+# had a real capability ceiling on anything beyond trivial scaffolds, not
+# a tuning problem.
 # -------------------------
-async def periodic_module_builds():
-    from core.alex_core import alex_core
-
-    while True:
-        try:
-            requests = await fetch_approved_module_build_requests()
-            modules_system = alex_core.systems.systems.get("modules")
-
-            if modules_system:
-                for req in requests:
-                    logger.info(
-                        f"[ACTION] Building approved module '{req['module_name']}' "
-                        f"(request #{req['id']}, originally requested by {req['requested_by']})"
-                    )
-
-                    result = await modules_system._build_module(
-                        req["module_name"], req["requested_by"], req["prompt"]
-                    )
-                    content = result.get("content", "") if result else "Build failed."
-                    success = "failed" not in content.lower()
-
-                    await resolve_module_build_request(
-                        req["id"], "built" if success else "failed", content
-                    )
-        except Exception as e:
-            logger.exception(f"❌ Module build approval loop failed: {e}")
-
-        await asyncio.sleep(10)
 
 
 @asynccontextmanager
@@ -109,7 +104,6 @@ async def lifespan(app: FastAPI):
     # -------------------------
     asyncio.create_task(periodic_decay())
     asyncio.create_task(periodic_self_reflection())
-    asyncio.create_task(periodic_module_builds())
 
     yield
 

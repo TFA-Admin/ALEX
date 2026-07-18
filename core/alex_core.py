@@ -13,6 +13,7 @@ Responsibilities:
 """
 
 import asyncio
+import time
 from typing import Dict, Any
 
 from core.system_manager import SystemManager
@@ -35,6 +36,7 @@ class AlexCore:
         await self.load_system("facts")
         await self.load_system("memory")
         await self.load_system("diagnostics")
+        await self.load_system("inquiry")
         await self.load_system("modules")
         await self.load_system("llm")
 
@@ -55,6 +57,12 @@ class AlexCore:
     async def handle_input(self, session_id: str, user_id: str, input_data: Dict):
 
         session = self.get_session(session_id)
+
+        # Stamped here — the one true single entry point every message
+        # passes through — so response_handler.py's [TIMING] TOTAL line
+        # can report real heard-to-spoken time, not just the time spent
+        # after dispatch already picked a system to answer with.
+        session["turn_start_time"] = time.time()
 
         # 🔥 ROUTE THROUGH SYSTEM MANAGER
         response = await self.systems.route(

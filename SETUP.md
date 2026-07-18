@@ -69,7 +69,7 @@ ID) doesn't need this step — its model ships inside the pip package.
 ## 5. Create the creator profile
 
 ```
-python bootstrap_creator.py <your name>
+python tools/bootstrap_creator.py <your name>
 ```
 
 This is deliberately a standalone script — granting the `creator` role

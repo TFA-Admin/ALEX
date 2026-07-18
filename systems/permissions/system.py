@@ -12,6 +12,7 @@ Handles:
 
 from core.system_base import BaseSystem
 from db.db import update_fact, fetch_user_facts
+from core.phrasebook import get_phrase
 from config.logger_config import logger
 
 
@@ -41,6 +42,15 @@ class System(BaseSystem):
     async def init(self):
         print("🔐 Permission system ready")
 
+    async def diagnose(self):
+        """Real check: every update this system authorizes depends on
+        fetch_user_facts() to read the stored edit/override codes."""
+        try:
+            await fetch_user_facts("craig")
+        except Exception as e:
+            return False, f"fetch_user_facts() raised: {e}"
+        return True, ""
+
     async def handle(self, session, user_id: str, input_data: dict):
 
         text = input_data.get("text", "")
@@ -53,7 +63,7 @@ class System(BaseSystem):
             print(f"⚠️ Permission error: {e}")
             return {
                 "type": "response",
-                "content": "Failed to process update."
+                "content": await get_phrase("update_failed")
             }
 
     def _extract_update_from_intent(self, session: dict):
@@ -142,7 +152,7 @@ class System(BaseSystem):
         else:
             return {
                 "type": "response",
-                "content": "Invalid code. Update rejected."
+                "content": await get_phrase("invalid_code_update_rejected")
             }
 
         # -------------------------
@@ -151,13 +161,13 @@ class System(BaseSystem):
         if key in LOCKED_KEYS:
             return {
                 "type": "response",
-                "content": "This field cannot be modified."
+                "content": await get_phrase("field_locked")
             }
 
         if key in OVERRIDE_ONLY_KEYS and reason != "override":
             return {
                 "type": "response",
-                "content": "This field requires override authorization."
+                "content": await get_phrase("field_requires_override")
             }
 
         # -------------------------
@@ -170,5 +180,5 @@ class System(BaseSystem):
 
         return {
             "type": "response",
-            "content": f"{key.replace('_',' ')} updated to {value} ({reason})."
+            "content": await get_phrase("field_updated", field=key.replace("_", " "), value=value, reason=reason)
         }

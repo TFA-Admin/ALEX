@@ -13,6 +13,7 @@ Responsibilities:
 from core.system_base import BaseSystem
 from db.db import fetch_user_facts, update_fact
 from config.logger_config import logger
+from systems.permissions.system import LOCKED_KEYS
 
 
 # -------------------------
@@ -189,6 +190,16 @@ class System(BaseSystem):
     async def init(self):
         print("📚 Fact system ready")
 
+    async def diagnose(self):
+        """Real check: handle() depends on fetch_user_facts() every
+        turn to build fact_context, regardless of whether a new fact
+        was extracted this message."""
+        try:
+            await fetch_user_facts("craig")
+        except Exception as e:
+            return False, f"fetch_user_facts() raised: {e}"
+        return True, ""
+
     async def handle(self, session, user_id: str, input_data: dict):
 
         text = input_data.get("text", "")
@@ -218,8 +229,19 @@ class System(BaseSystem):
         # -------------------------
         # BUILD CONTEXT
         # -------------------------
-        if facts:
-            lines = [f"{k} = {v}" for k, v in facts.items()]
+        # 2026-07-16: found live — edit_code/override_code/role were
+        # included here unfiltered, meaning the LLM prompt (built from
+        # this on every single turn, not just identity-related ones) had
+        # ambient access to real security codes and could, and did,
+        # blurt one out verbatim in an ordinary conversational reply.
+        # LOCKED_KEYS already exists in permissions/system.py to protect
+        # these fields from being *written* via conversation — reusing
+        # the same list here closes the matching *read* exposure, rather
+        # than defining a second list that could drift out of sync.
+        safe_facts = {k: v for k, v in facts.items() if k not in LOCKED_KEYS}
+
+        if safe_facts:
+            lines = [f"{k} = {v}" for k, v in safe_facts.items()]
             fact_text = "\n".join(lines)
         else:
             fact_text = ""

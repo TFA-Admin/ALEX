@@ -14,22 +14,51 @@ data. For a feature whose entire point is trustworthy self-reporting,
 that's not an acceptable failure mode, so this trades the LLM's
 personality-flavored phrasing for a guarantee: what she reports is
 exactly what was measured, nothing more.
-"""
-import httpx
 
+This system's priority (9) still runs before the module system (10), so
+it's the one that actually answers a "status check" utterance. As of
+2026-07-16 this delegates entirely to the privileged `diagnostic_tool`
+module (registry-tracked, versioned, Claude-authored — see
+SELF_MODIFICATION_ARCHITECTURE.md Component 1) instead of keeping a
+second, hardcoded copy of the same checks here — a duplicate is exactly
+what a migration is supposed to eliminate, not preserve as a fallback.
+`run_module()` already returns an error string rather than raising or
+going silent, so this stays honest (a real "module error" report) even
+if the module itself breaks, without needing a shadow implementation.
+"""
 from core.system_base import BaseSystem
+from core.phrasebook import get_phrase
+from db.db import get_module_registry_entry
+from module_runtime.module_loader import load_module
+from module_runtime.module_executor import run_module
 
 # Deterministic, not a classifier call — a casual presence/hearing check
-# ("can you hear me?") is a small, enumerable phrase space (same reasoning
-# as the personality "reset" trigger list), and it needs a different
-# ANSWER than a real diagnostic request, not a different classification.
-# status_check stays broad on purpose (it's what stops "are you okay"
-# from reaching the LLM and getting hallucinated advice) — this only
-# changes what she says once she's already been routed here.
-CASUAL_PRESENCE_CHECKS = (
-    "can you hear me", "can you hear", "are you there",
-    "are you listening", "do you hear me", "are you hearing me",
-)
+# needs a different ANSWER than a real diagnostic request, not a
+# different classification. status_check stays broad on purpose (it's
+# what stops "are you okay" from reaching the LLM and getting
+# hallucinated advice) — this only changes what she says once she's
+# already been routed here.
+#
+# Keyword-based, not an enumerated phrase list — found live (2026-07-16)
+# that the original exact-phrase list ("can you hear me", "do you hear
+# me", ...) missed real rephrasings entirely: "You can't hear me?" and
+# "...I asked if you can hear me" both contain the word order flipped
+# from every listed phrase, so neither matched, and both silently fell
+# through to the full diagnostic dump instead of a simple "yes, I can
+# hear you" — which is exactly what produced "you're just gonna say that
+# for everything now." Same lesson as the elevated-access approval
+# command earlier tonight: match the actual signal (the word "hear"),
+# not literal phrasings, since STT/rephrasing variance is unpredictable
+# in advance.
+CASUAL_PRESENCE_KEYWORDS = ("hear", "listening")
+CASUAL_PRESENCE_PHRASES = ("are you there",)
+
+
+def _is_presence_check(lower: str) -> bool:
+    return (
+        any(k in lower for k in CASUAL_PRESENCE_KEYWORDS)
+        or any(p in lower for p in CASUAL_PRESENCE_PHRASES)
+    )
 
 
 class System(BaseSystem):
@@ -39,6 +68,23 @@ class System(BaseSystem):
 
     async def init(self):
         print("🩺 Diagnostics system ready")
+
+    async def diagnose(self):
+        """Deliberately does NOT call load_module/run_module on
+        diagnostic_tool — that module's own handle() loops over every
+        system's diagnose() (this one included), so actually invoking
+        it here would recurse. A read-only registry check is the
+        correct depth: confirms the thing this system delegates to is
+        actually present and enabled, without running it."""
+        entry = await get_module_registry_entry("diagnostic_tool")
+
+        if not entry:
+            return False, "diagnostic_tool module is not registered"
+
+        if entry["status"] != "enabled":
+            return False, f"diagnostic_tool module status is {entry['status']!r}, expected 'enabled'"
+
+        return True, ""
 
     async def handle(self, session, user_id: str, input_data: dict):
 
@@ -55,56 +101,33 @@ class System(BaseSystem):
 
         lower = text.strip().lower()
 
-        if any(phrase in lower for phrase in CASUAL_PRESENCE_CHECKS):
+        if _is_presence_check(lower):
             # Grounded, not a guess: the message was received, transcribed,
             # and reached this handler at all, which IS the confirmation —
             # no need for the full system-by-system dump for a question
             # this narrow.
             return {
                 "type": "response",
-                "content": "Yes, I can hear you."
+                "content": await get_phrase("presence_confirmed")
             }
 
-        status = await self._gather()
+        status = await self._gather(user_id)
 
         return {
             "type": "response",
             "content": status
         }
 
-    async def _gather(self) -> str:
-        from core.alex_core import alex_core
-        from llm.ollama_client import ollama_manager
-        from db.db import fetch_recent_memory_all
+    async def _gather(self, user_id: str) -> str:
+        registry_entry = await get_module_registry_entry("diagnostic_tool")
 
-        expected = [
-            "controller", "command", "intent", "permissions", "facts",
-            "memory", "diagnostics", "modules", "llm"
-        ]
-        loaded = set(alex_core.systems.systems.keys())
+        if not registry_entry:
+            return "diagnostic_tool module isn't installed."
 
-        lines = [f"{s}: {'online' if s in loaded else 'offline'}" for s in expected]
+        if registry_entry["status"] == "disabled":
+            return "diagnostic_tool module is currently disabled."
 
-        try:
-            async with httpx.AsyncClient(timeout=2.0) as client:
-                r = await client.get(ollama_manager.host)
-                ollama_status = "online" if r.status_code == 200 else "error"
-        except Exception:
-            ollama_status = "offline"
-        lines.append(f"ollama: {ollama_status}")
+        module = await load_module("diagnostic_tool")
+        result, _ = await run_module(module, "run a diagnostic check", {}, user_id)
 
-        try:
-            await fetch_recent_memory_all(limit=1)
-            db_status = "online"
-        except Exception:
-            db_status = "error"
-        lines.append(f"database: {db_status}")
-
-        try:
-            from speech.stt_engine import FORCE_STT_CPU
-            stt_mode = "cpu" if FORCE_STT_CPU else "gpu"
-        except Exception:
-            stt_mode = "error"
-        lines.append(f"stt: {stt_mode}")
-
-        return "\n".join(lines)
+        return result or "diagnostic_tool ran but returned nothing."

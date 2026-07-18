@@ -5,6 +5,7 @@ psutil
 httpx
 pydantic
 cryptography
+beautifulsoup4  # inquiry module (2026-07-16) — parsing real fetched web content
 
 # ML / speech
 torch

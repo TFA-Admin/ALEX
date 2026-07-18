@@ -9,7 +9,7 @@ from db.db import (
     fetch_user_facts, update_fact, migrate_user, create_profile, profile_exists,
     reinforce_voice_sample, fetch_voice_samples, fetch_all_voice_profiles, find_profile_by_prefix
 )
-from speech.tts_engine import speak
+from speech.tts_engine import synthesize_speech
 from speech.stt_engine import transcribe_audio
 from speech.voice_id_engine import embed_voice_bytes, best_match, identify_speaker, MATCH_THRESHOLD
 from ws.ws_utils import send_debug
@@ -19,6 +19,17 @@ from core.phrasebook import get_phrase
 ENROLL_TARGET_SAMPLES = 3
 ENROLL_MAX_ATTEMPTS = 6
 RECEIVE_TIMEOUT = 25.0  # a silent mic must never hang a connection forever
+
+
+async def _speak(websocket, text):
+    """2026-07-16: speech now plays through the browser (Web Audio API),
+    not a server-side speaker — every former speak(text) call site here
+    already sends the same text via websocket.send_text() right before
+    calling this, so the audio just needs to follow it over the same
+    connection."""
+    pcm = await synthesize_speech(text)
+    if pcm:
+        await websocket.send_bytes(pcm)
 
 
 class IdentityManager:
@@ -242,7 +253,7 @@ class IdentityManager:
 
         msg = await get_phrase("voice_enroll_intro")
         await websocket.send_text(msg)
-        speak(msg)
+        await _speak(websocket, msg)
 
         collected = 0
         attempts = 0
@@ -253,7 +264,7 @@ class IdentityManager:
 
             prompt = "Say a short sentence." if collected == 0 else "One more — say another sentence."
             await websocket.send_text(prompt)
-            speak(prompt)
+            await _speak(websocket, prompt)
 
             audio = await self.receive_voice_sample(websocket)
 
@@ -263,7 +274,7 @@ class IdentityManager:
                 if empty_in_a_row >= 2:
                     hint = "I'm not hearing any audio — check that Auto Listen is on and your mic is allowed."
                     await websocket.send_text(hint)
-                    speak(hint)
+                    await _speak(websocket, hint)
 
                 continue
 
@@ -284,14 +295,30 @@ class IdentityManager:
     # -------------------------
     async def verify_voice(self, websocket, user_id, max_attempts=3):
         """
-        Returns (matched: bool, score: float). A single utterance is noisy
-        (background noise, mic quality, phrase length all shift the score
-        a fair bit) so a real match right at the threshold shouldn't get
-        permanently rejected off one unlucky sample — retry a few times
-        and take the best score seen.
+        Returns (matched: bool, score: float, heard_text: str). A single
+        utterance is noisy (background noise, mic quality, phrase length
+        all shift the score a fair bit) so a real match right at the
+        threshold shouldn't get permanently rejected off one unlucky
+        sample — retry a few times and take the best score seen.
+
+        2026-07-17: found live — "she did not respond at all to what I
+        said, just verified." Root cause: this only ever used the
+        captured audio for the voice EMBEDDING — never transcribed it,
+        so whatever Craig actually said while verifying was silently
+        discarded with no real answer, ever. Became a much more likely
+        thing to hit once auto-listen-on-join started the mic
+        immediately, since anyone talking naturally as soon as the page
+        loads has no way to know they're mid-verification rather than
+        already in a normal conversation. Now transcribes the same
+        captured audio (it's already the standard webm format
+        transcribe_audio() expects) and returns the text so the caller
+        can route it through the real pipeline afterward — nothing said
+        during verification is thrown away anymore, whether it's the
+        expected confirmation phrase or a genuine request.
         """
 
         best_score = 0.0
+        heard_text = ""
 
         for attempt in range(1, max_attempts + 1):
             msg = (
@@ -300,10 +327,16 @@ class IdentityManager:
                 "Didn't quite match — try saying a bit more, a full sentence."
             )
             await websocket.send_text(msg)
-            speak(msg)
+            await _speak(websocket, msg)
 
             audio = await self.receive_voice_sample(websocket)
             embedding = embed_voice_bytes(audio)
+
+            if audio:
+                try:
+                    heard_text = (transcribe_audio(audio) or "").strip()
+                except Exception:
+                    heard_text = ""
 
             enrolled = await fetch_voice_samples(user_id)
             score = best_match(embedding, enrolled)
@@ -314,9 +347,9 @@ class IdentityManager:
             if score >= MATCH_THRESHOLD:
                 # confirmed-genuine sample — reinforce the profile with it
                 await reinforce_voice_sample(user_id, embedding)
-                return True, score
+                return True, score, heard_text
 
-        return False, best_score
+        return False, best_score, heard_text
 
     # -------------------------
     # NAME COLLECTION (falls back to this only if voice isn't recognized)
@@ -392,16 +425,16 @@ Respond with ONLY a JSON object, nothing else:
             words = re.findall(r"[a-z']+", stripped)
 
             if not words:
-                msg = "I didn't catch that — please say your name."
+                msg = await get_phrase("onboard_name_not_caught")
                 await websocket.send_text(msg)
-                speak(msg)
+                await _speak(websocket, msg)
                 candidate = await self.receive_input(websocket)
                 continue
 
             if any(w in self.NAME_REJECT_WORDS for w in words):
-                msg = "That doesn't sound like a name. Try again, only state your name."
+                msg = await get_phrase("onboard_name_rejected")
                 await websocket.send_text(msg)
-                speak(msg)
+                await _speak(websocket, msg)
                 candidate = await self.receive_input(websocket)
                 continue
 
@@ -412,13 +445,13 @@ Respond with ONLY a JSON object, nothing else:
                 continue
 
             if len(name) < 2:
-                msg = "Please give me a real name."
+                msg = await get_phrase("onboard_name_too_short")
                 await websocket.send_text(msg)
-                speak(msg)
+                await _speak(websocket, msg)
             elif len(name) > 20:
-                msg = "That doesn't sound like a name. Try again, only state your name."
+                msg = await get_phrase("onboard_name_rejected")
                 await websocket.send_text(msg)
-                speak(msg)
+                await _speak(websocket, msg)
             else:
                 return name
 
@@ -433,7 +466,7 @@ Respond with ONLY a JSON object, nothing else:
             # ---------------- GREETING ----------------
             msg = await get_phrase("greeting_new_session")
             await websocket.send_text(msg)
-            speak(msg)
+            await _speak(websocket, msg)
 
             raw_response, raw_audio = await self.receive_greeting_response(websocket)
 
@@ -450,16 +483,16 @@ Respond with ONLY a JSON object, nothing else:
 
                     welcome = await get_phrase("greeting_returning_user", name=recognized_owner)
                     await websocket.send_text(welcome)
-                    speak(welcome)
+                    await _speak(websocket, welcome)
 
                     return recognized_owner
 
             name = await self._collect_valid_name(websocket, raw_response)
 
             # ---------------- CONFIRM ----------------
-            confirm_msg = f"Confirming profile {name}, correct?"
+            confirm_msg = await get_phrase("onboard_confirm_name", name=name)
             await websocket.send_text(confirm_msg)
-            speak(confirm_msg)
+            await _speak(websocket, confirm_msg)
 
             raw_confirm = await self.receive_input(websocket)
             confirm = self.clean_text(raw_confirm)
@@ -470,9 +503,9 @@ Respond with ONLY a JSON object, nothing else:
             if any(word in confirm for word in confirm_words):
                 break
 
-            retry_msg = "Okay, let's try again."
+            retry_msg = await get_phrase("onboard_confirm_retry")
             await websocket.send_text(retry_msg)
-            speak(retry_msg)
+            await _speak(websocket, retry_msg)
             # loop back and ask for the name again
 
         # ---------------- MIGRATION ----------------
@@ -490,12 +523,12 @@ Respond with ONLY a JSON object, nothing else:
         if collected > 0:
             learned_msg = "Voice learned."
             await websocket.send_text(learned_msg)
-            speak(learned_msg)
+            await _speak(websocket, learned_msg)
 
         # ---------------- FINAL ----------------
         final_msg = f"Confirmed."
         await websocket.send_text(final_msg)
-        speak(final_msg)
+        await _speak(websocket, final_msg)
 
         return name
 

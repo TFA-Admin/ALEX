@@ -8,7 +8,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 MODULES_PATH = os.path.join(BASE_DIR, "modules")
 
 
-async def install_module(name, code, user_id=None):
+async def install_module(name, code, user_id=None, allowed_scopes=None):
     module_dir = os.path.join(MODULES_PATH, name)
 
     if not os.path.exists(module_dir):
@@ -17,7 +17,7 @@ async def install_module(name, code, user_id=None):
     module_file = os.path.join(module_dir, "module.py")
     print("📁 Writing module to:", module_file)
 
-    safe, reason = check_safety(code)
+    safe, reason = check_safety(code, allowed_scopes)
 
     if not safe:
         print("❌ VALIDATION FAILED:", reason)

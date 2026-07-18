@@ -122,6 +122,19 @@ async def classify_personality_set(text: str) -> dict:
     needs real judgment, and that's the only thing this function decides.
     Callers MUST check deterministic "set"/"reset" phrases first and only
     fall back to this for everything else.
+
+    2026-07-16: briefly tried folding the current-personality merge (see
+    merge_personality_change() below) directly into THIS prompt/call —
+    reverted the same night after it caused a real regression: adding
+    "Your current personality" + a "combine/apply on top of it" framing
+    made the model start saying "set" for clearly unrelated messages
+    (confirmed live: "let's try your web search, look up python code" got
+    classified as a personality change). This function's whole reason to
+    exist is being narrow and reliable at exactly one binary judgment —
+    reverted to the original, extensively-tested prompt (62+ adversarial
+    trials, 0 false positives) and moved the merge to its own separate
+    call afterward instead, so a merge-quality change can never again
+    risk the classification decision itself.
     """
     prompt = PERSONALITY_SET_PROMPT.format(text=text)
     result = await ollama_manager.generate_json(prompt, timeout=20.0, temperature=0)
@@ -134,6 +147,39 @@ async def classify_personality_set(text: str) -> dict:
         return {"personality_command": "no"}
 
     return {"personality_command": "set", "value": value}
+
+
+PERSONALITY_MERGE_PROMPT = """Current personality: "{current}"
+
+New instruction: "{instruction}"
+
+Combine the new instruction with the current personality into one updated description — keep everything from the current personality that's still true (unless the new instruction directly contradicts it) and apply the new change on top of it. This is a tweak, not a replacement. Keep it under 300 characters.
+
+Respond with ONLY a JSON object:
+{{"value": "<the full, updated personality description combining current + new change>"}}"""
+
+
+async def merge_personality_change(current: str, instruction: str) -> str:
+    """Separate, second step — only ever called after classify_personality_set()
+    (above) has already independently decided this really is a personality
+    change. Kept as its own call instead of folded into the classifier
+    itself: see classify_personality_set()'s docstring for the regression
+    that caused. `db.set_personality()` is a full overwrite of one flat
+    string, so without this merge, a second "stop doing X"-style
+    instruction would silently erase every previously-set trait (e.g. "be
+    a little sassier" would vanish the instant "stop using emojis" was
+    said next) — this produces one combined description instead. Falls
+    back to just the raw instruction if the merge call itself fails, so a
+    transient failure degrades to the old (still correct, just
+    non-cumulative) behavior rather than losing the instruction entirely."""
+    prompt = PERSONALITY_MERGE_PROMPT.format(current=current, instruction=instruction)
+    result = await ollama_manager.generate_json(prompt, timeout=20.0, temperature=0)
+
+    if not result:
+        return instruction
+
+    value = str(result.get("value", "")).strip()
+    return value or instruction
 
 
 MODULE_GAP_PROMPT = """You are A.L.E.X, an AI assistant who can build small self-contained tools (modules) for herself when she doesn't already have one. The user said: "{text}"

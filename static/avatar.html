@@ -2,220 +2,481 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>A.L.E.X Avatar</title>
+<title>A.L.E.X.</title>
 
 <style>
-body {
-  background:#1e1e1e;
-  color:#fff;
-  font-family:Arial;
-  margin:0;
-  padding:60px 20px 20px 20px;
-  display:flex;
-  justify-content:center;
+:root{
+  --void: #0a0a10;
+  --panel: #14141c;
+  --line: #23232e;
+  --ink: #e4e2ea;
+  --dim: #63636f;
+  --signal-idle: #3d6bb0;
+  --signal-focus: #8b5cf6;
+  --signal-edge: #c77418;
+  --signal-alert: #8b1a26;
+  --mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, "Liberation Mono", monospace;
+  --sans: -apple-system, "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+
+  /* Orb mood colors — defaults (idle/calm) so it renders correctly even
+     before the first animation frame; overwritten continuously by
+     animateOrb() below for smooth mood + real playback-driven
+     transitions. */
+  --orb-hi: rgb(151, 197, 255);
+  --orb-mid: rgb(61, 107, 176);
+  --orb-dim: rgb(36, 82, 151);
+  --orb-edge: rgb(16, 62, 131);
+  --orb-rim: rgba(1, 47, 116, 0.9);
+  --orb-glow-a: rgba(61, 107, 176, 0.35);
+  --orb-glow-b: rgba(61, 107, 176, 0.12);
+  --orb-scale: 1;
 }
 
-#main {
-  display:flex;
-  gap:20px;
-  align-items:flex-start;
-  max-width:1000px;
-  width:100%;
-  padding-right: 100px;
-  padding-top: 20px;
+*{ box-sizing: border-box; }
+
+html, body{
+  margin: 0;
+  height: 100%;
+  background: var(--void);
+  color: var(--ink);
+  font-family: var(--sans);
+  overflow-x: hidden;
 }
 
-#header {
-  position:absolute;
-  top:20px;
-  left:50%;
-  transform:translateX(-50%);
-  font-size:24px;
-  font-weight:bold;
+body{
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 240px 1fr 360px;
+  gap: 0;
 }
 
-#leftPanel {
-  display:flex;
-  flex-direction:column;
-  align-items:center;
+@media (max-width: 900px){
+  body{ grid-template-columns: 1fr; grid-template-rows: auto auto auto; }
+  .rail{ order: 2; flex-direction: row !important; flex-wrap: wrap; overflow-x: auto; }
+  .stage{ order: 1; min-height: 50vh; }
+  .chat{ order: 3; border-left: none !important; border-top: 1px solid var(--line); height: auto !important; }
 }
 
-#rightPanel {
-  display:flex;
-  flex-direction:column;
+/* ---------------- TELEMETRY RAIL ---------------- */
+.rail{
+  border-right: 1px solid var(--line);
+  padding: 24px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  height: 100vh;
+  overflow-y: auto;
 }
 
-#chatContainer {
-  width:400px;
-  height:500px;
-  border:1px solid #555;
-  background:#111;
-  overflow-y:auto;
-  padding:10px;
-  display:flex;
-  flex-direction:column;
+.rail-brand{
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: var(--dim);
+  text-transform: uppercase;
+}
+.rail-brand b{
+  color: var(--ink);
+  font-weight: 600;
 }
 
-#debugPanel {
-  display:flex;
-  flex-direction:column;
+.tele-group{
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
 }
 
-#debugBox {
-  width:300px;
-  height:500px;
-  border:1px solid #555;
-  background:#111;
-  overflow-y:auto;
-  padding:10px;
-  font-size:12px;
+.tele-label{
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
 }
 
-#latest { margin-bottom:10px; }
-
-#history {
-  border-top:1px solid #444;
-  padding-top:5px;
+.tele-row{
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--line);
 }
 
-canvas {
-  background:#222;
-  border:1px solid #555;
-  margin-bottom:10px;
+.tele-row .val{
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  transition: color 0.3s ease;
 }
 
-#leds {
-  display:flex;
-  gap:10px;
-  margin:10px;
+.tele-row.on .val{ color: var(--signal-idle); }
+.tele-row.warn .val{ color: var(--signal-alert); }
+.tele-row.focus .val{ color: var(--signal-focus); }
+.tele-row.edge .val{ color: var(--signal-edge); }
+
+/* Real mic-confidence bar (from Silero's per-frame speech probability),
+   styled thin/quiet rather than a prominent meter — status folded into
+   the rail, not a separate flashy indicator. */
+#micContainer{
+  height: 3px;
+  background: var(--line);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 2px;
+}
+#micLevel{
+  height: 100%;
+  width: 0%;
+  background: var(--signal-idle);
+  transition: width 0.08s linear, background 0.15s ease;
 }
 
-.led {
-  width:15px;
-  height:15px;
-  border-radius:50%;
-  background:#555;
+.rail-actions{
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-/* ✅ MIC BAR */
-#micContainer {
-  width:300px;
-  height:10px;
-  background:#333;
-  border:1px solid #555;
-  margin-top:5px;
+.rail-btn{
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: transparent;
+  color: var(--dim);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 8px 10px;
+  cursor: pointer;
+  text-align: left;
+}
+.rail-btn:hover{ color: var(--ink); border-color: var(--dim); }
+.rail-btn.active{ color: var(--signal-idle); border-color: var(--signal-idle); }
+.rail-btn:focus-visible{ outline: 2px solid var(--signal-focus); outline-offset: 1px; }
+
+.rail-debug{
+  margin-top: auto;
+}
+.rail-debug summary{
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+  cursor: pointer;
+}
+#debugContent, #profileContent{
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--dim);
+  max-height: 160px;
+  overflow-y: auto;
+  margin-top: 8px;
+  line-height: 1.5;
+}
+#debugContent .msg{ border-bottom: 1px solid var(--line); padding: 4px 0; }
+
+.rail-foot{
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--dim);
+  letter-spacing: 0.08em;
 }
 
-#micLevel {
-  height:100%;
-  width:0%;
-  background:#777;
-  transition:width 0.05s linear;
+/* ---------------- STAGE (ORB) ---------------- */
+.stage{
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  min-height: 100vh;
 }
 
-textarea {
-  width:400px;
-  height:60px;
-  background:#333;
-  color:#fff;
-  border:1px solid #555;
-  padding:5px;
+.orb{
+  width: min(38vh, 300px);
+  height: min(38vh, 300px);
+  border-radius: 50%;
+  position: relative;
+  background: radial-gradient(circle at 34% 32%,
+    var(--orb-hi) 0%, var(--orb-mid) 45%, var(--orb-dim) 82%, var(--orb-edge) 100%);
+  border: 1px solid var(--orb-rim);
+  box-shadow:
+    0 0 26px 2px var(--orb-glow-a),
+    0 0 52px 10px var(--orb-glow-b);
+  transform: scale(var(--orb-scale));
 }
 
-button {
-  margin-top:5px;
-  padding:6px 12px;
+.mood-tag{
+  position: absolute;
+  bottom: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.mood-tag .name{
+  display: block;
+  margin-top: 6px;
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  color: var(--orb-mid);
+  transition: color 0.6s ease;
 }
 
-.msg {
-  padding:6px;
-  margin:3px;
-  border-radius:5px;
+/* ---------------- CHAT ---------------- */
+.chat{
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.chat-head{
+  padding: 20px 22px 15px;
+  border-bottom: 1px solid var(--line);
+}
+.chat-head .eyebrow{
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.chat-head .title{
+  margin-top: 6px;
+  font-size: 15px;
+  color: var(--ink);
+}
+
+.chat-body{
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 22px;
+  display: flex;
+  flex-direction: column;
+}
+
+#latest{ margin-bottom: 14px; }
+
+#history{ border-top: 1px solid var(--line); padding-top: 10px; }
+#history summary{
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+  cursor: pointer;
+}
+#historyContent{ display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
+
+.msg{
+  max-width: 92%;
+  font-size: 13.5px;
+  line-height: 1.55;
   white-space: pre-wrap;
+  margin-bottom: 10px;
+}
+.msg.bot{
+  align-self: flex-start;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 10px 13px;
+}
+.msg.user{
+  align-self: flex-end;
+  color: var(--dim);
+  padding: 10px 2px;
+  text-align: right;
 }
 
-.user { background:#444; align-self:flex-end; }
-.bot { background:#222; align-self:flex-start; }
+.chat-input{
+  border-top: 1px solid var(--line);
+  padding: 14px 22px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.chat-input textarea{
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 13px;
+  padding: 10px 12px;
+  resize: none;
+  height: 52px;
+}
+.chat-input textarea:focus-visible{
+  outline: 2px solid var(--signal-focus);
+  outline-offset: 1px;
+}
+.chat-input-row{ display: flex; gap: 8px; }
+.chat-input button{
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0 16px;
+  cursor: pointer;
+}
+.chat-input button:hover{ border-color: var(--signal-focus); color: var(--signal-focus); }
 
-#profileBox {
-  margin-top:10px;
-  padding:10px;
-  background:#222;
-  width:300px;
-  border:1px solid #555;
+@media (prefers-reduced-motion: reduce){
+  #micLevel{ transition: none; }
 }
 </style>
 </head>
 
 <body>
 
-<div id="header">A.L.E.X.</div>
+  <div class="rail">
+    <div class="rail-brand"><b>A.L.E.X.</b><br/>interface</div>
 
-<div id="main">
+    <div class="tele-group">
+      <div class="tele-label">Link</div>
+      <div class="tele-row" id="teleSocket"><span>socket</span><span class="val" id="teleSocketVal">connecting</span></div>
+    </div>
 
-  <!-- ✅ DEBUG COLUMN -->
-  <div id="debugPanel">
-    <div id="debugBox">
-      <b>Debug</b>
+    <div class="tele-group">
+      <div class="tele-label">Presence</div>
+      <div class="tele-row" id="teleListen"><span>listening</span><span class="val" id="teleListenVal">off</span></div>
+      <div class="tele-row" id="teleState"><span>state</span><span class="val" id="teleStateVal">off</span></div>
+      <div id="micContainer"><div id="micLevel"></div></div>
+    </div>
+
+    <div class="tele-group">
+      <div class="tele-label">Profile</div>
+      <div id="profileContent">No profile loaded</div>
+    </div>
+
+    <div class="rail-actions">
+      <button class="rail-btn" id="autoBtn" onclick="toggleAutoListen()">Auto Listen: Off</button>
+      <button class="rail-btn" onclick="logoff()">Log Off</button>
+    </div>
+
+    <details class="rail-debug">
+      <summary>Debug</summary>
       <div id="debugContent"></div>
+    </details>
+
+    <div class="rail-foot" id="clock"></div>
+  </div>
+
+  <div class="stage">
+    <div class="orb" id="orb"></div>
+    <div class="mood-tag">
+      current disposition
+      <span class="name" id="moodName">calm</span>
     </div>
   </div>
 
-  <!-- ✅ CENTER PANEL -->
-  <div id="leftPanel">
-
-    <canvas id="avatarCanvas" width="300" height="300"></canvas>
-
-    <div id="profileBox">
-        <b>Profile</b>
-        <div id="profileContent">No profile loaded</div>
+  <div class="chat">
+    <div class="chat-head">
+      <div class="eyebrow">Transcript</div>
+      <div class="title">conversation</div>
     </div>
 
-    <div id="leds">
-        <div id="wsLed" class="led"></div>
-        <div id="activityLed" class="led"></div>
-        <div id="autoLed" class="led"></div>
-    </div>
-
-    <div id="micContainer">
-        <div id="micLevel"></div>
-    </div>
-
-    <textarea id="input" placeholder="Type..."></textarea>
-    <button onclick="send()">Send</button>
-
-    <button id="autoBtn" onclick="toggleAutoListen()">🎧 Auto Listen OFF</button>
-    <button onclick="logoff()">🚪 Log Off</button>
-
-  </div>
-    <!-- ✅ RIGHT PANEL -->
-  <div id="rightPanel">
-
-    <div id="chatContainer">
+    <div class="chat-body">
       <div id="latest"></div>
-
       <details id="history">
         <summary>Previous Messages</summary>
         <div id="historyContent"></div>
       </details>
     </div>
 
+    <div class="chat-input">
+      <textarea id="input" placeholder="Say something, or type it instead…"></textarea>
+      <div class="chat-input-row">
+        <button onclick="send()">Send</button>
+      </div>
+    </div>
   </div>
 
-</div>
+<!-- 2026-07-16/17: Silero VAD (via the @ricky0123/vad-web wrapper), vendored
+     locally under static/vad/ — no CDN, same self-contained convention as
+     everything else this project serves. ort.wasm.min.js must load before
+     vad-bundle.min.js — the latter's UMD wrapper expects window.ort to
+     already exist. -->
+<script src="/static/vad/ort.wasm.min.js"></script>
+<script src="/static/vad/vad-bundle.min.js"></script>
 
 <script>
+// numThreads=1 deliberately — the alternative (real multi-threaded WASM)
+// needs SharedArrayBuffer, which needs Cross-Origin-Opener-Policy/
+// Cross-Origin-Embedder-Policy response headers the server doesn't send
+// today. A single small VAD model running one frame at a time doesn't
+// need the throughput multi-threading buys anyway. wasmPaths points at
+// the vendored files above, not a CDN.
+if(window.ort){
+    ort.env.wasm.numThreads = 1;
+    ort.env.wasm.wasmPaths = "/static/vad/";
+}
+
 const ws = new WebSocket(`wss://${location.hostname}:5000/ws`);
 ws.binaryType = "arraybuffer";
 
 const latest = document.getElementById("latest");
 const historyContent = document.getElementById("historyContent");
 const profileContent = document.getElementById("profileContent");
-const wsLed = document.getElementById("wsLed");
-const activityLed = document.getElementById("activityLed");
-const autoLed = document.getElementById("autoLed");
+const teleSocket = document.getElementById("teleSocket");
+const teleSocketVal = document.getElementById("teleSocketVal");
+const teleListen = document.getElementById("teleListen");
+const teleListenVal = document.getElementById("teleListenVal");
+const teleState = document.getElementById("teleState");
+const teleStateVal = document.getElementById("teleStateVal");
 const autoBtn = document.getElementById("autoBtn");
 const micLevel = document.getElementById("micLevel");
+const moodNameEl = document.getElementById("moodName");
+
+// 2026-07-17 (Craig: "if I say alex and she starts listening there's no
+// real way for me to know until she responds or not") — this is the gap
+// between "an utterance was sent to the server" and "she actually
+// replied", which previously had zero visual feedback. States: off (mic
+// not armed) -> idle (armed, no speech yet) -> hearing you (Silero
+// detected speech) -> thinking (utterance sent, awaiting a reply) ->
+// speaking (a response is streaming/playing). A "thinking" state that
+// outlives RESPONSE_TIMEOUT_MS means she heard it but the server silently
+// dropped it (e.g. the wake-word/addressed-window gate in
+// ws/ws_handlers.py) rather than still working on it — reverting to
+// "idle" surfaces that instead of hanging forever with no signal either way.
+const RESPONSE_TIMEOUT_MS = 12000;
+let responseTimeoutHandle = null;
+
+function setListenState(state){
+    teleStateVal.textContent = state;
+    teleState.classList.remove("on", "warn", "focus", "edge");
+    if(state === "idle" || state === "speaking") teleState.classList.add("on");
+    else if(state === "hearing you") teleState.classList.add("edge");
+    else if(state === "thinking") teleState.classList.add("focus");
+}
+
+function armResponseTimeout(){
+    if(responseTimeoutHandle) clearTimeout(responseTimeoutHandle);
+    responseTimeoutHandle = setTimeout(() => {
+        if(listening) setListenState("idle");
+        responseTimeoutHandle = null;
+    }, RESPONSE_TIMEOUT_MS);
+}
+
+function clearResponseTimeout(){
+    if(responseTimeoutHandle){
+        clearTimeout(responseTimeoutHandle);
+        responseTimeoutHandle = null;
+    }
+}
 
 /* ✅ DEBUG HELPER */
 const debugContent = document.getElementById("debugContent");
@@ -224,7 +485,7 @@ function logDebug(message){
     if(!debugContent) return;
 
     const div = document.createElement("div");
-    div.className = "msg bot";
+    div.className = "msg";
     div.textContent = message;
     debugContent.prepend(div);
 }
@@ -232,18 +493,131 @@ function logDebug(message){
 let currentMsg = "";
 let currentDiv = null;
 
+// 2026-07-16: speech playback moved from the server's own speakers into
+// the browser (Web Audio API), so text and speech can actually be synced
+// — see ws.onmessage's ArrayBuffer branch and scheduleAudioChunk() below.
+let playCtx = null;
+let playAnalyser = null;
+let nextStartTime = 0;
+let pendingTexts = [];      // text chunks buffered until their paired audio actually starts playing
+let activeSources = [];     // currently scheduled/playing AudioBufferSourceNodes, so barge-in can stop them
+let clientInterrupted = false;
+let pendingRevealTimeouts = []; // setTimeout handles for not-yet-fired text reveals — see scheduleAudioChunk()
+
+function getPlayCtx(){
+    if(!playCtx){
+        playCtx = new (window.AudioContext || window.webkitAudioContext)();
+        nextStartTime = playCtx.currentTime;
+
+        // Same AnalyserNode → level pattern already proven for the mic's
+        // volume meter — the orb's pulse (animateOrb() below) reads real
+        // played audio instead of a level the server used to compute and
+        // send as a separate __AUDIO__ text message.
+        playAnalyser = playCtx.createAnalyser();
+        playAnalyser.connect(playCtx.destination);
+    }
+    return playCtx;
+}
+
+function pcmInt16ToAudioBuffer(ctx, arrayBuffer, sampleRate){
+    const int16 = new Int16Array(arrayBuffer);
+    const float32 = new Float32Array(int16.length);
+    for(let i=0;i<int16.length;i++){ float32[i] = int16[i] / 32768; }
+    const buffer = ctx.createBuffer(1, float32.length, sampleRate);
+    buffer.copyToChannel(float32, 0);
+    return buffer;
+}
+
+function scheduleAudioChunk(arrayBuffer){
+    if(clientInterrupted) return;
+
+    const ctx = getPlayCtx();
+    // Piper's --output-raw convention (speech/tts_engine.py's SAMPLE_RATE):
+    // 16-bit signed PCM, mono, 22050 Hz.
+    const buffer = pcmInt16ToAudioBuffer(ctx, arrayBuffer, 22050);
+
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(playAnalyser);
+
+    // Gapless scheduling: each clip starts exactly when the previous one
+    // ends, not just whenever it happens to arrive over the network.
+    const startAt = Math.max(nextStartTime, ctx.currentTime);
+    source.start(startAt);
+    nextStartTime = startAt + buffer.duration;
+
+    activeSources.push(source);
+    source.onended = () => { activeSources = activeSources.filter(s => s !== source); };
+
+    // Reveal this clip's paired text at the moment it actually starts
+    // playing, not when it arrived over the wire.
+    //
+    // 2026-07-17 (Craig: "all the spoken words are not appearing as
+    // text") — root cause: the server streams text+audio as fast as it
+    // generates, far faster than the audio actually takes to play back,
+    // so later clauses get scheduled with a real delay here (their
+    // startAt is seconds in the future). __END__ arrives almost
+    // immediately after the LAST clause is sent — long before these
+    // later setTimeouts fire — and used to null the global `currentDiv`
+    // right then. By the time a deferred reveal finally ran,
+    // appendBotText() read a `currentDiv` that was already null and
+    // silently did nothing. Only the very first clause (near-zero delay)
+    // reliably beat __END__, which is exactly why short, single-clause
+    // replies looked fine and longer ones lost everything after the
+    // first sentence. Fix: snapshot the div synchronously, right now,
+    // instead of reading the mutable global later.
+    const text = pendingTexts.shift();
+    const targetDiv = currentDiv;
+    if(text !== undefined && targetDiv){
+        const delayMs = Math.max(0, (startAt - ctx.currentTime) * 1000);
+        const handle = setTimeout(() => {
+            currentMsg += text;
+            targetDiv.textContent = currentMsg;
+            pendingRevealTimeouts = pendingRevealTimeouts.filter(h => h !== handle);
+        }, delayMs);
+        pendingRevealTimeouts.push(handle);
+    }
+}
+
+function stopAllPlayback(){
+    clientInterrupted = true;
+    for(const s of activeSources){ try{ s.stop(); }catch(e){} }
+    activeSources = [];
+    pendingTexts = [];
+    // Also cancel any not-yet-fired deferred text reveals from whatever
+    // response was previously playing — without this, one could still
+    // fire after a NEW response's __START__ already reset currentMsg,
+    // corrupting it with leftover text from the interrupted/previous turn.
+    for(const h of pendingRevealTimeouts){ clearTimeout(h); }
+    pendingRevealTimeouts = [];
+    if(playCtx){ nextStartTime = playCtx.currentTime; }
+}
+
 let listening = false;
 let stream, recorder;
 let chunks = [];
 let ignoreUntil = 0;
 let stopping = false;
-const SPEECH_THRESHOLD = 3; // lowered from 6 — was requiring loud/clear speech to trigger recording at all
-const SILENCE_MS = 800;
+// 2026-07-17 (Craig, real example: "override code X, you can be more
+// sassy" got cut after "override code X" — the actual request was lost):
+// a genuine mid-thought pause (very plausible right after stating a
+// precise thing like a code, before continuing to the actual point) was
+// almost certainly being misread as "done talking." This is a client-
+// side VAD with no real understanding of whether a thought is actually
+// finished — it can't semantically know "this sounds incomplete," so
+// the honest, buildable fix is just more pause tolerance, not a true
+// "wait if it sounds cut off" (that would need real-time transcript
+// understanding, not just volume). Both raised — SILENCE_MS was the more
+// likely culprit for this specific story, MAX_UTTERANCE_MS raised too
+// since a code-plus-instruction sentence can genuinely run long.
+const SILENCE_MS = 1400; // was 800
 const MIN_SPEECH_MS = 450;
-const MAX_UTTERANCE_MS = 6500;
+const MAX_UTTERANCE_MS = 9000; // was 6500
 
 ws.onopen = () => {
-    wsLed.style.background = "lime";
+    teleSocketVal.textContent = "connected";
+    teleSocket.classList.add("on");
+    teleSocket.classList.remove("warn");
 
     let savedUser = localStorage.getItem("alex_user");
 
@@ -269,28 +643,28 @@ ws.onopen = () => {
     }
 };
 
-ws.onclose = () => wsLed.style.background = "red";
+ws.onclose = () => {
+    teleSocketVal.textContent = "disconnected";
+    teleSocket.classList.remove("on");
+    teleSocket.classList.add("warn");
+};
 
 ws.onmessage = (e)=>{
 
     const data = e.data;
 
-    if(data.startsWith("__DEBUG__")){
-        logDebug(data.replace("__DEBUG__", ""));
+    // 2026-07-16: speech now plays through the browser (Web Audio API)
+    // instead of the server's own speakers, so her voice arrives as
+    // binary PCM frames over this same connection — must be checked
+    // FIRST, before any string method call below (ArrayBuffer has no
+    // .startsWith()).
+    if(data instanceof ArrayBuffer){
+        scheduleAudioChunk(data);
         return;
     }
 
-    activityLed.style.background = "lime";
-    setTimeout(()=> activityLed.style.background = "#555", 150);
-
-    if(typeof data === "string" && data.startsWith("__AUDIO__")){
-        const level = parseFloat(data.replace("__AUDIO__", ""));
-        mouthOpen = Math.min(25, level * 120);
-
-        if(level > 0.01){
-            ignoreUntil = Date.now() + 500;
-        }
-
+    if(data.startsWith("__DEBUG__")){
+        logDebug(data.replace("__DEBUG__", ""));
         return;
     }
 
@@ -298,25 +672,14 @@ ws.onmessage = (e)=>{
         const json = JSON.parse(data.replace("__PROFILE__", ""));
         let html = "";
 
-        // 🔥 highlight role first
         if(json.role){
             const role = json.role.toUpperCase();
-
-            let color =
-                role === "CREATOR" ? "#ff4444" :
-                role === "ADMIN" ? "#ffaa00" :
-                "#00ccff";
-
-            html += `<div style="font-weight:bold; color:${color}; margin-bottom:5px;">
-                        ROLE: ${role}
-                    </div>`;
+            html += `<div style="color:var(--ink); margin-bottom:4px;">role: ${role}</div>`;
         }
 
-        // 🔥 render remaining fields
         for(const k in json){
             if(k === "role") continue;
-
-            html += `<div><b>${k.replaceAll("_"," ")}:</b> ${json[k]}</div>`;
+            html += `<div>${k.replaceAll("_"," ")}: ${json[k]}</div>`;
         }
 
         profileContent.innerHTML = html || "No profile loaded";
@@ -325,6 +688,16 @@ ws.onmessage = (e)=>{
             localStorage.setItem("alex_user", json.user_name);
         }
 
+        return;
+    }
+
+    // 2026-07-17: real mood signal from core/response_handler.py's
+    // derive_mood() — sent right after __PROFILE__, before __END__.
+    // Drives the orb's TARGET color; animateOrb() below eases toward it
+    // smoothly rather than snapping.
+    if(typeof data === "string" && data.startsWith("__MOOD__")){
+        setMoodTarget(data.replace("__MOOD__", ""));
+        armIdleMoodReset();
         return;
     }
 
@@ -340,34 +713,70 @@ ws.onmessage = (e)=>{
         latest.innerHTML = "";
         latest.appendChild(currentDiv);
 
+        // Reset per-response playback/sync state — mirrors the server's
+        // own session["interrupted"] = False reset at the start of every
+        // new response (core/response_handler.py). Also stops whatever
+        // audio the PREVIOUS response still had scheduled — found live
+        // (2026-07-16) that skipping this let two responses' audio
+        // overlap if a new one started before the last one finished.
+        stopAllPlayback();
+        clientInterrupted = false;
+
+        clearResponseTimeout();
+        setListenState("speaking");
+
         return;
     }
 
     if(data === "__END__"){
+        // Safety net: reveal any text still waiting on audio that never
+        // arrived (e.g. synthesis failed for that clause) so it's never
+        // silently lost — everything else already got revealed in sync
+        // with its audio via scheduleAudioChunk() below.
+        while(pendingTexts.length){
+            appendBotText(pendingTexts.shift());
+        }
         currentDiv = null;
+        if(listening) setListenState("idle");
         return;
     }
 
     if(typeof data === "string"){
 
+        // Fallback for text sent outside a __START__/__END__ envelope
+        // (e.g. identity/identity_manager.py's voice-enrollment/
+        // verification prompts). Sets currentDiv/currentMsg for real —
+        // previously left both untouched, so a second stray fragment hit
+        // this same branch again and wiped the first instead of
+        // appending to it.
         if(!currentDiv){
-            const div = document.createElement("div");
-            div.className = "msg bot";
+            currentDiv = document.createElement("div");
+            currentDiv.className = "msg bot";
 
             if(latest.firstChild){
                 historyContent.prepend(latest.firstChild);
             }
 
-            div.textContent = data;
+            currentMsg = data;
+            currentDiv.textContent = currentMsg;
             latest.innerHTML = "";
-            latest.appendChild(div);
+            latest.appendChild(currentDiv);
             return;
         }
 
-        currentMsg += data;
-        currentDiv.textContent = currentMsg;
+        // Buffered, not shown immediately — core/response_handler.py now
+        // sends this clause's text right before its synthesized audio;
+        // scheduleAudioChunk() reveals it the instant that audio actually
+        // starts playing, so text and speech stay in sync instead of text
+        // racing ahead of her voice.
+        pendingTexts.push(data);
     }
 };
+
+function appendBotText(text){
+    currentMsg += text;
+    if(currentDiv){ currentDiv.textContent = currentMsg; }
+}
 
 function send() {
     const input = document.getElementById("input");
@@ -427,6 +836,7 @@ function createRecorder(){
 
         if(blob.size < 2000){
             ignoreUntil = Date.now() + 800;
+            if(listening) setListenState("idle");
             restartRecorder();
             return;
         }
@@ -438,6 +848,9 @@ function createRecorder(){
         const buf = await blob.arrayBuffer();
         ws.send(buf);
         ws.send("__END_AUDIO__");
+
+        setListenState("thinking");
+        armResponseTimeout();
 
         ignoreUntil = Date.now() + 1000;
 
@@ -457,92 +870,119 @@ function restartRecorder(){
 async function startListening(){
     stream = await navigator.mediaDevices.getUserMedia({audio:true});
 
+    // 2026-07-16: found live — "the first 2 things it said were not
+    // spoken." Browsers only allow an AudioContext to actually produce
+    // sound after a real user gesture unlocks it; getPlayCtx() used to
+    // only get created lazily on the first incoming audio frame, which
+    // isn't a user gesture and can leave it stuck "suspended" — silently
+    // dropping audio until something else happened to unlock it later.
+    // This click already is a real gesture (it's what getUserMedia just
+    // used), so creating/resuming the playback context here piggybacks
+    // on it instead of hoping a later interaction unlocks it by accident.
+    const ctx = getPlayCtx();
+    if(ctx.state === "suspended"){
+        ctx.resume();
+    }
+
     createRecorder();
     recorder.start(250);
 
     listening = true;
-    autoLed.style.background = "lime";
+    teleListenVal.textContent = "continuous";
+    teleListen.classList.add("on");
+    setListenState("idle");
     detect(stream);
 }
 
 function stopListening(){
     listening=false;
-    autoLed.style.background = "red";
+    teleListenVal.textContent = "off";
+    teleListen.classList.remove("on");
+    clearResponseTimeout();
+    setListenState("off");
     try{ recorder.stop(); }catch{}
+    // micVad now persists across listen/stop cycles (real VAD models want
+    // to keep their internal state warm) instead of being torn down and
+    // rebuilt every time — pause() instead of destroy() so toggling auto-
+    // listen back on later just calls start() again in detect() above.
+    if(micVad){ try{ micVad.pause(); }catch{} }
     if(stream) stream.getTracks().forEach(t=>t.stop());
 }
 
 function toggleAutoListen(){
     if(listening){
         stopListening();
-        autoBtn.innerText = "🎧 Auto Listen OFF";
+        autoBtn.textContent = "Auto Listen: Off";
+        autoBtn.classList.remove("active");
     } else {
         startListening();
-        autoBtn.innerText = "🎧 Auto Listen ON";
+        autoBtn.textContent = "Auto Listen: On";
+        autoBtn.classList.add("active");
     }
 }
 
-function detect(stream){
+// 2026-07-17: Silero VAD (a small neural speech-detection model, via the
+// vendored @ricky0123/vad-web wrapper — see the <script> tags above and
+// static/vad/) replaces the old raw-volume threshold/timer heuristic.
+// SILENCE_MS/MIN_SPEECH_MS keep their tuned values, now driving Silero's
+// redemptionMs/minSpeechMs instead of a manual timer. MAX_UTTERANCE_MS
+// has no direct equivalent in vad-web's own options, so it's kept as a
+// manual fallback timer below — a defensive cap in case the model somehow
+// never calls onSpeechEnd, not the primary decision anymore.
+//
+// This now runs continuously once created (matching how a real VAD model
+// wants to keep its internal state warm) rather than being torn down and
+// recreated on every listen/stop cycle — start()/pause() are used
+// instead of building a new instance each time.
+let micVad = null;
+let utteranceStart = 0;
 
-    const ctx = new AudioContext();
-    const src = ctx.createMediaStreamSource(stream);
-    const analyser = ctx.createAnalyser();
-    src.connect(analyser);
+async function detect(stream){
 
-    const data = new Uint8Array(analyser.fftSize);
+    if(!micVad){
+        micVad = await vad.MicVAD.new({
+            model: "v5",
+            baseAssetPath: "/static/vad/",
+            onnxWASMBasePath: "/static/vad/",
 
-    let speaking=false;
-    let lastSound=0;
-    let start=0;
+            // Reuse the SAME getUserMedia stream startListening() already
+            // obtained (and that the MediaRecorder is already capturing
+            // from) — no second mic request, no second permission prompt.
+            getStream: () => Promise.resolve(stream),
+            pauseStream: async () => {},
+            resumeStream: async () => stream,
 
-    function loop(){
+            startOnLoad: false,
+            redemptionMs: SILENCE_MS,
+            minSpeechMs: MIN_SPEECH_MS,
 
-        if(!listening) return;
+            onFrameProcessed: (probabilities) => {
+                const percent = Math.min(100, probabilities.isSpeech * 100);
+                micLevel.style.width = percent + "%";
+                micLevel.style.background = probabilities.isSpeech > 0.5 ? "var(--signal-idle)" : "var(--line)";
+            },
 
-        const now = Date.now();
+            onSpeechStart: () => {
+                if(Date.now() < ignoreUntil) return;
 
-        if(now < ignoreUntil){
-            requestAnimationFrame(loop);
-            return;
-        }
+                utteranceStart = Date.now();
+                setListenState("hearing you");
 
-        analyser.getByteTimeDomainData(data);
-
-        let vol=0;
-        for(let i=0;i<data.length;i++){
-            vol+=Math.abs(data[i]-128);
-        }
-        vol/=data.length;
-
-        /* ✅ MIC VISUAL UPDATE */
-        const percent = Math.min(100, vol * 5);
-        micLevel.style.width = percent + "%";
-        micLevel.style.background = vol > SPEECH_THRESHOLD ? "lime" : "#777";
-
-        if(vol > SPEECH_THRESHOLD){
-            if(!speaking){
-                speaking=true;
-                start=now;
-
-                // 🎙️ Barge-in: the moment the user starts talking, tell her
-                // to stop immediately rather than waiting for this utterance
-                // to finish recording — lets her be cut off mid-sentence.
+                // 🎙️ Barge-in: same instant reaction as the old volume
+                // trigger, deliberately not waiting for onSpeechRealStart
+                // (which waits out the misfire-filter window) — barge-in
+                // needs to feel instant. A misfire here just means her
+                // playback got cut on a false alarm, the same risk the
+                // old threshold-based trigger already carried.
+                stopAllPlayback();
                 if(ws && ws.readyState === 1){
                     ws.send("__INTERRUPT__");
                 }
-            }
-            lastSound=now;
-        }
+            },
 
-        if(speaking){
-            const silenceComplete = now - lastSound > SILENCE_MS && now - start > MIN_SPEECH_MS;
-            const tooLong = now - start > MAX_UTTERANCE_MS;
-
-            if(silenceComplete || tooLong){
-
+            onSpeechEnd: () => {
                 if(!stopping){
                     stopping = true;
-
                     try{
                         recorder.requestData();
                         recorder.stop();
@@ -550,51 +990,186 @@ function detect(stream){
                         stopping = false;
                     }
                 }
+            },
 
-                speaking=false;
+            // Speech-start fired but the segment was too short to count
+            // as real speech (below minSpeechMs) — onSpeechEnd will NOT
+            // fire for it, so the "hearing you" state set above would
+            // otherwise be stuck until the next real utterance.
+            onVADMisfire: () => { if(listening) setListenState("idle"); },
+        });
+
+        // Defensive fallback only — Silero's own onSpeechEnd is the
+        // primary stop trigger now. This just guards against the model
+        // somehow never firing it for an abnormally long stretch.
+        setInterval(() => {
+            if(!listening || !utteranceStart || stopping) return;
+            if(Date.now() - utteranceStart > MAX_UTTERANCE_MS){
+                stopping = true;
+                try{
+                    recorder.requestData();
+                    recorder.stop();
+                }catch{
+                    stopping = false;
+                }
+                utteranceStart = 0;
             }
-        }
-
-        requestAnimationFrame(loop);
+        }, 250);
     }
 
-    loop();
+    if(listening){
+        micVad.start();
+    }
 }
 
-// AVATAR (unchanged)
-const canvas = document.getElementById("avatarCanvas");
-const ctx = canvas.getContext("2d");
+// ---------------- ORB: mood color + real audio-reactive pulse ----------------
+// 2026-07-17: the orb used to be a <canvas> redrawn every frame; now a
+// plain div driven by CSS custom properties (see interface concept
+// review — canvas resolution/scaling was a real, repeated source of
+// visible blur that a fixed-size bitmap couldn't reliably avoid). Two
+// independent signals combine here every frame:
+//  - MOOD (color): set by __MOOD__ messages from core/response_handler.py
+//    (core/mood.py's derive_mood()) — updates once per turn, eased in
+//    smoothly rather than snapping.
+//  - SPEECH (pulse): real, continuous — read directly from playAnalyser,
+//    i.e. audio actually playing right now, same as the previous canvas
+//    version's speechPulse. Not a canned animation; she only pulses
+//    harder when she's actually talking.
+const orbEl = document.getElementById("orb");
 
-let mouthOpen = 2;
-let eyesOpen = true;
+const MOOD_COLORS = {
+    calm:    [61, 107, 176],
+    focused: [139, 92, 246],
+    edge:    [199, 116, 24],
+    alert:   [139, 26, 38],
+};
 
-function draw(){
-    ctx.clearRect(0,0,300,300);
+let displayColor = MOOD_COLORS.calm.slice();
+let targetColor = MOOD_COLORS.calm.slice();
 
-    ctx.fillStyle="#ffcc99";
-    ctx.beginPath();
-    ctx.arc(150,150,80,0,Math.PI*2);
-    ctx.fill();
-
-    ctx.fillStyle="#000";
-    const eyeSize = eyesOpen ? 10 : 2;
-
-    ctx.beginPath();
-    ctx.arc(120,130,eyeSize,0,Math.PI*2);
-    ctx.arc(180,130,eyeSize,0,Math.PI*2);
-    ctx.fill();
-
-    ctx.strokeStyle="#000";
-    ctx.lineWidth=4;
-    ctx.beginPath();
-    ctx.arc(150,180,mouthOpen,0,Math.PI);
-    ctx.stroke();
-
-    requestAnimationFrame(draw);
+function setMoodTarget(key){
+    const c = MOOD_COLORS[key] || MOOD_COLORS.calm;
+    targetColor = c.slice();
+    if(moodNameEl){ moodNameEl.textContent = key; }
 }
 
-setInterval(()=>{ eyesOpen = !eyesOpen }, 3000);
-draw();
+// 2026-07-17 (Craig: "when idle the orb is showing as focused... unless
+// she's doing something in the background I can't see") — derive_mood()
+// tags each response from its own content (a real, intentional design —
+// see core/mood.py), but nothing ever reset the orb back afterward, so
+// whatever her LAST reply happened to be tagged (e.g. "focused" for a
+// long answer or one with a question in it) just stayed showing forever,
+// looking like an ongoing state rather than a one-off read on that reply.
+// Re-armed on every real __MOOD__ message; if none arrives for a while
+// (she's actually not doing anything), eases back to the true resting
+// state instead of freezing on old, stale emotional color.
+const IDLE_MOOD_RESET_MS = 20000;
+let idleMoodResetHandle = null;
+
+function armIdleMoodReset(){
+    if(idleMoodResetHandle) clearTimeout(idleMoodResetHandle);
+    idleMoodResetHandle = setTimeout(() => {
+        setMoodTarget("calm");
+        idleMoodResetHandle = null;
+    }, IDLE_MOOD_RESET_MS);
+}
+
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+let audioLevel = 0;    // computed each frame from playAnalyser — real played audio
+let displayLevel = 0;  // eased toward audioLevel so the pulse doesn't jitter frame to frame
+let idlePhase = 0;     // slow drift so the orb still feels alive when silent
+let playLevelData = null;
+
+function animateOrb(){
+    if(playAnalyser){
+        if(!playLevelData){ playLevelData = new Uint8Array(playAnalyser.fftSize); }
+        playAnalyser.getByteTimeDomainData(playLevelData);
+
+        let vol = 0;
+        for(let i=0;i<playLevelData.length;i++){ vol += Math.abs(playLevelData[i]-128); }
+        vol /= playLevelData.length;
+
+        // Starting-point scaling, not yet tuned against real playback —
+        // TTS output is a clean, consistently-leveled signal unlike the
+        // noisy mic.
+        audioLevel = Math.min(1, vol / 40);
+
+        // Anti-feedback guard, carried over unchanged: her own voice can
+        // bleed into the mic through the speakers, so while she's audibly
+        // playing, keep pushing the mic's ignore-window forward.
+        if(audioLevel > 0.01){
+            ignoreUntil = Date.now() + 500;
+        }
+    }
+
+    displayLevel += (audioLevel - displayLevel) * 0.25;
+
+    for(let i=0;i<3;i++){
+        displayColor[i] += (targetColor[i] - displayColor[i]) * 0.04;
+    }
+    const [r, g, b] = displayColor.map(Math.round);
+
+    const hi = `rgb(${Math.min(255,r+90)}, ${Math.min(255,g+90)}, ${Math.min(255,b+90)})`;
+    const mid = `rgb(${r}, ${g}, ${b})`;
+    const dim = `rgb(${Math.max(0,r-25)}, ${Math.max(0,g-25)}, ${Math.max(0,b-25)})`;
+    const edge = `rgb(${Math.max(0,r-45)}, ${Math.max(0,g-45)}, ${Math.max(0,b-45)})`;
+    const rim = `rgba(${Math.max(0,r-60)}, ${Math.max(0,g-60)}, ${Math.max(0,b-60)}, 0.9)`;
+    const glowA = `rgba(${r}, ${g}, ${b}, ${(0.35 + displayLevel * 0.35).toFixed(3)})`;
+    const glowB = `rgba(${r}, ${g}, ${b}, ${(0.12 + displayLevel * 0.15).toFixed(3)})`;
+
+    orbEl.style.setProperty("--orb-hi", hi);
+    orbEl.style.setProperty("--orb-mid", mid);
+    orbEl.style.setProperty("--orb-dim", dim);
+    orbEl.style.setProperty("--orb-edge", edge);
+    orbEl.style.setProperty("--orb-rim", rim);
+    orbEl.style.setProperty("--orb-glow-a", glowA);
+    orbEl.style.setProperty("--orb-glow-b", glowB);
+
+    // Idle breathing + real speech pulse combined into one scale factor —
+    // same combination the old canvas version used (idlePulse +
+    // speechPulse on the radius), just expressed as a CSS transform
+    // instead of a redrawn arc.
+    if(reduceMotion){
+        orbEl.style.setProperty("--orb-scale", (1 + displayLevel * 0.06).toFixed(4));
+    } else {
+        idlePhase += 0.02;
+        const idlePulse = Math.sin(idlePhase) * 0.015;
+        const speechPulse = displayLevel * 0.1;
+        orbEl.style.setProperty("--orb-scale", (1 + idlePulse + speechPulse).toFixed(4));
+    }
+
+    requestAnimationFrame(animateOrb);
+}
+
+animateOrb();
+
+// Real clock, not decoration — genuinely useful in a rail with no other
+// timestamp visible.
+const clockEl = document.getElementById("clock");
+function tick(){
+    clockEl.textContent = new Date().toLocaleTimeString("en-US", { hour12: false });
+}
+setInterval(tick, 1000);
+tick();
+
+// 2026-07-17 (Craig: "she did not auto listen on join" — matches the
+// earlier design decision to default to listening automatically rather
+// than requiring a manual click every time, keeping the rail button as
+// the explicit way to turn it off when actually wanted). This was
+// designed but never actually wired up — startListening() was only ever
+// called from toggleAutoListen()'s click handler. Browsers require a
+// real user gesture for the FIRST-ever mic permission grant on an
+// origin — this can't bypass that on a genuinely fresh browser profile
+// — but once granted (already true here from tonight's testing),
+// getUserMedia() below just works with no fresh prompt.
+startListening().then(() => {
+    autoBtn.textContent = "Auto Listen: On";
+    autoBtn.classList.add("active");
+}).catch(err => {
+    console.warn("Auto-start listening failed (mic permission likely needed):", err);
+    logDebug("Auto-listen didn't start automatically — click Auto Listen to grant mic access.");
+});
 
 function logoff(){
 
@@ -623,8 +1198,6 @@ function logoff(){
 }
 
 </script>
-
-
 
 </body>
 </html>
