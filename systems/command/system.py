@@ -14,7 +14,6 @@ Replaces ws_commands.py
 
 import re
 import time
-import json
 
 from core.system_base import BaseSystem
 

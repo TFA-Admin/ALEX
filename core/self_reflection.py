@@ -20,7 +20,7 @@ from db.db import (
     get_seconds_since_last_activity, get_seconds_since_last_personality_change
 )
 from llm.ollama_client import ollama_manager
-from core.phrasebook import PHRASE_REGISTRY
+from core.phrasebook import PHRASE_REGISTRY, SECURITY_SENSITIVE_PHRASES
 from core.text_utils import strip_emojis
 from config.logger_config import logger
 
@@ -115,13 +115,34 @@ async def _reflect_on_phrase(key, personality):
     else:
         placeholder_instruction = ""
 
+    # 2026-07-18 (Craig, watching a wrong-override-code rejection drift
+    # over several reflection passes into "Oopsie!... Better hit that
+    # reset button and try again": "I don't want to force a mood, but I
+    # would think she should be aware that something like that would be
+    # serious.") — this is the actual fix: rather than a mood tag bolted
+    # on after the response is generated, the rewording process itself
+    # should never be free to make a security rejection sound like a
+    # joke, no matter how playful/dismissive the overall personality is.
+    if key in SECURITY_SENSITIVE_PHRASES:
+        gravity_instruction = (
+            " This particular line is security-relevant — it's what you "
+            "say when someone just failed an authorization or identity "
+            "check. Whatever your personality, this one specific line "
+            "still needs to read as a real, serious refusal: no jokes, "
+            "no dismissiveness, no treating it as a trivial mistake. A "
+            "wrong code or an unverified identity could be a genuine "
+            "unauthorized attempt, not just a typo to laugh about."
+        )
+    else:
+        gravity_instruction = ""
+
     prompt = f"""You are A.L.E.X. Your personality: "{personality}"
 
 One of your standard lines needs to keep doing its job (its purpose: {intent}), but you're free to phrase it however fits who you are.
 
 Current wording: "{current}"
 
-Do you want to rephrase this to better match your personality? Keep the exact same functional purpose.{placeholder_instruction} Respond with ONLY a JSON object:
+Do you want to rephrase this to better match your personality? Keep the exact same functional purpose.{placeholder_instruction}{gravity_instruction} Respond with ONLY a JSON object:
 {{"changed": true, "new_text": "<new wording>"}}
 or
 {{"changed": false}}"""
@@ -236,64 +257,79 @@ async def run_self_reflection():
 
     await set_last_reflection_memory_id(recent[-1]["id"])
 
+    # 2026-07-18 (Craig: "if she's working on something in the background
+    # like tuning herself would it show that?") — everything from here to
+    # the end of this function is the actual "work" (multiple real LLM
+    # calls); __SELFWORK__1/0 lets the avatar UI show something honest
+    # during that window instead of self-reflection being invisible the
+    # whole time it runs. finally guarantees the "done" signal fires even
+    # if reflection errors out partway — a stuck "she's working" state
+    # with no way to know it's actually finished would be worse than not
+    # having the indicator at all.
+    from ws.ws_handlers import send_signal_to_creator
+    await send_signal_to_creator("__SELFWORK__1")
+
     try:
-        curiosity = await _reflect_on_curiosity(recent)
-    except Exception as e:
-        logger.warning(f"⚠️ Curiosity reflection failed: {e}")
-        curiosity = None
-
-    if curiosity:
-        topic, question = curiosity
-        await queue_curiosity_question(topic, question)
-        logger.info(f"[ACTION] Queued curiosity question: {question}")
-
-    personality_change = await _reflect_on_personality(recent)
-
-    if not personality_change:
-        return
-
-    new_desc, reason = personality_change
-
-    await set_personality(new_desc)
-    await log_personality_change(new_desc, reason, kind="personality")
-
-    logger.info(f"[PERSONALITY] Personality evolved: {new_desc} (reason: {reason})")
-
-    # personality shifted — let her optionally re-voice her scripted
-    # phrases too. Capped to a small random sample per pass, NOT the
-    # whole registry — found live (2026-07-16) that re-voicing all 78
-    # entries (grown from ~4 when this was first written) meant every
-    # single personality change kicked off ~78 sequential LLM calls,
-    # monopolizing the one shared Ollama instance for several minutes at
-    # a time. Since this fires immediately on every restart (see
-    # main.py's periodic_self_reflection(), no initial delay) and
-    # personality changes happened often tonight, this was directly
-    # competing with — and badly starving — real conversational requests
-    # the whole time it ran. Phrases still drift toward her personality
-    # over time, just gradually across many reflection passes instead of
-    # all at once.
-    keys_to_revoice = random.sample(list(PHRASE_REGISTRY), min(5, len(PHRASE_REGISTRY)))
-
-    # Same deterministic guarantee as systems/llm/system.py's generation
-    # stream — found live that a reworded phrase ("Yas, gotcha! I'll
-    # update my records and give the old info the ol' boot. 👍") carried
-    # an emoji right through this same rewording path, independent of the
-    # main conversational generation.
-    hard_rules = await get_personality_hard_rules()
-    suppress_emojis = any("emoji" in r.lower() for r in hard_rules)
-
-    for key in keys_to_revoice:
         try:
-            new_text = await _reflect_on_phrase(key, new_desc)
+            curiosity = await _reflect_on_curiosity(recent)
         except Exception as e:
-            logger.warning(f"⚠️ Phrase reflection failed for '{key}': {e}")
-            continue
+            logger.warning(f"⚠️ Curiosity reflection failed: {e}")
+            curiosity = None
 
-        if new_text and suppress_emojis:
-            new_text = strip_emojis(new_text)
+        if curiosity:
+            topic, question = curiosity
+            await queue_curiosity_question(topic, question)
+            logger.info(f"[ACTION] Queued curiosity question: {question}")
 
-        if new_text:
-            phrase_reason = f"re-voiced to match new personality ({reason})"
-            await set_learned_phrase(key, new_text)
-            await log_personality_change(new_text, phrase_reason, kind=f"phrase:{key}")
-            logger.info(f"[PERSONALITY] Re-voiced '{key}': {new_text} (reason: {phrase_reason})")
+        personality_change = await _reflect_on_personality(recent)
+
+        if not personality_change:
+            return
+
+        new_desc, reason = personality_change
+
+        await set_personality(new_desc)
+        await log_personality_change(new_desc, reason, kind="personality")
+
+        logger.info(f"[PERSONALITY] Personality evolved: {new_desc} (reason: {reason})")
+
+        # personality shifted — let her optionally re-voice her scripted
+        # phrases too. Capped to a small random sample per pass, NOT the
+        # whole registry — found live (2026-07-16) that re-voicing all 78
+        # entries (grown from ~4 when this was first written) meant every
+        # single personality change kicked off ~78 sequential LLM calls,
+        # monopolizing the one shared Ollama instance for several minutes at
+        # a time. Since this fires immediately on every restart (see
+        # main.py's periodic_self_reflection(), no initial delay) and
+        # personality changes happened often tonight, this was directly
+        # competing with — and badly starving — real conversational requests
+        # the whole time it ran. Phrases still drift toward her personality
+        # over time, just gradually across many reflection passes instead of
+        # all at once.
+        keys_to_revoice = random.sample(list(PHRASE_REGISTRY), min(5, len(PHRASE_REGISTRY)))
+
+        # Same deterministic guarantee as systems/llm/system.py's generation
+        # stream — found live that a reworded phrase ("Yas, gotcha! I'll
+        # update my records and give the old info the ol' boot. 👍") carried
+        # an emoji right through this same rewording path, independent of the
+        # main conversational generation.
+        hard_rules = await get_personality_hard_rules()
+        suppress_emojis = any("emoji" in r.lower() for r in hard_rules)
+
+        for key in keys_to_revoice:
+            try:
+                new_text = await _reflect_on_phrase(key, new_desc)
+            except Exception as e:
+                logger.warning(f"⚠️ Phrase reflection failed for '{key}': {e}")
+                continue
+
+            if new_text and suppress_emojis:
+                new_text = strip_emojis(new_text)
+
+            if new_text:
+                phrase_reason = f"re-voiced to match new personality ({reason})"
+                await set_learned_phrase(key, new_text)
+                await log_personality_change(new_text, phrase_reason, kind=f"phrase:{key}")
+                logger.info(f"[PERSONALITY] Re-voiced '{key}': {new_text} (reason: {phrase_reason})")
+    finally:
+        await send_signal_to_creator("__SELFWORK__0")

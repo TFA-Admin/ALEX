@@ -6,7 +6,7 @@ import asyncio
 from fastapi import WebSocketDisconnect
 
 from db.db import (
-    fetch_user_facts, update_fact, migrate_user, create_profile, profile_exists,
+    update_fact, migrate_user, create_profile, profile_exists,
     reinforce_voice_sample, fetch_voice_samples, fetch_all_voice_profiles, find_profile_by_prefix
 )
 from speech.tts_engine import synthesize_speech
@@ -106,7 +106,7 @@ class IdentityManager:
                     if audio_buffer:
                         await send_debug(websocket, f"🎙️ Captured {len(audio_buffer)} bytes, transcribing...")
 
-                        result = transcribe_audio(audio_buffer)
+                        result, _confidence = transcribe_audio(audio_buffer)
                         print("🎤 Onboarding heard:", result)
 
                         audio_buffer = b""
@@ -188,7 +188,7 @@ class IdentityManager:
                     if audio_buffer:
                         await send_debug(websocket, f"🎙️ Captured {len(audio_buffer)} bytes, transcribing...")
 
-                        result = transcribe_audio(audio_buffer)
+                        result, _confidence = transcribe_audio(audio_buffer)
                         print("🎤 Onboarding heard:", result)
 
                         captured = audio_buffer
@@ -334,7 +334,7 @@ class IdentityManager:
 
             if audio:
                 try:
-                    heard_text = (transcribe_audio(audio) or "").strip()
+                    heard_text = (transcribe_audio(audio)[0] or "").strip()
                 except Exception:
                     heard_text = ""
 
@@ -526,7 +526,7 @@ Respond with ONLY a JSON object, nothing else:
             await _speak(websocket, learned_msg)
 
         # ---------------- FINAL ----------------
-        final_msg = f"Confirmed."
+        final_msg = "Confirmed."
         await websocket.send_text(final_msg)
         await _speak(websocket, final_msg)
 

@@ -1,5 +1,4 @@
 import re
-import json
 
 from db.db import fetch_user_facts
 from llm.ollama_client import locked_fields

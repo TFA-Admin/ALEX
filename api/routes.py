@@ -5,7 +5,6 @@ from pydantic import BaseModel
 from llm.ollama_client import ollama_manager
 from db.db import (
     add_memory,
-    update_fact,
     fetch_user_facts
 )
 
@@ -15,18 +14,6 @@ router = APIRouter()
 class AskRequest(BaseModel):
     user: str
     prompt: str
-
-
-class AddFactRequest(BaseModel):
-    user: str
-    key: str
-    value: str
-
-
-class UpdateFactRequest(BaseModel):
-    user: str
-    key: str
-    value: str
 
 
 # --------------------------
@@ -55,28 +42,16 @@ async def ask_text(data: AskRequest):
 
     return JSONResponse({"response": full_response})
 
-
-# --------------------------
-# Fact endpoints (FIXED)
-# --------------------------
-@router.post("/add_fact")
-async def add_fact_endpoint(data: AddFactRequest):
-
-    # 🔥 unified into update_fact
-    await update_fact(data.user, data.key, data.value)
-
-    return JSONResponse({
-        "status": "ok",
-        "message": f"Fact {data.key} set for {data.user}"
-    })
-
-
-@router.post("/update_fact")
-async def update_fact_endpoint(data: UpdateFactRequest):
-
-    await update_fact(data.user, data.key, data.value)
-
-    return JSONResponse({
-        "status": "ok",
-        "message": f"Updated {data.key} for {data.user}"
-    })
+# 2026-07-18 (Craig: found live — /add_fact and /update_fact took a raw
+# key/value with no restriction and no authentication, meaning anyone who
+# could reach this server could POST key="override_code" for any user and
+# take over creator identity, bypassing voice verification and every
+# LOCKED_KEYS/OVERRIDE_ONLY_KEYS gate the conversational path enforces
+# (systems/permissions/system.py, systems/facts/system.py). Confirmed
+# nothing but tests/test_alex.py's manual smoke-test script ever called
+# either route — removed both entirely rather than trying to bolt auth
+# onto a single endpoint in a codebase with no other network-auth layer
+# (security here is enforced at the content/identity level — voice
+# verification, override codes — not network access control, so adding
+# one-off HTTP auth would be inconsistent with everything else). Any real
+# fact write now has to go through the conversational path's own gates.

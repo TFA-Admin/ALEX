@@ -91,7 +91,6 @@ class ResponseHandler:
 
         full_response = ""
         speech_buffer = ""
-        spoke_any = False
         interrupted = False
 
         async for chunk in stream_fn():
@@ -127,7 +126,6 @@ class ResponseHandler:
                 tts_total += time.time() - tts_t0
                 if pcm:
                     await websocket.send_bytes(pcm)
-                spoke_any = True
 
         logger.info(f"[RESPONSE] to {user_id}: {full_response}")
 
@@ -176,8 +174,28 @@ class ResponseHandler:
         # unaddressed follow-up like "I agree" was silently ignored.
         # Refreshing it here means the window always restarts from when
         # she stops talking, not from when he started.
+        #
+        # 2026-07-17 (Craig: "she continues to respond to obvious end of
+        # discussion statements") — this refresh was undoing
+        # ws/ws_handlers.py's own attempt to close the window on a
+        # closing remark ("that's all for now"): that utterance still
+        # gets a real reply, and this line would immediately re-open the
+        # window right after, so the conversation never actually ended.
+        # conversation_closing is set on exactly (and only) that turn.
+        # 2026-07-18 (Craig: "her presence in the UI still says
+        # listening" — wants it to reflect whether she's actually
+        # engaged, not just whether the mic is armed) — ws/ws_handlers.py
+        # already sends __ENGAGED__1 the moment a turn starts, based on
+        # the window at THAT time; this re-sends it here too because the
+        # window's real expiry (what the browser mirrors locally) just
+        # got pushed out further, to whenever she finished talking, which
+        # can be well after the turn started for a long response.
         if session is not None:
-            session["last_addressed_at"] = time.time()
+            if session.pop("conversation_closing", False):
+                session["last_addressed_at"] = 0
+            else:
+                session["last_addressed_at"] = time.time()
+                await websocket.send_text("__ENGAGED__1")
 
         await websocket.send_text("__END__")
 
@@ -226,11 +244,16 @@ class ResponseHandler:
             mood = derive_mood(content)
             await websocket.send_text("__MOOD__" + mood)
 
-        # See the matching comment in _handle_stream — refreshes the
+        # See the matching comments in _handle_stream — refreshes the
         # wake-word conversation window from when she finishes speaking,
-        # not from when she was addressed.
+        # not from when she was addressed, unless this turn was itself a
+        # closing remark (in which case the window should stay closed).
         if session is not None:
-            session["last_addressed_at"] = time.time()
+            if session.pop("conversation_closing", False):
+                session["last_addressed_at"] = 0
+            else:
+                session["last_addressed_at"] = time.time()
+                await websocket.send_text("__ENGAGED__1")
 
         await websocket.send_text("__END__")
 

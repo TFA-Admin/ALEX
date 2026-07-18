@@ -50,10 +50,24 @@ model = load_model()
 # TRANSCRIBE (SAFE DECODE)
 # -------------------------
 def transcribe_audio(audio_bytes: bytes):
+    """Returns (text, avg_logprob). avg_logprob is faster-whisper's own
+    per-segment acoustic-confidence score (mean across segments when an
+    utterance has more than one), None when nothing was transcribed.
+
+    2026-07-18 (Craig: "tell me no" got misheard as "tell me now" — asked
+    whether she can check her own confidence and ask instead of guessing).
+    Real reference points, not guessed: a clear synthetic-speech test
+    (Piper-generated audio fed back through this exact model/settings)
+    measured avg_logprob ≈ -0.31; `log_prob_threshold=-1.0` below is
+    Whisper's OWN internal decoding-retry cutoff. ws/ws_audio.py's
+    LOW_CONFIDENCE_THRESHOLD sits between those two as a starting point
+    for "noticeably less sure than a clear utterance" — like every other
+    untuned threshold added tonight, this can't be verified against a
+    genuinely ambiguous REAL recording without live use."""
     try:
         # 🔥 ignore tiny / broken chunks
         if not audio_bytes or len(audio_bytes) < MIN_AUDIO_BYTES:
-            return ""
+            return "", None
 
         # ---------------- SAVE TEMP FILE ----------------
         with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
@@ -69,7 +83,7 @@ def transcribe_audio(audio_bytes: bytes):
                 os.remove(path)
             except:
                 pass
-            return ""
+            return "", None
 
         # ---------------- TRANSCRIBE ----------------
         segments, _ = model.transcribe(
@@ -84,7 +98,16 @@ def transcribe_audio(audio_bytes: bytes):
             compression_ratio_threshold=2.4,
         )
 
-        text = "".join([seg.text for seg in segments]).strip()
+        # Materialized once — this drives both the text join and the
+        # confidence average below, and the underlying generator can only
+        # be consumed once.
+        segments = list(segments)
+
+        text = "".join(seg.text for seg in segments).strip()
+        avg_logprob = (
+            sum(seg.avg_logprob for seg in segments) / len(segments)
+            if segments else None
+        )
 
         # 🔥 NEW: reject garbage outputs (PUT IT RIGHT HERE)
         if not re.search(r'[a-zA-Z]{2,}', text):
@@ -92,7 +115,7 @@ def transcribe_audio(audio_bytes: bytes):
                 os.remove(path)
             except:
                 pass
-            return ""
+            return "", None
 
         # ---------------- CLEANUP ----------------
         try:
@@ -100,8 +123,8 @@ def transcribe_audio(audio_bytes: bytes):
         except:
             pass
 
-        return text
-    
+        return text, avg_logprob
+
     except Exception as e:
         print("STT error:", e)
-        return ""
+        return "", None

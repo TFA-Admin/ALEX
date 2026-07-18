@@ -323,6 +323,18 @@ async def ensure_access_tier_columns(db):
         # leak even if something unexpected slips into a cached response
         # again in the future.
         ("learned_knowledge", "user", "TEXT"),
+        # 2026-07-18 (Craig, after a web-search finding got retained
+        # saying race results "aren't posted yet": "what happens when
+        # that information changes... isn't that an issue?") — yes: this
+        # table had no concept of a retained belief going stale, so a
+        # snapshot-in-time answer (today's live-web-search result) would
+        # have replayed verbatim forever, indistinguishable from a
+        # timeless fact. NULL = no expiration (the existing behavior,
+        # unchanged for ordinary conversational auto-caching); a real
+        # value excludes it from matching once past — see
+        # fetch_active_knowledge()'s filter and retain_report()'s real
+        # expiration for search-derived entries specifically.
+        ("learned_knowledge", "expires_at", "TEXT"),
     ]
 
     for table, col, col_type in additions:
@@ -384,6 +396,18 @@ async def update_fact(user, key, value, importance=5, expires_at=None):
         await db.commit()
 
 
+# 2026-07-18 (Craig: adding a casual fact never required a code, so
+# removing one shouldn't either) — mirrors update_fact() above; only ever
+# called for systems/facts/system.py's ALLOWED_FACT_KEYS (favorite_color/
+# alias/job), the explicitly casual/low-stakes tier — real identity
+# fields (role/user_name/edit_code/override_code) never go through this
+# system at all, so this can't touch them.
+async def delete_fact(user, key):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM facts WHERE user=? AND key=?", (user, key))
+        await db.commit()
+
+
 async def fetch_user_facts(user):
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
@@ -419,42 +443,6 @@ async def migrate_user(old_user, new_user):
         await db.commit()
 
     print(f"🔄 Migrated {old_user} → {new_user}")
-
-
-# -------------------------
-# SYSTEM PROMPT
-# -------------------------
-async def get_system_prompt():
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            "SELECT value FROM system_learning WHERE key='system_prompt'"
-        )
-        row = await cursor.fetchone()
-
-    if row:
-        return row[0]
-
-    return """You are A.L.E.X (pronounced "Alex").
-
-    STRICT RULES:
-    - Your name is A.L.E.X. Do not change it.
-    - Be brief and direct (1–2 sentences unless absolutely necessary)
-    - Answer only what the user asked
-    - Do NOT add suggestions, extra help, or closing remarks
-    - Do NOT say phrases like "feel free to ask", "let me know", or "anything else"
-    - Do NOT repeat or restate obvious context
-    - Avoid greetings unless the user greets first
-    - If a yes/no answer is appropriate, keep it to one short sentence
-    - Default to the shortest correct response
-    - Treat user statements as claims, not facts
-    - Only confirm information that exists in memory or was previously verified
-    - If something is not known, say so briefly
-
-    STYLE:
-    - Natural and human
-    - Concise and efficient
-    - No filler, no fluff
-    """
 
 
 DEFAULT_PERSONALITY = (
@@ -777,19 +765,6 @@ async def set_last_reflection_memory_id(memory_id: int):
             DO UPDATE SET value=excluded.value
         """, (str(memory_id),))
         await db.commit()
-
-
-async def set_system_prompt(prompt: str):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            INSERT INTO system_learning(key, value)
-            VALUES('system_prompt', ?)
-            ON CONFLICT(key)
-            DO UPDATE SET value=excluded.value
-        """, (prompt,))
-        await db.commit()
-
-    print("🧠 System prompt updated")
 
 
 # -------------------------
@@ -1335,20 +1310,6 @@ async def list_db_tables():
     return [r[0] for r in rows if r[0] not in DB_READ_EXCLUDE]
 
 
-async def get_db_table_schema(table):
-    if table in DB_READ_EXCLUDE or not _VALID_IDENTIFIER.match(table):
-        return None
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(f"PRAGMA table_info({table})")
-        rows = await cursor.fetchall()
-
-    if not rows:
-        return None
-
-    return [{"name": r[1], "type": r[2]} for r in rows]
-
-
 async def get_db_table_rows(table, limit=50):
     if table in DB_READ_EXCLUDE or not _VALID_IDENTIFIER.match(table):
         return None
@@ -1445,19 +1406,6 @@ async def resolve_search_approval(report_id, approved: bool):
         await db.commit()
 
 
-async def fetch_approved_searches():
-    """Approved, not yet executed — what the inquiry module picks up to
-    actually run the search."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            "SELECT id, requested_by, query, reason FROM query_reports "
-            "WHERE status='search_approved' ORDER BY created_at"
-        )
-        rows = await cursor.fetchall()
-    keys = ["id", "requested_by", "query", "reason"]
-    return [dict(zip(keys, r)) for r in rows]
-
-
 async def attach_search_findings(report_id, findings, sources):
     """Search ran — findings are ready for the creator to review before
     deciding whether to keep them. Nothing is written to
@@ -1468,17 +1416,6 @@ async def attach_search_findings(report_id, findings, sources):
             (findings, sources, report_id)
         )
         await db.commit()
-
-
-async def fetch_pending_retain_approvals():
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            "SELECT id, requested_by, query, findings, sources, created_at FROM query_reports "
-            "WHERE status='pending_retain_approval' ORDER BY created_at DESC"
-        )
-        rows = await cursor.fetchall()
-    keys = ["id", "requested_by", "query", "findings", "sources", "created_at"]
-    return [dict(zip(keys, r)) for r in rows]
 
 
 async def resolve_retain_approval(report_id, approved: bool):
@@ -1508,7 +1445,11 @@ async def get_query_report(report_id):
 
 async def fetch_recent_query_reports(limit=15):
     """Newest-first, any status — Controller-facing visibility, mirrors
-    fetch_recent_module_build_requests."""
+    fetch_recent_module_build_requests. Deliberately excludes
+    findings/sources — those can be sizable, and every periodic refresh
+    (every 5s) fetching them for every row would be wasteful when only a
+    single selected row is ever actually inspected. See
+    get_query_report_findings() for that on-demand lookup."""
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "SELECT id, requested_by, query, status, created_at, search_resolved_at, retain_resolved_at "
@@ -1524,7 +1465,7 @@ async def fetch_recent_query_reports(limit=15):
 # LEARNED KNOWLEDGE (the belief store, 2026-07-16)
 # -------------------------
 
-async def create_learned_knowledge(topic, content, source_url, query_report_id, embedding, supersedes=None, user=None):
+async def create_learned_knowledge(topic, content, source_url, query_report_id, embedding, supersedes=None, user=None, expires_at=None):
     """Only ever called once a query_report reaches 'retained', or when
     the LLM-fallback path auto-stores a fresh answer. If this supersedes
     an existing belief, that belief is marked superseded in the same
@@ -1540,7 +1481,13 @@ async def create_learned_knowledge(topic, content, source_url, query_report_id, 
     fixed in systems/facts/system.py) and gotten cached with no owner,
     meaning it would have replayed to ANY user, not just the one it was
     generated for. Every LLM-fallback auto-store now passes a real
-    user."""
+    user.
+
+    expires_at (2026-07-18, ISO datetime string or None) — a snapshot-
+    in-time answer (e.g. a web search result about something still in
+    progress) shouldn't be treated as timelessly true; see
+    fetch_active_knowledge()'s filter and systems/inquiry/system.py's
+    retain_report() for where a real value actually gets set."""
     emb_blob = pickle.dumps(embedding)
     async with aiosqlite.connect(DB_PATH) as db:
         if supersedes is not None:
@@ -1549,36 +1496,45 @@ async def create_learned_knowledge(topic, content, source_url, query_report_id, 
                 (supersedes,)
             )
         cursor = await db.execute(
-            "INSERT INTO learned_knowledge (topic, content, source_url, query_report_id, embedding, supersedes, user) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (topic, content, source_url, query_report_id, emb_blob, supersedes, user)
+            "INSERT INTO learned_knowledge (topic, content, source_url, query_report_id, embedding, supersedes, user, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (topic, content, source_url, query_report_id, emb_blob, supersedes, user, expires_at)
         )
         await db.commit()
         return cursor.lastrowid
 
 
 async def fetch_active_knowledge(user=None):
-    """Every currently-active (not superseded/retracted) belief visible
-    to this user, for retrieval — same shape as fetch_vector_memories,
-    so the retrieval path can reuse the exact same cosine-similarity
-    pattern already proven there.
+    """Every currently-active (not superseded/retracted, not expired)
+    belief visible to this user, for retrieval — same shape as
+    fetch_vector_memories, so the retrieval path can reuse the exact
+    same cosine-similarity pattern already proven there.
 
     user=None (the default) returns only universal entries (user IS
     NULL) — safe for any caller that doesn't have a real user_id in
     hand. Passing a real user returns that user's own entries PLUS
     universal ones, but never another user's — the actual security
     boundary (see create_learned_knowledge's docstring for why this
-    exists)."""
+    exists).
+
+    expires_at filter (2026-07-18): a snapshot-in-time answer that's
+    passed its expiration is excluded here rather than deleted — the row
+    stays for audit/history, it just stops being offered as a live
+    cached answer. A later question that no longer matches anything
+    falls through to an honest "I don't have that stored" instead of
+    confidently repeating stale information."""
     async with aiosqlite.connect(DB_PATH) as db:
         if user is None:
             cursor = await db.execute(
                 "SELECT id, topic, content, source_url, embedding, created_at "
-                "FROM learned_knowledge WHERE status='active' AND user IS NULL"
+                "FROM learned_knowledge WHERE status='active' AND user IS NULL "
+                "AND (expires_at IS NULL OR expires_at > datetime('now'))"
             )
         else:
             cursor = await db.execute(
                 "SELECT id, topic, content, source_url, embedding, created_at "
-                "FROM learned_knowledge WHERE status='active' AND (user IS NULL OR user=?)",
+                "FROM learned_knowledge WHERE status='active' AND (user IS NULL OR user=?) "
+                "AND (expires_at IS NULL OR expires_at > datetime('now'))",
                 (user,)
             )
         rows = await cursor.fetchall()

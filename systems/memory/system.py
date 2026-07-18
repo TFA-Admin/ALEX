@@ -9,16 +9,42 @@ Responsibilities:
 - Keep it lightweight and fast
 """
 
+import re
+
 from core.system_base import BaseSystem
 
 from db.db import (
     fetch_recent_memory,
     fetch_vector_memories,
-    add_memory
+    add_memory,
+    reinforce_response
 )
 
 from core.embedding_engine import embed, cosine_similarity
 from config.logger_config import logger
+
+# 2026-07-18 (Craig: "this might be useful for adjusting her responses
+# based on the user's reaction to what she says") — reinforce_response()
+# already existed in db.py (bumps a memory row's weight, floor 1/ceiling
+# 10) but had zero callers anywhere; decay_memory() dutifully decremented
+# every row's weight hourly with nothing ever incrementing it back, and
+# retrieval never even looked at the column. Wiring in both halves: this
+# regex detects a genuine positive reaction to what she JUST said, and
+# the scoring boost below (WEIGHT_BOOST_PER_POINT) is what makes a
+# reinforced memory actually more likely to resurface later — without
+# it, reinforcement would be a number nobody ever reads.
+_POSITIVE_REACTION_RE = re.compile(
+    r"\b(thanks|thank you|perfect|exactly|nice one|"
+    r"that'?s (helpful|right|it|great|awesome|correct)|"
+    r"good (job|answer|point|call)|well done|that worked|"
+    r"love (it|that)|appreciate (it|that))\b",
+    re.IGNORECASE
+)
+
+# Modest per-weight-point multiplier on similarity score (weight 1 ->
+# 1.0x, weight 10 -> 1.45x) — reinforced memories surface somewhat more
+# readily without letting reinforcement alone override real relevance.
+WEIGHT_BOOST_PER_POINT = 0.05
 
 
 class System(BaseSystem):
@@ -67,6 +93,7 @@ class System(BaseSystem):
         for m in memories:
             try:
                 score = cosine_similarity(query_vec, m["embedding"])
+                score *= 1 + (m.get("weight", 1) - 1) * WEIGHT_BOOST_PER_POINT
                 scored.append((score, m))
             except:
                 continue
@@ -83,6 +110,20 @@ class System(BaseSystem):
             recent = await fetch_recent_memory(user_id)
         except:
             recent = []
+
+        # 2026-07-18 (Craig: "adjusting her responses based on the user's
+        # reaction to what she says") — a genuine positive reaction to
+        # what she JUST said reinforces that turn's weight, which the
+        # scoring boost above then uses to make it resurface more readily
+        # in future relevant context. Side effect only — still falls
+        # through to whatever actually answers this message (a "thanks"
+        # deserves its own reply too).
+        if recent and _POSITIVE_REACTION_RE.search(text):
+            last = recent[-1]
+            try:
+                await reinforce_response(user_id, last["prompt"], last["response"])
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to reinforce response: {e}")
 
         # 2026-07-16: widened from -2: to -4:, affordable now that
         # llm/ollama_client.py's shared num_ctx quadrupled. A 2-turn window

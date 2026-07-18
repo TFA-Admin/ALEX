@@ -9,7 +9,9 @@ from ws.ws_handlers import register_ws
 from utils.utils import get_lan_ip
 from db.db import init_db, decay_memory
 from llm.ollama_client import ollama_manager
+from speech.tts_engine import shutdown_tts
 from core.self_reflection import run_self_reflection
+from core.proactive import periodic_proactive_check
 from config.logger_config import logger
 
 sys.stdout.reconfigure(encoding='utf-8')
@@ -104,8 +106,15 @@ async def lifespan(app: FastAPI):
     # -------------------------
     asyncio.create_task(periodic_decay())
     asyncio.create_task(periodic_self_reflection())
+    asyncio.create_task(periodic_proactive_check())
 
     yield
+
+    # 2026-07-18: the persistent Piper process (speech/tts_engine.py)
+    # needs an explicit kill on shutdown — exactly the kind of orphaned
+    # background process this project spent real effort hunting down
+    # elsewhere tonight (see the Ollama runner-orphan fixes).
+    shutdown_tts()
 
     logger.info("🔴 Shutdown complete")
 

@@ -68,7 +68,7 @@ sys.path.insert(0, ".")
 from db.db import (
     init_db, fetch_approved_module_build_requests,
     fetch_requests_needing_access_approval, resolve_module_build_request,
-    set_requested_access, register_module_version, get_module_registry_entry,
+    set_requested_access, register_module_version,
     create_module_build_request
 )
 from module_runtime.validator import check_safety

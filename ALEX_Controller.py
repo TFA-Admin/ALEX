@@ -45,10 +45,10 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton,
     QTextEdit, QLabel, QHBoxLayout, QTabWidget,
     QTableWidget, QTableWidgetItem, QMessageBox, QComboBox,
-    QAbstractItemView, QLineEdit
+    QAbstractItemView, QLineEdit, QDialog
 )
 from PySide6.QtCore import QThread, Signal, QTimer, Qt
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QTextCursor
 
 from db.db import (
     get_personality, set_personality, DEFAULT_PERSONALITY,
@@ -57,9 +57,13 @@ from db.db import (
     fetch_recent_module_build_requests, approve_elevated_access,
     list_module_registry, fetch_recent_query_reports,
     fetch_unacknowledged_security_events, acknowledge_security_events,
-    fetch_unacknowledged_personality_changes, acknowledge_personality_changes
+    fetch_unacknowledged_personality_changes, acknowledge_personality_changes,
+    fetch_module_versions, get_module_version_code, get_module_registry_entry,
+    register_module_version, resolve_search_approval, attach_search_findings,
+    get_query_report
 )
 from core.intent_classifier import merge_personality_change
+from module_runtime.module_installer import install_module
 
 ALEX_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(ALEX_DIR, "config", "Logs")
@@ -114,7 +118,27 @@ class LogFileTailer(QThread):
 
             if latest and latest != self._current_file:
                 self._current_file = latest
-                self._position = 0
+                # 2026-07-18 (Craig: "the ollama tab lags before it lets
+                # me in") — found live: ollama_output.log is a single,
+                # never-rotated file that just keeps growing for the
+                # server's entire uptime (confirmed: 50,000+ lines this
+                # session alone), unlike ALEX's own per-run timestamped
+                # logs. Starting at position 0 on every attach replayed
+                # the ENTIRE file into the QTextEdit in one burst every
+                # time the Controller (re)launched — that's what was
+                # actually causing the lag, not anything about how much
+                # is visible on screen at once. Seeking to the current
+                # end-of-file instead means only genuinely NEW lines ever
+                # get tailed, same as `tail -f` with no -n. Trade-off:
+                # a few lines written between the file appearing and this
+                # seek (a handful of ms, this poll interval is 0.5s) can
+                # be missed — the real log file on disk still has
+                # everything, this only affects what's replayed into the
+                # Controller's live view.
+                try:
+                    self._position = os.path.getsize(latest)
+                except OSError:
+                    self._position = 0
                 self.log_signal.emit(f"[SYSTEM] Attached to log: {os.path.basename(latest)}")
 
             if self._current_file and os.path.exists(self._current_file):
@@ -280,13 +304,29 @@ class AlexController(QWidget):
         self.stop_alex_btn = QPushButton("Stop A.L.E.X")
         self.stop_alex_btn.clicked.connect(self.stop_alex)
 
+        # 2026-07-18 (roadmap: "infra-layer hot-reload" — db.py,
+        # tts_engine.py, ollama_client.py, alex_core.py etc. still need a
+        # full restart to pick up a code edit. True in-place hot-reload
+        # was considered and rejected: those files are imported
+        # everywhere via `from db.db import X`-style names (28 files for
+        # db.py alone), so reloading the module itself wouldn't actually
+        # reach any of its callers — and several of them hold live state
+        # (alex_core.py's active sessions, ollama_client.py's
+        # locked_fields/pending_profile_changes) that a reload would
+        # destroy regardless. Craig chose this instead: restarts ONLY the
+        # ALEX.py server process, not Ollama and not this Controller, so
+        # testing a code change doesn't also mean waiting for Ollama to
+        # warm back up.
+        self.restart_alex_btn = QPushButton("🔄 Restart A.L.E.X")
+        self.restart_alex_btn.clicked.connect(self.restart_alex)
+
         self.copy_btn = QPushButton("📋 Copy Current Tab")
         self.copy_btn.clicked.connect(self.copy_logs)
 
         self.check_orphans_btn = QPushButton("🧹 Check for Orphans")
         self.check_orphans_btn.clicked.connect(lambda: self.check_for_orphans(prompt_if_none=True))
 
-        for b in [self.start_alex_btn, self.stop_alex_btn,
+        for b in [self.start_alex_btn, self.stop_alex_btn, self.restart_alex_btn,
                   self.start_ollama_btn, self.stop_ollama_btn, self.copy_btn,
                   self.check_orphans_btn]:
             btns.addWidget(b)
@@ -453,6 +493,34 @@ class AlexController(QWidget):
         module_status_btns.addWidget(self.module_status_refresh_btn)
         requests_layout.addLayout(module_status_btns)
 
+        # 🕓 MODULE VERSION HISTORY + ROLLBACK (2026-07-18) —
+        # register_module_version() has snapshotted every real build's
+        # code since the versioning system was built, specifically "so
+        # rollback has something real to restore" (its own docstring),
+        # but nothing ever exposed that history or let anyone act on it.
+        # Select a module above, Load Version History shows every past
+        # version; Roll Back To Selected reinstalls that version's code
+        # as current — recorded as a NEW version (via
+        # register_module_version), never silently overwriting history.
+        requests_layout.addWidget(QLabel("Version history (select a module above, then load):"))
+
+        self.module_versions_table = QTableWidget()
+        self.module_versions_table.setColumnCount(2)
+        self.module_versions_table.setHorizontalHeaderLabels(["Version", "Created At"])
+        self.module_versions_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.module_versions_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        requests_layout.addWidget(self.module_versions_table)
+
+        module_versions_btns = QHBoxLayout()
+        self.load_versions_btn = QPushButton("📜 Load Version History (Selected Module)")
+        self.load_versions_btn.clicked.connect(self.load_module_versions)
+        module_versions_btns.addWidget(self.load_versions_btn)
+
+        self.rollback_version_btn = QPushButton("⏪ Roll Back To Selected Version")
+        self.rollback_version_btn.clicked.connect(self.rollback_module_version)
+        module_versions_btns.addWidget(self.rollback_version_btn)
+        requests_layout.addLayout(module_versions_btns)
+
         # 2026-07-17: the "pending module build requests" table + Approve/
         # Deny buttons that used to live here are gone — nothing creates a
         # 'pending' request anymore. That path only ever existed for a
@@ -556,6 +624,46 @@ class AlexController(QWidget):
         self.search_activity_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.search_activity_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         activity_layout.addWidget(self.search_activity_table)
+
+        # 2026-07-18 (Craig, right after retaining a search result through
+        # the Controller with no way to see it first: "I have no way to
+        # see the results of the search either so I would in this
+        # scenario be flying blind... Not great") — the two-stage retain
+        # approval is meaningless if the second stage can't actually be
+        # reviewed before deciding. This table never even fetched
+        # findings/sources at all (fetch_recent_query_reports() excludes
+        # them, on purpose, to keep the periodic refresh cheap) — fetched
+        # on demand here instead, for one selected row at a time.
+        view_findings_btns = QHBoxLayout()
+        self.view_findings_btn = QPushButton("👁️ View Findings (Selected)")
+        self.view_findings_btn.clicked.connect(self.view_search_findings)
+        view_findings_btns.addWidget(self.view_findings_btn)
+        activity_layout.addLayout(view_findings_btns)
+
+        # 2026-07-18 (found live: Craig approved a stuck search-proposal
+        # request via the Controller, expecting it to actually run — it
+        # didn't, because the buttons below only ever existed for the
+        # SECOND stage (retain approval). A request that never got past
+        # "pending_search_approval" (e.g. proposed by a non-creator user,
+        # who can propose a search but can't confirm one — see
+        # systems/inquiry/system.py's require_creator() gate on the "yes"
+        # reply) had no Controller path back into it at all, same "stuck
+        # forever outside conversation" problem the retain buttons were
+        # built to solve, just one stage earlier and never covered.
+        # Mirrors _run_search_stage()'s real logic (resolve approval, run
+        # the actual search, attach findings) directly, rather than
+        # duplicating it as a second, drifting copy.
+        search_run_btns = QHBoxLayout()
+
+        self.approve_search_btn = QPushButton("🔎 Run Search (Selected)")
+        self.approve_search_btn.clicked.connect(self.approve_search_execution)
+        search_run_btns.addWidget(self.approve_search_btn)
+
+        self.decline_search_btn = QPushButton("🚫 Decline Search (Selected)")
+        self.decline_search_btn.clicked.connect(self.decline_search_execution)
+        search_run_btns.addWidget(self.decline_search_btn)
+
+        activity_layout.addLayout(search_run_btns)
 
         # 2026-07-16 (Craig: "I want a controller way to approve the web
         # search retention") — several requests were found stuck in
@@ -846,7 +954,7 @@ class AlexController(QWidget):
 
         # ---------------- NORMAL ROUTING ----------------
         if "[Ollama]" in text:
-            self.ollama_log.append(text)
+            self._append_capped(self.ollama_log, text)
         elif "[ALEX]" in text:
             # 2026-07-16 (Craig: "things are getting pretty busy in
             # there") — mechanical per-utterance chatter (recording
@@ -862,9 +970,42 @@ class AlexController(QWidget):
                 or "Couldn't make out any words" in text
             )
             if not noisy:
-                self.alex_log.append(text)
+                self._append_capped(self.alex_log, text)
         else:
-            self.system_log.append(text)
+            self._append_capped(self.system_log, text)
+
+    # 2026-07-18 (Craig: "the ollama tab lags before it lets me in") —
+    # even after fixing LogFileTailer's replay-on-attach burst above,
+    # these widgets grow completely unbounded for as long as ALEX/Ollama
+    # keep running (confirmed live: 50,000+ lines in one session for
+    # Ollama alone) — a QTextEdit's rendering/layout cost scales with
+    # document size, so an ever-growing one gets slower to display over
+    # a long session regardless of the initial-burst fix. Caps each
+    # widget to the most recent MAX_LOG_LINES, trimming from the start —
+    # the real log FILE on disk is untouched, this only bounds what's
+    # kept in the live in-memory widget.
+    MAX_LOG_LINES = 2000
+
+    def _append_capped(self, widget, text):
+        widget.append(text)
+        doc = widget.document()
+        excess = doc.blockCount() - self.MAX_LOG_LINES
+        if excess > 0:
+            cursor = QTextCursor(doc)
+            cursor.movePosition(QTextCursor.Start)
+            cursor.movePosition(QTextCursor.NextBlock, QTextCursor.KeepAnchor, excess)
+            cursor.removeSelectedText()
+
+        # 2026-07-18 (Craig: "all I see is you talking... not what she
+        # responds with") — confirmed live her replies WERE being logged
+        # and routed correctly (checked the raw log file directly), just
+        # not visible: nothing here ever scrolled the view, so if it had
+        # scrolled away from the bottom for any reason, new lines kept
+        # arriving off-screen with nothing pulling the view down to show
+        # them. A live log tailer should always show the newest line,
+        # same expectation as `tail -f`.
+        scrollbar = widget.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
 
     # ---------------- COPY ----------------
     def copy_logs(self):
@@ -1160,6 +1301,106 @@ class AlexController(QWidget):
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 self.module_status_table.setItem(row, col, item)
 
+    def load_module_versions(self):
+        rows = sorted({idx.row() for idx in self.module_status_table.selectionModel().selectedRows()})
+
+        if not rows:
+            self.alex_log.append("⚠️ Select a module in the table above first.")
+            return
+
+        if len(rows) > 1:
+            self.alex_log.append("⚠️ Select only one module at a time to load its version history.")
+            return
+
+        name_item = self.module_status_table.item(rows[0], 0)
+        if not name_item:
+            return
+
+        module_name = name_item.text()
+        # Remembered so rollback_module_version() knows which module the
+        # version table below is actually showing — the versions table
+        # itself has no module-name column, just version/created_at.
+        self._versions_loaded_for = module_name
+
+        try:
+            versions = asyncio.run(fetch_module_versions(module_name))
+        except Exception as e:
+            self.alex_log.append(f"⚠️ Failed to load versions for '{module_name}': {e}")
+            return
+
+        self.module_versions_table.setRowCount(len(versions))
+
+        for row, v in enumerate(versions):
+            for col, value in enumerate([v["version"], v["created_at"]]):
+                item = QTableWidgetItem(str(value))
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                self.module_versions_table.setItem(row, col, item)
+
+        self.alex_log.append(f"[SYSTEM] Loaded {len(versions)} version(s) for '{module_name}'")
+
+    def rollback_module_version(self):
+        """Reinstalls a selected past version's code as current — recorded
+        as a brand-new version (register_module_version), never a
+        destructive overwrite of history. Reuses the module's own
+        currently-granted access_scope (from get_module_registry_entry())
+        for check_safety()'s re-validation — a module already trusted
+        with e.g. db access shouldn't suddenly fail rollback validation
+        just because install_module()'s default is fully sandboxed."""
+        module_name = getattr(self, "_versions_loaded_for", None)
+        if not module_name:
+            self.alex_log.append("⚠️ Load a module's version history first (select it above, then Load Version History).")
+            return
+
+        rows = sorted({idx.row() for idx in self.module_versions_table.selectionModel().selectedRows()})
+        if not rows:
+            self.alex_log.append("⚠️ Select a version in the version history table first.")
+            return
+
+        version_item = self.module_versions_table.item(rows[0], 0)
+        if not version_item:
+            return
+
+        version = int(version_item.text())
+
+        reply = QMessageBox.question(
+            self, "Confirm Rollback",
+            f"Roll back '{module_name}' to version {version}?\n\n"
+            f"This installs that version's code as current and records the "
+            f"rollback itself as a new version.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            code = asyncio.run(get_module_version_code(module_name, version))
+            if not code:
+                self.alex_log.append(f"⚠️ No stored code found for '{module_name}' v{version}.")
+                return
+
+            registry_entry = asyncio.run(get_module_registry_entry(module_name)) or {}
+            access_scope = registry_entry.get("access_scope")
+            allowed_scopes = {access_scope} if access_scope else None
+
+            success, result = asyncio.run(install_module(module_name, code, allowed_scopes=allowed_scopes))
+            if not success:
+                self.alex_log.append(f"⚠️ Rollback install failed for '{module_name}': {result}")
+                return
+
+            new_version = asyncio.run(register_module_version(
+                module_name, code, "controller_rollback",
+                source="rollback", access_scope=access_scope
+            ))
+            self.alex_log.append(
+                f"[SYSTEM] Rolled back '{module_name}' to v{version}'s code (now v{new_version}) via Controller"
+            )
+        except Exception as e:
+            self.alex_log.append(f"⚠️ Rollback failed for '{module_name}': {e}")
+            return
+
+        self.refresh_module_status()
+        self.load_module_versions()
+
     def refresh_requests(self):
         self.refresh_module_status()
         self.refresh_activity()
@@ -1331,6 +1572,149 @@ class AlexController(QWidget):
                 self.alex_log.append(f"⚠️ Failed to approve access for request #{request_id}: {e}")
 
         self.refresh_requests()
+
+    def view_search_findings(self):
+        """Shows a selected search-activity row's actual findings/sources
+        before you have to decide anything about it — see the comment
+        above view_findings_btn for why this exists. Read-only, doesn't
+        change any state; safe to open on a row in any status (a
+        not-yet-searched row will just show 'no findings yet')."""
+        rows = sorted({idx.row() for idx in self.search_activity_table.selectionModel().selectedRows()})
+
+        if not rows:
+            self.alex_log.append("⚠️ Select a search-activity row first.")
+            return
+
+        if len(rows) > 1:
+            self.alex_log.append("⚠️ Select only one row at a time to view its findings.")
+            return
+
+        id_item = self.search_activity_table.item(rows[0], 0)
+        if not id_item:
+            return
+
+        report_id = int(id_item.text())
+
+        try:
+            report = asyncio.run(get_query_report(report_id))
+        except Exception as e:
+            self.alex_log.append(f"⚠️ Failed to load findings for request #{report_id}: {e}")
+            return
+
+        if not report:
+            self.alex_log.append(f"⚠️ Request #{report_id} no longer exists.")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Search Findings — Request #{report_id}")
+        dialog.resize(640, 420)
+
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel(f"Query: {report['query']}"))
+
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setPlainText(
+            (report["findings"] or "(no findings yet — search hasn't run)")
+            + "\n\nSources:\n"
+            + (report["sources"] or "(none)")
+        )
+        layout.addWidget(text)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        layout.addWidget(close_btn)
+
+        dialog.setLayout(layout)
+        dialog.exec()
+
+    def approve_search_execution(self):
+        """Resolves a selected search_activity_table row's FIRST-stage
+        approval directly by report ID — the actual search execution,
+        not the later retain decision (see approve_search_retention()
+        below for that). Found live (2026-07-18): a non-creator user can
+        propose a search but require_creator() blocks them from ever
+        confirming one, and there was no Controller path back into that
+        stuck 'pending_search_approval' state at all — same problem the
+        retain buttons solve, one stage earlier. Only acts on rows still
+        actually at that stage, so this can't skip ahead of or redo an
+        already-resolved row.
+
+        Local imports for the module load/run, same reasoning as
+        approve_search_retention()'s own docstring — this module's
+        run_search() has its own import weight, no reason to pay it on
+        every Controller launch for a rarely-used button."""
+        from module_runtime.module_loader import load_module
+
+        rows = sorted({idx.row() for idx in self.search_activity_table.selectionModel().selectedRows()})
+        if not rows:
+            return
+
+        for r in rows:
+            id_item = self.search_activity_table.item(r, 0)
+            query_item = self.search_activity_table.item(r, 2)
+            status_item = self.search_activity_table.item(r, 3)
+            if not id_item or not status_item:
+                continue
+
+            if status_item.text() != "pending_search_approval":
+                self.alex_log.append(
+                    f"⚠️ Request #{id_item.text()} status is '{status_item.text()}', not 'pending_search_approval' — skipped."
+                )
+                continue
+
+            report_id = int(id_item.text())
+            query = query_item.text() if query_item else ""
+
+            async def _run(report_id=report_id, query=query):
+                await resolve_search_approval(report_id, True)
+                module = await load_module("inquiry")
+                if not module:
+                    return None, "inquiry module unavailable"
+                findings, sources = await module.run_search(query)
+                await attach_search_findings(report_id, findings, sources)
+                return findings, None
+
+            try:
+                findings, error = asyncio.run(_run())
+                if error:
+                    self.alex_log.append(f"⚠️ Search #{report_id} approved but failed to run: {error}")
+                else:
+                    preview = (findings or "")[:200]
+                    self.alex_log.append(
+                        f"[SYSTEM] Search #{report_id} ('{query}') ran via Controller — findings: {preview}"
+                    )
+            except Exception as e:
+                self.alex_log.append(f"⚠️ Failed to run search #{report_id}: {e}")
+
+        self.refresh_search_activity()
+
+    def decline_search_execution(self):
+        rows = sorted({idx.row() for idx in self.search_activity_table.selectionModel().selectedRows()})
+        if not rows:
+            return
+
+        for r in rows:
+            id_item = self.search_activity_table.item(r, 0)
+            status_item = self.search_activity_table.item(r, 3)
+            if not id_item or not status_item:
+                continue
+
+            if status_item.text() != "pending_search_approval":
+                self.alex_log.append(
+                    f"⚠️ Request #{id_item.text()} status is '{status_item.text()}', not 'pending_search_approval' — skipped."
+                )
+                continue
+
+            report_id = int(id_item.text())
+
+            try:
+                asyncio.run(resolve_search_approval(report_id, False))
+                self.alex_log.append(f"[SYSTEM] Search #{report_id} declined via Controller")
+            except Exception as e:
+                self.alex_log.append(f"⚠️ Failed to decline search #{report_id}: {e}")
+
+        self.refresh_search_activity()
 
     def approve_search_retention(self):
         """Resolves a selected search_activity_table row's retain approval
@@ -1676,6 +2060,33 @@ class AlexController(QWidget):
                     self.log(f"[SYSTEM] Failed to stop A.L.E.X: {e}")
 
         self.update_status()
+
+    def restart_alex(self):
+        """Fast restart — the server process only, not Ollama or this
+        Controller (see restart_alex_btn's comment above for why this
+        was chosen over genuine infra-layer hot-reload). A fresh process
+        trivially picks up every code change correctly, sidestepping the
+        Python import-binding problem that makes true hot-reload
+        unreliable for these files.
+
+        Waits for port 5000 to actually clear before starting the new
+        process — .terminate() asks the process to exit but doesn't
+        block until it actually has, and starting immediately risks a
+        bind failure racing the old process's own shutdown."""
+        self.log("[ALEX] Restarting (server process only — Ollama and this Controller stay up)...")
+
+        self.stop_alex()
+
+        deadline = time.time() + 10
+        while is_port_open(5000) and time.time() < deadline:
+            time.sleep(0.2)
+
+        if is_port_open(5000):
+            self.log("[ALEX] ⚠️ Restart aborted — port 5000 still in use 10s after stopping. Check for a stuck process.")
+            return
+
+        self.start_alex()
+        self.log("[ALEX] Restart complete.")
 
     # ---------------- ORPHAN PROCESS CHECK ----------------
     def check_for_orphans(self, prompt_if_none=False):

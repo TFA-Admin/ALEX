@@ -353,8 +353,14 @@ body{
     <div class="tele-group">
       <div class="tele-label">Presence</div>
       <div class="tele-row" id="teleListen"><span>listening</span><span class="val" id="teleListenVal">off</span></div>
+      <div class="tele-row" id="teleEngaged"><span>engaged</span><span class="val" id="teleEngagedVal">no</span></div>
       <div class="tele-row" id="teleState"><span>state</span><span class="val" id="teleStateVal">off</span></div>
       <div id="micContainer"><div id="micLevel"></div></div>
+    </div>
+
+    <div class="tele-group">
+      <div class="tele-label">Background</div>
+      <div class="tele-row" id="teleSelfwork"><span>self-check</span><span class="val" id="teleSelfworkVal">idle</span></div>
     </div>
 
     <div class="tele-group">
@@ -437,6 +443,10 @@ const teleListen = document.getElementById("teleListen");
 const teleListenVal = document.getElementById("teleListenVal");
 const teleState = document.getElementById("teleState");
 const teleStateVal = document.getElementById("teleStateVal");
+const teleEngaged = document.getElementById("teleEngaged");
+const teleEngagedVal = document.getElementById("teleEngagedVal");
+const teleSelfwork = document.getElementById("teleSelfwork");
+const teleSelfworkVal = document.getElementById("teleSelfworkVal");
 const autoBtn = document.getElementById("autoBtn");
 const micLevel = document.getElementById("micLevel");
 const moodNameEl = document.getElementById("moodName");
@@ -476,6 +486,46 @@ function clearResponseTimeout(){
         clearTimeout(responseTimeoutHandle);
         responseTimeoutHandle = null;
     }
+}
+
+// 2026-07-18 (Craig: "her presence in the UI still says listening" — even
+// after "stop listening" correctly closed the conversation window
+// server-side) — the mic staying armed (continuous VAD, so she can catch
+// the NEXT wake word) and actually being addressed/engaged in a live
+// exchange are two different things this single "listening" indicator
+// used to conflate. ws/ws_handlers.py now sends a real __ENGAGED__0/1
+// signal every time it evaluates the wake-word gate; this mirrors the
+// server's own CONVERSATION_WINDOW_S locally so the display stays live
+// during the silent decay too, not just at the moment of the next
+// message. Cosmetic only — the server remains the actual authority on
+// whether a given utterance gets answered.
+const ENGAGED_WINDOW_MS = 45000; // must match ws/ws_handlers.py's CONVERSATION_WINDOW_S
+let engagedDecayHandle = null;
+
+function setEngaged(isEngaged){
+    if(engagedDecayHandle){ clearTimeout(engagedDecayHandle); engagedDecayHandle = null; }
+
+    teleEngagedVal.textContent = isEngaged ? "yes" : "no";
+    teleEngaged.classList.toggle("on", isEngaged);
+
+    if(isEngaged){
+        engagedDecayHandle = setTimeout(() => {
+            teleEngagedVal.textContent = "no";
+            teleEngaged.classList.remove("on");
+            engagedDecayHandle = null;
+        }, ENGAGED_WINDOW_MS);
+    }
+}
+
+// 2026-07-18 (Craig: "if she's working on something in the background
+// like tuning herself would it show that?") — core/self_reflection.py
+// sends __SELFWORK__1 right before it starts a real reflection pass
+// (multiple genuine LLM calls) and __SELFWORK__0 when it's done (even on
+// failure, via a finally block server-side) — this is the only place
+// that background activity was ever surfaced anywhere before now.
+function setSelfwork(active){
+    teleSelfworkVal.textContent = active ? "active" : "idle";
+    teleSelfwork.classList.toggle("on", active);
 }
 
 /* ✅ DEBUG HELPER */
@@ -701,6 +751,16 @@ ws.onmessage = (e)=>{
         return;
     }
 
+    if(typeof data === "string" && data.startsWith("__ENGAGED__")){
+        setEngaged(data.replace("__ENGAGED__", "") === "1");
+        return;
+    }
+
+    if(typeof data === "string" && data.startsWith("__SELFWORK__")){
+        setSelfwork(data.replace("__SELFWORK__", "") === "1");
+        return;
+    }
+
     if(data === "__START__"){
         currentMsg = "";
 
@@ -774,6 +834,19 @@ ws.onmessage = (e)=>{
 };
 
 function appendBotText(text){
+    // 2026-07-18 (Craig: sentences were running together with no space
+    // between them, e.g. "Text only it is.No mic means...") — traced to
+    // ws/ws_utils.py's split_speakable_text(): its regex match ends
+    // exactly at the clause's closing punctuation (the whitespace after
+    // it is only a lookahead, never actually consumed), so every clause
+    // sent to the client is already missing the natural space that used
+    // to separate it from the next one. Fixed here, at the one place
+    // clauses actually get concatenated, rather than risking a trailing
+    // space finding its way into what's also fed to TTS synthesis
+    // server-side.
+    if(currentMsg && !/\s$/.test(currentMsg) && !/^\s/.test(text)){
+        currentMsg += " ";
+    }
     currentMsg += text;
     if(currentDiv){ currentDiv.textContent = currentMsg; }
 }
@@ -900,6 +973,7 @@ function stopListening(){
     teleListen.classList.remove("on");
     clearResponseTimeout();
     setListenState("off");
+    setEngaged(false);
     try{ recorder.stop(); }catch{}
     // micVad now persists across listen/stop cycles (real VAD models want
     // to keep their internal state warm) instead of being torn down and
@@ -1105,8 +1179,11 @@ function animateOrb(){
 
     displayLevel += (audioLevel - displayLevel) * 0.25;
 
+    // 2026-07-17 (Craig: "make the color change a little slower when she
+    // shifts moods") — was 0.04, roughly a 1-1.5s ease; slowed to a ~3-4s
+    // ease so a mood shift reads as a real drift, not a snap.
     for(let i=0;i<3;i++){
-        displayColor[i] += (targetColor[i] - displayColor[i]) * 0.04;
+        displayColor[i] += (targetColor[i] - displayColor[i]) * 0.015;
     }
     const [r, g, b] = displayColor.map(Math.round);
 

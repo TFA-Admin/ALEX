@@ -18,30 +18,14 @@ async def main():
         r = await client.post(f"{BASE_URL}/ask", json=data)
         print("Response:", r.json()["response"])
         
-        # 3️⃣ Add a personal fact (favorite color)
-        print("\n→ Adding a personal fact...")
-        data = {"user": "Alice", "key": "favorite_color", "value": "blue"}
-        r = await client.post(f"{BASE_URL}/add_fact", json=data)
-        print("Add fact response:", r.json())
-        
-        # 4️⃣ Ask a question about the fact
-        print("\n→ Asking about favorite color...")
-        data = {"user": "Alice", "prompt": "What is my favorite color?"}
-        r = await client.post(f"{BASE_URL}/ask", json=data)
-        print("Response:", r.json()["response"])
-        
-        # 5️⃣ Update the fact and ask again
-        print("\n→ Updating favorite color...")
-        data = {"user": "Alice", "key": "favorite_color", "value": "green"}
-        r = await client.post(f"{BASE_URL}/update_fact", json=data)
-        print("Update fact response:", r.json())
-        
-        print("\n→ Asking updated favorite color...")
-        data = {"user": "Alice", "prompt": "What is my favorite color now?"}
-        r = await client.post(f"{BASE_URL}/ask", json=data)
-        print("Response:", r.json()["response"])
-        
-        # 6️⃣ Test memory recall
+        # 2026-07-18: /add_fact and /update_fact were removed from
+        # api/routes.py (unauthenticated, arbitrary-key fact writes —
+        # this was the only caller). A fact like favorite_color now has
+        # to be set the same way a real user sets one: through the
+        # conversational path itself (systems/facts/system.py), which is
+        # what /ask already exercises above.
+
+        # 3️⃣ Test memory recall
         print("\n→ Checking memory recall...")
         data = {"user": "Alice", "prompt": "Please summarize what I told you."}
         r = await client.post(f"{BASE_URL}/ask", json=data)

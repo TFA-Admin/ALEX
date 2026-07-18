@@ -26,6 +26,101 @@ MIN_AUDIO_BYTES = 6000
 SPEECH_DEBOUNCE = 1.8
 CONFIRM_TIMEOUT = 30  # seconds
 
+# 2026-07-18 (Craig: "would she ever ask something like 'are you still
+# there?'... I've also to this day never received an unprompted
+# question" / "if she's working on something in the background... would
+# it show that?") — everything before this was request->response only;
+# nothing could push a message into a session that was already open and
+# just sitting idle. Curiosity questions (core/self_reflection.py) only
+# ever got delivered inside the connect-time handshake below, so a
+# session that stays open continuously (likely, given auto-listen) could
+# sit on a queued question indefinitely. This registry is what makes a
+# real push possible: session_id -> the live websocket + role, kept in
+# sync with actual connect/disconnect (see ws_text()'s try/finally).
+_active_connections = {}
+
+
+async def push_to_creator(text: str, speak: bool = True) -> bool:
+    """Sends `text` into every currently-connected, voice-verified creator
+    session, unprompted — the actual mechanism behind proactive curiosity
+    delivery and the idle check-in (see main.py's periodic_proactive_check()).
+    Reuses the exact __START__/text/__END__ envelope a normal reply
+    already uses, so the browser needs no new protocol to render it.
+
+    Also refreshes last_addressed_at the same way a normal response does
+    (core/response_handler.py) — she just said something unprompted, so a
+    reply without repeating the wake word should still land, same as any
+    other turn she just spoke in.
+
+    Returns True if at least one live session received it, False if
+    nobody's actually connected right now (nothing to push to — not an
+    error, just means it'll have to wait for the next connect, same as
+    before this existed)."""
+    from core.alex_core import alex_core
+    from speech.tts_engine import synthesize_speech
+
+    delivered = False
+
+    for session_id, conn in list(_active_connections.items()):
+        if conn.get("role") != "creator":
+            continue
+
+        session = alex_core.get_session(session_id)
+        if not session.get("creator_verified"):
+            continue
+
+        websocket = conn["websocket"]
+
+        try:
+            await websocket.send_text("__START__")
+            await websocket.send_text(text)
+
+            if speak:
+                pcm = await synthesize_speech(text)
+                if pcm:
+                    await websocket.send_bytes(pcm)
+
+            await websocket.send_text("__END__")
+            session["last_addressed_at"] = time.time()
+            # Keeps the client's "engaged" indicator honest — without
+            # this, the server would correctly accept an unaddressed
+            # follow-up reply (last_addressed_at is real), but the UI
+            # would still show "engaged: no" since it never heard about
+            # this push at all.
+            await websocket.send_text("__ENGAGED__1")
+            delivered = True
+        except Exception as e:
+            logger.warning(f"⚠️ push_to_creator failed for session {session_id}: {e}")
+
+    return delivered
+
+
+def get_active_creator_session_ids():
+    """Session IDs of currently-connected role='creator' connections —
+    used by core/proactive.py to decide which sessions might be worth an
+    idle check-in, without reaching into _active_connections directly.
+    Not filtered by creator_verified here (push_to_creator() re-checks
+    that fresh at send time) — this only answers "is anyone claiming to
+    be the creator connected right now"."""
+    return [sid for sid, conn in _active_connections.items() if conn.get("role") == "creator"]
+
+
+async def send_signal_to_creator(raw_text: str):
+    """A raw status ping to every connected creator session — NOT routed
+    through the chat display/speech envelope push_to_creator() uses.
+    Behind core/self_reflection.py's __SELFWORK__0/1 (Craig: "if she's
+    working on something in the background... would it show that?"),
+    same pattern __ENGAGED__/__MOOD__ already use for other UI state that
+    isn't part of the conversation transcript itself."""
+    for session_id, conn in list(_active_connections.items()):
+        if conn.get("role") != "creator":
+            continue
+        try:
+            await conn["websocket"].send_text(raw_text)
+        except Exception as e:
+            logger.warning(f"⚠️ send_signal_to_creator failed for session {session_id}: {e}")
+
+
 # 2026-07-17 (Craig: wants continuous listening without "generic
 # background chaos" — nothing today distinguishes speech directed at her
 # from speech that just happened near the mic). Word-boundary match, not
@@ -45,6 +140,47 @@ WAKE_WORD_RE = re.compile(r"\balex\b", re.IGNORECASE)
 # conversation with normal pauses doesn't get cut off mid-thought.
 # Starting point, not tuned — can't be verified without live use.
 CONVERSATION_WINDOW_S = 45
+
+# 2026-07-17 (Craig: "she continues to respond to obvious end of
+# discussion statements") — an unaddressed closing remark ("that's all
+# for now") still passes the in-window check above and gets a real
+# reply, and core/response_handler.py refreshes last_addressed_at again
+# once that reply finishes (added earlier tonight so a long response
+# doesn't eat the window before Craig can reply) — the two combined mean
+# a conversation that's actually over never lets the window expire on
+# its own, as long as anything keeps getting said within it. Deterministic
+# phrase list, same convention as systems/command/system.py's trigger
+# lists (kept deterministic there for the same reliability-over-cost
+# reason) rather than a per-turn classifier call.
+# "Stop listening" is a direct, explicit command — checked against the
+# REAL transcript log (db/memory.db) and confirmed Craig actually says
+# this exact phrase, twice, and it did nothing (still got a chatty
+# reply, still stayed "in conversation" afterward). Unlike the softer
+# phrases below, this one closes the window regardless of where in the
+# utterance it appears — there's no ambiguous, unrelated-topic reading
+# of "stop listening" the way there is for e.g. "I'm done".
+_STOP_LISTENING_RE = re.compile(r"\bstop listening\b|\bquit listening\b", re.IGNORECASE)
+
+_END_OF_DISCUSSION_PHRASES_RE = re.compile(
+    r"\b(that'?s (all|it|enough)|that is (all|it|enough)|that'?ll be all|"
+    r"we'?re done|i'?m done|never ?mind|good ?bye|good ?night|"
+    r"talk (to you )?later|catch you later)\b",
+    re.IGNORECASE
+)
+
+
+def _is_closing_remark(text: str) -> bool:
+    if _STOP_LISTENING_RE.search(text):
+        return True
+
+    match = _END_OF_DISCUSSION_PHRASES_RE.search(text)
+    if not match:
+        return False
+    # Only counts if the phrase is near the end of what was actually
+    # said — trailing filler ("...for now") is fine, but this avoids
+    # matching mid-sentence about something unrelated (e.g. "I'm done
+    # with this task, keep going on the next one").
+    return len(text[match.end():].strip()) <= 15
 
 
 def is_unlocked(user_id):
@@ -144,6 +280,12 @@ async def ws_text(websocket: WebSocket):
         # privileged action; role alone is just a claimed identity)
         # -------------------------
         role = await get_user_role(user_id)
+
+        # Registered here (not at connection start) since push_to_creator()
+        # only ever targets a verified creator, and role is unknown until
+        # now. Cleared in the finally block below regardless of how this
+        # connection ends.
+        _active_connections[session_id] = {"websocket": websocket, "role": role}
 
         if role in ("creator", "super_user") and not session.get("creator_verified"):
             # not already verified above (voice-first recognition during
@@ -320,6 +462,11 @@ async def ws_text(websocket: WebSocket):
     except WebSocketDisconnect:
         logger.info(f"🔴 WS disconnected: {session_id}")
 
+    finally:
+        # Safe no-op if this session never got far enough to register
+        # (e.g. disconnected mid-handshake).
+        _active_connections.pop(session_id, None)
+
 
 # -------------------------
 # MESSAGE PROCESSOR
@@ -355,9 +502,26 @@ async def process_message(websocket, msg, user_id, session_id, audio, audio_byte
 
             if not (addressed or in_window):
                 await send_debug(websocket, f"🙉 Not addressed, ignored: {prompt_text!r}")
+                # 2026-07-18 (Craig: "her presence in the UI still says
+                # listening" after "stop listening" worked server-side) —
+                # the mic staying armed (continuous VAD, needed to catch
+                # the next wake word) and actually being addressed/engaged
+                # are two different things the UI used to conflate into
+                # one "listening" indicator. This tells the browser the
+                # true engaged state the instant something gets silently
+                # dropped, not just after the next reply.
+                await websocket.send_text("__ENGAGED__0")
                 return
 
-            session["last_addressed_at"] = now
+            # A closing remark still gets a real reply (it's already
+            # addressed/in-window), but the window closes right now
+            # instead of extending — response_handler.py checks this same
+            # flag and skips its own end-of-turn refresh, so the reply
+            # itself can't re-open what Craig just closed.
+            closing = _is_closing_remark(prompt_text)
+            session["last_addressed_at"] = 0 if closing else now
+            session["conversation_closing"] = closing
+            await websocket.send_text("__ENGAGED__0" if closing else "__ENGAGED__1")
             msg = prompt_text
 
         # -------------------------

@@ -193,6 +193,18 @@ class System(BaseSystem):
         if not user_input:
             return None
 
+        # One-shot — set by systems/facts/system.py only on the exact
+        # turn a fact was just forgotten (or a forget attempt was
+        # blocked). Popped here, at the very top, rather than further
+        # down past the early-return paths below (bare-acknowledgment
+        # suppression, learned_knowledge cache hit) — those return before
+        # ever reaching the context-building code further down, and a
+        # value that missed being popped would otherwise sit in session
+        # and get incorrectly picked up on a LATER, unrelated turn — the
+        # exact class of "stale context bleeding into now" bug Craig
+        # flagged (2026-07-18) about FACTS being referenced too eagerly.
+        fact_action_context = session.pop("fact_action_context", "")
+
         # -------------------------
         # SUPPRESS — a bare acknowledgment ("thanks") right after her own
         # closing-type statement ("let me know if you need anything else")
@@ -260,6 +272,9 @@ class System(BaseSystem):
         if memory_context:
             context_blocks.append(f"MEMORY:\n{memory_context}")
 
+        if fact_action_context:
+            context_blocks.append(f"WHAT JUST HAPPENED (state this truthfully, nothing else):\n{fact_action_context}")
+
         context_text = "\n\n".join(context_blocks) if context_blocks else "No stored facts."
 
         personality = await get_personality()
@@ -312,6 +327,15 @@ class System(BaseSystem):
 
     - FACTS are the only source of truth for stored personal data (name,
       job, etc.) — MEMORY may be incomplete for that purpose.
+    - FACTS are there for when you actually need them (the user asks about
+      one, or one is directly relevant to answering their current
+      question) — they are not a prompt to bring up unprompted. Don't
+      volunteer a stored fact into a conversation that's only loosely or
+      coincidentally related to it (2026-07-18: Craig mentioned his
+      Corvette was blue, and got an unprompted "doesn't that clash with
+      your favorite color?" — his favorite color wasn't what he was
+      talking about, and forcing a connection to it read as jarring, not
+      attentive).
     - MEMORY includes your actual recent conversation turns with this user.
       Use it to stay coherent across turns — if the user says "do that" or
       refers back to something without repeating it, MEMORY is where you

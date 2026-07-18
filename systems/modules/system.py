@@ -15,8 +15,6 @@ entirely through Claude authoring code directly in a dev session
 (tools/pending_builds.py), not through any live voice/chat flow.
 """
 
-import time
-
 from core.system_base import BaseSystem
 
 from module_runtime.module_loader import (

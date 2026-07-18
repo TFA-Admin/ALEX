@@ -17,6 +17,7 @@ later"). Plain LLM-knowledge answers are untouched by this — this system
 only ever fires for a real, stated request to search.
 """
 import time
+from datetime import datetime, timedelta, timezone
 
 from core.system_base import BaseSystem
 from core.text_utils import first_word, strip_trailing_punctuation
@@ -40,6 +41,16 @@ from db.db import (
 _pending = {}
 
 PENDING_TIMEOUT = 60
+
+# 2026-07-18 (Craig, after a retained finding said race results "aren't
+# posted yet": "what happens when that information changes... isn't
+# that an issue?") — a live web search is inherently a snapshot of a
+# moment in time, not a timeless fact; without this, the exact same
+# question later would just replay the stale answer forever instead of
+# reflecting that the world moved on. 24h is a reasoned starting point
+# (long enough to answer a same-day follow-up, short enough that stale
+# current-events info doesn't linger) — not tuned against real usage.
+RETAINED_SEARCH_TTL_HOURS = 24
 
 SEARCH_TRIGGERS = ("look up", "search for", "search the web for", "google")
 
@@ -251,10 +262,16 @@ async def retain_report(report_id: int):
     related = await find_related_knowledge(report["query"])
     supersedes = related[0]["id"] if related else None
 
+    # Stored as a plain "YYYY-MM-DD HH:MM:SS" string in UTC, matching
+    # SQLite's own datetime('now') default (also UTC) — fetch_active_knowledge()'s
+    # comparison depends on both sides using the same clock.
+    expires_at = (datetime.now(timezone.utc) + timedelta(hours=RETAINED_SEARCH_TTL_HOURS)).strftime("%Y-%m-%d %H:%M:%S")
+
     vec = embed(report["findings"])
     kid = await create_learned_knowledge(
         report["query"], report["findings"], report["sources"],
-        report_id, vec, supersedes=supersedes, user=report["requested_by"]
+        report_id, vec, supersedes=supersedes, user=report["requested_by"],
+        expires_at=expires_at
     )
 
     return kid, supersedes

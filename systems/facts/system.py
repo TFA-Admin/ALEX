@@ -10,10 +10,13 @@ Responsibilities:
 - Inject facts into session
 """
 
+import re
+
 from core.system_base import BaseSystem
-from db.db import fetch_user_facts, update_fact
+from db.db import fetch_user_facts, update_fact, delete_fact, log_security_event
 from config.logger_config import logger
-from systems.permissions.system import LOCKED_KEYS
+from systems.permissions.system import LOCKED_KEYS, OVERRIDE_ONLY_KEYS
+from core.override_code import is_creator_override_code
 
 
 # -------------------------
@@ -49,6 +52,65 @@ FACT_RULES = [
 ]
 
 HYPOTHETICALS = ["what if", "if ", "suppose", "imagine", "pretend", "would be"]
+
+# 2026-07-18 (Craig: "she can add things without it but to require it to
+# remove them seems a bit off") — mirrors ALLOWED_FACT_KEYS/FACT_RULES
+# above: same three casual, no-code fields, now removable the same way
+# they're added. Real identity facts (role/user_name/codes) never go
+# through this system at all, so there's nothing security-sensitive to
+# accidentally expose here — only ever the low-stakes tier.
+FACT_LABELS = {
+    "favorite_color": ("favorite color", "favourite color"),
+    "alias": ("name", "alias", "nickname"),
+    "job": ("job", "occupation"),
+}
+
+FORGET_TRIGGER_RE = re.compile(r"\b(?:forget|remove|clear|delete)\s+my\s+(.+)$", re.IGNORECASE)
+
+
+def extract_forget_key(text: str, existing_keys):
+    """Returns the fact key to delete, or None. Deliberately narrow — an
+    explicit forget/remove/clear/delete verb plus "my" plus a label, same
+    strict-match philosophy as extract_fact_deterministic() below (avoids
+    matching a merely-topic-adjacent remark like "forget it" or "never
+    mind", which already mean something else entirely — see
+    ws/ws_handlers.py's end-of-discussion detection).
+
+    2026-07-18 (Craig: found a stray "personality" fact in his own
+    profile that no current code even writes — confirmed live: only a
+    since-removed classifier path or the unauthenticated /update_fact
+    HTTP endpoint in api/routes.py could have put it there. The facts
+    table was never actually limited to ALLOWED_FACT_KEYS in practice,
+    so "we can't just hard code the removal fields" is correct — this
+    now also matches the spoken label directly against whatever keys are
+    ACTUALLY present for this user (existing_keys), not just the three
+    with a hand-written friendly name. The caller (handle(), below)
+    still gates the result through LOCKED_KEYS/OVERRIDE_ONLY_KEYS before
+    ever deleting anything — this function only identifies WHICH key was
+    named, not whether removing it is allowed."""
+    match = FORGET_TRIGGER_RE.search(text.strip())
+    if not match:
+        return None
+
+    # Prefix match, not exact-equals — "forget my job, thanks" or "forget
+    # my job we're done here" both still name "job" first; real speech
+    # (especially STT transcripts, which often carry no punctuation at
+    # all) shouldn't need to end exactly there. \b keeps "job" from
+    # matching a longer unrelated word like "jobless".
+    remainder = match.group(1).strip().lower()
+
+    for key, labels in FACT_LABELS.items():
+        for label in labels:
+            if re.match(rf"{re.escape(label)}\b", remainder):
+                return key
+
+    normalized = remainder.replace(" ", "_")
+    for key in existing_keys:
+        key_spaced = key.replace("_", " ")
+        if re.match(rf"{re.escape(key)}\b", normalized) or re.match(rf"{re.escape(key_spaced)}\b", remainder):
+            return key
+
+    return None
 
 # 🔒 Deterministic guard on the "alias" VALUE, not the trigger phrase — the
 # classifier is asked to recognize "I am Mary" as a name statement without
@@ -207,24 +269,86 @@ class System(BaseSystem):
             return None
 
         # -------------------------
-        # EXTRACT + STORE
-        # -------------------------
-        key, value = extract_fact(text, session)
-
-        if key and value:
-            try:
-                await update_fact(user_id, key, value)
-                logger.info(f"[ACTION] Fact set for {user_id}: {key} = {value!r} (from: {text!r})")
-            except Exception as e:
-                print(f"⚠️ Fact store error: {e}")
-
-        # -------------------------
-        # LOAD FACTS
+        # LOAD FACTS (loaded first — the forget-path below needs the
+        # real key set to match a spoken label against, and this same
+        # dict is reused for fact_context at the end instead of a second
+        # fetch)
         # -------------------------
         try:
             facts = await fetch_user_facts(user_id)
-        except:
+        except Exception:
             facts = {}
+
+        # -------------------------
+        # FORGET (checked first — "forget my name" would otherwise also
+        # partially resemble an add-trigger's surrounding words)
+        # -------------------------
+        forget_key = extract_forget_key(text, facts.keys())
+
+        if forget_key:
+            # Same two-tier protection ADDING these fields already goes
+            # through (systems/permissions/system.py) — removal can't be
+            # looser than writing. LOCKED_KEYS never leaves conversation
+            # at all; OVERRIDE_ONLY_KEYS needs the real override code
+            # actually present in what was said (core/override_code.py),
+            # not just asked for.
+            #
+            # 2026-07-18 (Craig: "she did remove my favorite color but
+            # then made something odd up in response — mentions blue") —
+            # a fact ADD is always naturally, truthfully acknowledgeable
+            # (the user's own words already state the new value, so the
+            # LLM has real content to reflect back), but a FORGET has no
+            # equivalent: nothing in her context said what happened, so
+            # she filled the gap with whatever was conversationally
+            # nearby (a blue Corvette mentioned minutes earlier) instead
+            # of admitting she had nothing real to say. fact_action_context
+            # (read by systems/llm/system.py, one-shot) gives her the
+            # actual, true outcome to work from instead of a blank.
+            if forget_key in LOCKED_KEYS:
+                logger.info(f"[SECURITY] Blocked casual removal of locked fact '{forget_key}' for {user_id}: {text!r}")
+                await log_security_event(user_id, "fact_forget_blocked", f"locked field '{forget_key}': {text!r}")
+                session["fact_action_context"] = (
+                    f"Craig just asked you to forget his '{forget_key}' field, but that "
+                    f"field is protected and can never be removed through casual "
+                    f"conversation. Tell him plainly that you can't do that this way — "
+                    f"don't invent a reason beyond it being a protected field."
+                )
+            elif forget_key in OVERRIDE_ONLY_KEYS and not await is_creator_override_code(text):
+                logger.info(f"[SECURITY] Blocked removal of override-only fact '{forget_key}' for {user_id} (no override code): {text!r}")
+                await log_security_event(user_id, "fact_forget_blocked", f"override-only field '{forget_key}' attempted without override code: {text!r}")
+                session["fact_action_context"] = (
+                    f"Craig just asked you to forget his '{forget_key}' field, but that "
+                    f"needs his real override code stated in the same request and it "
+                    f"wasn't there. Tell him plainly he needs to include the override "
+                    f"code to remove that one."
+                )
+            else:
+                try:
+                    await delete_fact(user_id, forget_key)
+                    facts.pop(forget_key, None)
+                    logger.info(f"[ACTION] Fact forgotten for {user_id}: {forget_key} (from: {text!r})")
+                    session["fact_action_context"] = (
+                        f"You just permanently removed the '{forget_key}' fact from "
+                        f"Craig's profile, per his request. Confirm this plainly. Do "
+                        f"NOT invent, guess, or restate what the old value used to be, "
+                        f"and do NOT suggest or assign a new value — it is simply gone."
+                    )
+                except Exception as e:
+                    print(f"⚠️ Fact delete error: {e}")
+
+        # -------------------------
+        # EXTRACT + STORE
+        # -------------------------
+        else:
+            key, value = extract_fact(text, session)
+
+            if key and value:
+                try:
+                    await update_fact(user_id, key, value)
+                    facts[key] = value
+                    logger.info(f"[ACTION] Fact set for {user_id}: {key} = {value!r} (from: {text!r})")
+                except Exception as e:
+                    print(f"⚠️ Fact store error: {e}")
 
         # -------------------------
         # BUILD CONTEXT

@@ -316,6 +316,29 @@ PHRASE_REGISTRY = {
     ),
 }
 
+# 2026-07-18 (Craig, watching a wrong override-code attempt get rewritten
+# over several self-reflection passes into "Oopsie!... Better hit that
+# reset button and try again": "I don't want to force a mood, but I would
+# think she should be aware that something like that would be serious.")
+# — these are the lines that fire specifically when someone failed an
+# authorization/identity check. core/self_reflection.py's
+# _reflect_on_phrase() reads this set to add an explicit "stay serious"
+# constraint to its own rewording prompt for exactly these keys — the fix
+# is her genuinely treating this category as grave regardless of overall
+# personality, not an external mood tag layered on after the fact.
+SECURITY_SENSITIVE_PHRASES = {
+    "denial_not_creator",
+    "denial_not_privileged",
+    "denial_not_verified",
+    "invalid_override_code",
+    "invalid_code_prompt",
+    "invalid_code_update_rejected",
+    "invalid_unlock_code",
+    "field_locked",
+    "not_authorized",
+    "cannot_change_creator_role",
+}
+
 
 async def get_phrase(key: str, **kwargs) -> str:
     default_text, _ = PHRASE_REGISTRY[key]
