@@ -754,6 +754,26 @@ async def queue_curiosity_question(topic: str, question: str):
         await db.commit()
 
 
+async def curiosity_topic_seen(topic: str) -> bool:
+    """Has she already queued a question about this topic, delivered or
+    not? 2026-09-20 — added with the curiosity fix in
+    core/self_reflection.py. The prompt there no longer has an opt-out
+    branch (it collapsed to "no" 5/5 on real data), so "should I ask this"
+    became a deterministic decision, and "I already asked" is the largest
+    part of it. Exact match on a normalized topic, not similarity: the
+    cost of missing a near-duplicate is one repeated question."""
+    key = " ".join(topic.lower().split())
+    if not key:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT 1 FROM curiosity_queue "
+            "WHERE lower(trim(topic)) = ? LIMIT 1",
+            (key,)
+        )
+        return await cursor.fetchone() is not None
+
+
 async def fetch_undelivered_curiosity_questions():
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(

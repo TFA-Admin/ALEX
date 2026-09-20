@@ -247,9 +247,19 @@ class System(BaseSystem):
 # ALEX_Controller.py can resolve a stale one directly by report ID,
 # without needing a live _pending entry or going through conversation at
 # all.
-async def retain_report(report_id: int):
+async def retain_report(report_id: int, ttl_hours=RETAINED_SEARCH_TTL_HOURS):
     """Promotes a query_report's findings into learned_knowledge.
-    Returns (kid, supersedes) — kid is None if the report doesn't exist."""
+    Returns (kid, supersedes) — kid is None if the report doesn't exist.
+
+    ttl_hours=None stores it with NO expiry. 2026-09-20: added for the
+    "want me to keep this?" offers in systems/llm/system.py. The 24h
+    default is right for a web search result, which is a snapshot of
+    something that may still be changing; it is wrong for something the
+    creator was asked about directly and said yes to. Craig, on expiry:
+    "I do want her to retain knowledge, not have her entire memory wiped
+    after a month." An explicit yes is the strongest keep signal there
+    is — stronger than the retrieval-based renewal in
+    systems/llm/system.py — so it is not put on a clock at all."""
     report = await get_query_report(report_id)
     if not report:
         return None, None
@@ -265,7 +275,10 @@ async def retain_report(report_id: int):
     # Stored as a plain "YYYY-MM-DD HH:MM:SS" string in UTC, matching
     # SQLite's own datetime('now') default (also UTC) — fetch_active_knowledge()'s
     # comparison depends on both sides using the same clock.
-    expires_at = (datetime.now(timezone.utc) + timedelta(hours=RETAINED_SEARCH_TTL_HOURS)).strftime("%Y-%m-%d %H:%M:%S")
+    expires_at = None
+    if ttl_hours is not None:
+        expires_at = (datetime.now(timezone.utc)
+                      + timedelta(hours=ttl_hours)).strftime("%Y-%m-%d %H:%M:%S")
 
     vec = embed(report["findings"])
     kid = await create_learned_knowledge(

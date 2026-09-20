@@ -16,6 +16,7 @@ from db.db import (
     fetch_recent_memory_all, get_personality, set_personality,
     log_personality_change, get_learned_phrase, set_learned_phrase,
     queue_curiosity_question, get_personality_hard_rules,
+    fetch_undelivered_curiosity_questions, curiosity_topic_seen,
     get_last_reflection_memory_id, set_last_reflection_memory_id,
     get_seconds_since_last_activity, get_seconds_since_last_personality_change,
     persona_disabled
@@ -180,8 +181,45 @@ async def _reflect_on_curiosity(recent):
     conversation happens to expose the gap. A judgment call, not a
     deterministic check, so — same as _reflect_on_personality/
     _reflect_on_phrase above — this trusts LLM judgment directly, no
-    creator approval gate; queued for delivery at the next verified
-    connect (ws/ws_handlers.py), not spoken mid-conversation."""
+    creator approval gate.
+
+    2026-09-20: `curiosity_queue` had **zero rows, ever** — in two months
+    of running, this function never once said yes. Craig: "Seems like that
+    needs to be fixed then. She should be able to ask questions, even about
+    something she just heard for the first time."
+
+    The prompt was the problem. It ended "Only say yes if it's a real,
+    nameable topic — not vague curiosity", and this project's own tuning
+    notes (core/intent_classifier.py, core/self_reflection.py's phrase
+    rewording) record the same lesson twice: qwen2.5 takes exclusion
+    clauses literally and each one added makes it more conservative. A
+    prompt that spends its last sentence describing what not to say yes to
+    gets "no" every time.
+
+    Rewriting the wording was NOT enough — measured against five real
+    20-turn windows from her own memory, the rewritten prompt still
+    returned "no" 5/5, exactly like the original.
+
+    The actual cause is the response SHAPE. Offering
+    `{"curious": false}` as a whole alternative object, under Ollama's
+    JSON-constrained decoding, lets the model satisfy the format with the
+    shorter branch, and it takes it every time. This is the same failure
+    core/intent_classifier.py records: asking for a nested
+    `{"intent": "fact", "key": ...}` made qwen2.5 collapse to
+    `{"intent": "none"}` on cases it got right with a flat shape.
+
+    Fixed by removing the opt-out branch. One flat object, always
+    populated. Same five windows, three runs each: a real question every
+    time — "Can you tell me more about your project to improve my
+    capabilities?"
+
+    The cost is that she now always HAS a question, so "is this worth
+    asking" can no longer be the model's call. That is handled below by
+    deterministic guards instead, which is the better place for it: this
+    only runs after a 300s lull with at least 3 genuinely new turns since
+    the last pass, and a question is dropped if one is already waiting or
+    if she has asked about the same topic before. She stays curious; the
+    guards stop it becoming nagging."""
     convo_text = "\n".join(
         f"{r['user']}: {r['prompt']}\nALEX: {r['response']}" for r in recent
     )
@@ -191,22 +229,36 @@ async def _reflect_on_curiosity(recent):
 Recent conversations:
 {convo_text}
 
-Is there a specific, distinct topic mentioned here that you genuinely don't have real knowledge about, that would be worth asking your creator to explain later? Only say yes if it's a real, nameable topic — not vague curiosity.
+What is the one thing mentioned here that you would most like to know more about? Write the question you would ask him about it.
 
 Respond with ONLY a JSON object:
-{{"curious": true, "topic": "<short topic>", "question": "<one natural sentence asking about it>"}}
-or
-{{"curious": false}}"""
+{{"topic": "<the thing, in a few words>", "question": "<one natural sentence asking him about it>"}}"""
 
     result = await ollama_manager.generate_json(prompt, timeout=20.0)
 
-    if not result or not result.get("curious"):
+    if not result:
         return None
 
     topic = str(result.get("topic", "")).strip()[:200]
     question = str(result.get("question", "")).strip()[:300]
 
     if not topic or not question:
+        return None
+
+    # A question already waiting to be asked means she has not had the
+    # chance to ask the last one yet. Queuing a second turns an unprompted
+    # question into a backlog, which is the failure mode Craig has objected
+    # to everywhere else ("things just sit there, I assume forever").
+    if await fetch_undelivered_curiosity_questions():
+        logger.info("[ACTION] Curiosity: a question is already waiting — not queuing another")
+        return None
+
+    # Nor ask about something she has asked about before. Deliberately an
+    # exact normalized topic match, not a similarity threshold: a cheap,
+    # predictable rule beats a tunable one here, and the cost of missing a
+    # near-duplicate is one repeated question.
+    if await curiosity_topic_seen(topic):
+        logger.info(f"[ACTION] Curiosity: already asked about {topic!r} — skipping")
         return None
 
     return topic, question
@@ -270,6 +322,25 @@ async def run_self_reflection():
     from ws.ws_handlers import send_signal_to_creator
     await send_signal_to_creator("__SELFWORK__1")
 
+    # 2026-09-20 — reflection was unobservable unless it changed something.
+    #
+    # Craig asked whether she had used an idle stretch for anything. The
+    # bookmark had advanced to his newest turn, so she had genuinely
+    # reflected on everything — and produced no personality change and no
+    # curiosity question, logging neither. From outside, a pass that
+    # considered 20 turns and decided nothing is indistinguishable from a
+    # pass that never ran, or from the scheduler being broken. His
+    # question — "So other than run the reflection... it didn't actually
+    # DO anything?" — could not be answered from her own records, only by
+    # reading her database by hand.
+    #
+    # So every pass now says what it looked at and what it decided, "no
+    # change" included. This is logging, not a new mechanism: deciding not
+    # to change is a legitimate outcome and the point is that it is now a
+    # visible one.
+    outcome = []
+    logger.info(f"[REFLECTION] Pass starting — {len(recent)} new turns since #{last_id}")
+
     try:
         try:
             curiosity = await _reflect_on_curiosity(recent)
@@ -280,7 +351,10 @@ async def run_self_reflection():
         if curiosity:
             topic, question = curiosity
             await queue_curiosity_question(topic, question)
+            outcome.append(f"queued a question about {topic!r}")
             logger.info(f"[ACTION] Queued curiosity question: {question}")
+        else:
+            outcome.append("no question")
 
         # 2026-09-20: while the persona switch is on she is speaking in a
         # neutral voice that is not hers, so letting her reflect on "how these
@@ -290,12 +364,15 @@ async def run_self_reflection():
         # not about who she is. Phrase re-voicing below is skipped with it,
         # since it is downstream of a personality change that cannot happen.
         if persona_disabled():
-            logger.info("[PERSONALITY] Persona switch on — skipping personality reflection")
+            outcome.append("personality reflection skipped (persona switch on)")
+            logger.info(f"[REFLECTION] Pass complete — {'; '.join(outcome)}")
             return
 
         personality_change = await _reflect_on_personality(recent)
 
         if not personality_change:
+            outcome.append("personality unchanged")
+            logger.info(f"[REFLECTION] Pass complete — {'; '.join(outcome)}")
             return
 
         new_desc, reason = personality_change
@@ -303,7 +380,9 @@ async def run_self_reflection():
         await set_personality(new_desc)
         await log_personality_change(new_desc, reason, kind="personality")
 
+        outcome.append(f"personality changed ({reason})")
         logger.info(f"[PERSONALITY] Personality evolved: {new_desc} (reason: {reason})")
+        logger.info(f"[REFLECTION] Pass complete — {'; '.join(outcome)}")
 
         # personality shifted — let her optionally re-voice her scripted
         # phrases too. Capped to a small random sample per pass, NOT the

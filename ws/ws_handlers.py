@@ -399,15 +399,16 @@ async def ws_text(websocket: WebSocket):
 
                 if questions:
                     q = questions[0]
-                    curiosity_summary = (
-                        f"🤔 While you were away, I noticed I don't really know about "
-                        f"{q['topic']}. {q['question']}"
-                    )
 
+                    # 2026-09-20: sent as she wrote it. The "While you were
+                    # away, I noticed I don't really know about X." wrapper
+                    # this used to carry was a hardcoded line of mine around
+                    # a question of hers — see core/proactive.py for the same
+                    # fix and the reasoning.
                     logger.info(f"[ACTION] Delivered curiosity question: {q['question']}")
 
                     await websocket.send_text("__START__")
-                    await websocket.send_text(curiosity_summary)
+                    await websocket.send_text(q["question"])
                     await websocket.send_text("__END__")
 
                     await mark_curiosity_questions_delivered()

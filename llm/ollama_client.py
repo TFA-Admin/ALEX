@@ -42,6 +42,11 @@ DEFAULT_MODEL = os.getenv("ALEX_LLM_MODEL", "qwen2.5:7b")
 # margin for growth, verified affordable against live free VRAM.
 SHARED_NUM_CTX = 4096
 
+# Pool-level default only. Every method still passes its own per-request
+# timeout, which is what actually applies — this just has to be large
+# enough not to bound the streaming path.
+DEFAULT_TIMEOUT_S = 300.0
+
 # Same reasoning, same fix, different parameter — found live (2026-07-16)
 # via the exact same reload-thrashing test used to discover the num_ctx
 # bug above: generate_stream() was the only method setting num_batch (64);
@@ -70,16 +75,70 @@ class OllamaManager:
     def __init__(self):
         self.host = "http://127.0.0.1:11434"
         self.ready = False
+        self._client = None
+
+    # -------------------------
+    # SHARED CONNECTION (2026-09-20)
+    # -------------------------
+    def _get_client(self) -> httpx.AsyncClient:
+        """One pooled client for the process instead of a fresh
+        `httpx.AsyncClient` per call.
+
+        Measured, not assumed. Craig asked where the ~5s turn goes; the
+        logs said intent classification 1.00s mean, and a *minimal* prompt
+        ("Reply with only {"x":1}") through generate_json cost 0.76s — so
+        the prompt was never the cost. Isolating the call:
+
+            new client per call, 127.0.0.1 : 0.78 0.84 0.80 0.79
+            one reused client, 127.0.0.1   : 0.45 0.43 0.44 0.46
+
+        **~0.33s per call is TCP connection setup**, paid on every single
+        Ollama request in the process. Ollama's own reported
+        total_duration for that request is 378ms, so roughly half of every
+        short classification call was connection overhead.
+
+        This is per-request, so it applies to `generate_stream` too — the
+        turn's time-to-first-chunk (1.31s mean) pays the same 0.33s before
+        a single token is generated. Expected saving on an ordinary turn
+        is intent + generation, i.e. ~0.6s off 5.01s.
+
+        Created lazily because a client must be bound to the running event
+        loop, and re-created if something closed it. Timeouts stay
+        per-request (httpx allows it), so the 300s streaming budget and
+        the 15-20s classification budgets are unchanged."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                timeout=DEFAULT_TIMEOUT_S,
+                # keepalive_expiry is deliberately finite. Ollama sets no
+                # idle timeout today, but if a future version does, a
+                # connection the pool believes is alive would fail on the
+                # next send. Recycling once a minute makes that window
+                # small, and the retry below covers what is left.
+                limits=httpx.Limits(max_keepalive_connections=8,
+                                    max_connections=16,
+                                    keepalive_expiry=60.0),
+            )
+        return self._client
+
+    async def aclose(self):
+        """Not called on the normal path — the process outliving the pool
+        is fine. Exists so tests and the harness can release sockets
+        deterministically."""
+        if self._client is not None and not self._client.is_closed:
+            try:
+                await self._client.aclose()
+            except Exception:
+                pass
+        self._client = None
 
     async def init(self):
         while True:
             try:
-                async with httpx.AsyncClient(timeout=2.0) as client:
-                    r = await client.get(self.host)
-                    if r.status_code == 200:
-                        self.ready = True
-                        print("✅ Ollama ready")
-                        return
+                r = await self._get_client().get(self.host, timeout=2.0)
+                if r.status_code == 200:
+                    self.ready = True
+                    print("✅ Ollama ready")
+                    return
             except:
                 pass
 
@@ -129,47 +188,74 @@ class OllamaManager:
                 }
             }
 
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        # Shared pooled client — see _get_client(). A generation is the one
+        # call where the ~0.33s saved connection setup is visible to the
+        # user directly, since it comes off time-to-first-chunk.
+        #
+        # The retry exists only because the connection is now reused: a
+        # pooled socket the server has quietly dropped fails on send, which
+        # a fresh-client-per-call design could never hit. It retries ONCE,
+        # and only while nothing has been yielded yet — re-running a
+        # generation that already streamed half an answer would replay text
+        # the user has already heard. `yielded` is what enforces that.
+        attempt = 0
 
-            async with client.stream("POST", url, json=payload) as response:
+        while True:
+            yielded = False
+            client = self._get_client()
 
-                buffer = ""
+            try:
+                async with client.stream("POST", url, json=payload,
+                                         timeout=300.0) as response:
 
-                async for raw_chunk in response.aiter_raw():
+                    buffer = ""
 
-                    if not raw_chunk:
-                        await asyncio.sleep(0)
-                        continue
+                    async for raw_chunk in response.aiter_raw():
 
-                    try:
-                        buffer += raw_chunk.decode("utf-8")
-                    except:
-                        continue
-
-                    # 🔥 Process complete JSON lines
-                    while "\n" in buffer:
-                        line, buffer = buffer.split("\n", 1)
-
-                        if not line.strip():
+                        if not raw_chunk:
+                            await asyncio.sleep(0)
                             continue
 
                         try:
-                            data = json.loads(line)
-
-                            if raw_mode:
-                                content = data.get("response", "")
-                            else:
-                                content = data.get("message", {}).get("content", "")
-
-                            if content:
-                                yield content
-
-                        except Exception:
-                            # partial / malformed JSON → ignore safely
+                            buffer += raw_chunk.decode("utf-8")
+                        except:
                             continue
 
-                    # 🔥 CRITICAL: yield control to event loop
-                    await asyncio.sleep(0)
+                        # 🔥 Process complete JSON lines
+                        while "\n" in buffer:
+                            line, buffer = buffer.split("\n", 1)
+
+                            if not line.strip():
+                                continue
+
+                            try:
+                                data = json.loads(line)
+
+                                if raw_mode:
+                                    content = data.get("response", "")
+                                else:
+                                    content = data.get("message", {}).get("content", "")
+
+                                if content:
+                                    yielded = True
+                                    yield content
+
+                            except Exception:
+                                # partial / malformed JSON → ignore safely
+                                continue
+
+                        # 🔥 CRITICAL: yield control to event loop
+                        await asyncio.sleep(0)
+
+                return
+
+            except (httpx.RemoteProtocolError, httpx.ConnectError,
+                    httpx.ReadError, httpx.WriteError) as e:
+                if yielded or attempt >= 1:
+                    raise
+                attempt += 1
+                print(f"⚠️ Ollama stream connection dropped ({e}) — reconnecting once")
+                await self.aclose()
 
     async def generate_json(self, prompt: str, model: str = DEFAULT_MODEL, timeout: float = 15.0,
                              temperature: float = None):
@@ -203,20 +289,20 @@ class OllamaManager:
             options["temperature"] = temperature
 
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                r = await client.post(
-                    f"{self.host}/api/chat",
-                    json={
-                        "model": model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "stream": False,
-                        "format": "json",
-                        "options": options
-                    }
-                )
-                data = r.json()
-                content = data.get("message", {}).get("content", "")
-                return json.loads(content)
+            r = await self._get_client().post(
+                f"{self.host}/api/chat",
+                timeout=timeout,
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                    "format": "json",
+                    "options": options
+                }
+            )
+            data = r.json()
+            content = data.get("message", {}).get("content", "")
+            return json.loads(content)
 
         except Exception as e:
             print(f"⚠️ generate_json failed: {e}")
@@ -250,18 +336,18 @@ class OllamaManager:
             options["temperature"] = temperature
 
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                r = await client.post(
-                    f"{self.host}/api/chat",
-                    json={
-                        "model": model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "stream": False,
-                        "options": options
-                    }
-                )
-                data = r.json()
-                return data.get("message", {}).get("content", "") or None
+            r = await self._get_client().post(
+                f"{self.host}/api/chat",
+                timeout=timeout,
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                    "options": options
+                }
+            )
+            data = r.json()
+            return data.get("message", {}).get("content", "") or None
 
         except Exception as e:
             print(f"⚠️ generate_text failed: {e}")

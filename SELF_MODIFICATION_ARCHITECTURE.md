@@ -478,6 +478,139 @@ to `find_pid_by_port(5000)` and would kill it, and the standing 60s
 started outside the Controller. Stop the harness instance first and let the
 Controller own both processes.
 
+## Landed 2026-09-20 (evening) — the confabulation loop, curiosity, latency
+
+**1. Nothing is auto-stored into `learned_knowledge` any more. She asks.**
+Root cause of the garbage Craig had been seeing all day:
+`_is_factual_question()` counts **any message containing "?"** as factual, so
+virtually every conversational question he asked was filed as reusable
+knowledge. Of the 16 entries stored on 2026-09-20, **14 were conversational**;
+#525 stored her own hallucination ("You were going on and on about how green
+everything is") and #532 was replayed at similarity 0.91 twenty minutes later
+— Craig's "immediately follow it up with a recalled answer", found in the data.
+
+Craig: *"stop auto-storing entirely - Do so. Can we make her ask if I want
+something store instead? But only if it's real knowledge, I dont want to be
+asked about everything."*
+
+- `core/knowledge_filter.py` (new) — two stages, both of which can only say
+  NO. Deterministic rejects first (person reference, sentence fragments,
+  conversational phrasings, her own non-answers), then one short binary LLM
+  call on survivors. Measured against those exact 16: **14/14 junk rejected,
+  10 of them before any LLM call**, both genuine entries offered.
+- `systems/llm/system.py` — the auto-store is gone. `_maybe_offer_to_keep()`
+  stages an offer; the ask is a **context block, not a scripted line**, so she
+  phrases it (same shape as the awareness system, per Craig's "this is an
+  advisory not something hard coded into her though correct?").
+  `_resolve_keep_offer()` handles the answer.
+- An approved keep is stored with **no expiry** (`retain_report(ttl_hours=None)`).
+  Craig: *"I do want her to retain knowledge, not have her entire memory wiped
+  after a month."* An explicit yes outranks the use-based renewal.
+- Anything that is neither yes nor no **declines** the report rather than
+  leaving it pending — no new rows for the Activity-tab backlog to inherit.
+- Tested end to end against a copy of the database: yes → retained,
+  `expires_at=None`; no → `retain_denied`, 0 rows; moved on →
+  `retain_denied`, turn falls through normally.
+
+**Known miss, accepted:** "ok and what is the capital of France?" strips to
+"and what is..." and is dropped as a fragment, because nothing deterministic
+separates it from #525's "and what green screens?" — same three words, one a
+real question and one a confabulation.
+
+**2. Curiosity: `curiosity_queue` had zero rows in two months. Fixed, and the
+prompt was only half of it.** Rewriting the exclusion-heavy wording ("Only say
+yes if it's a real, nameable topic — not vague curiosity") still returned
+**no 5/5** against real 20-turn windows from her own memory. The actual cause
+was the response SHAPE: offering `{"curious": false}` as a whole alternative
+object lets JSON-constrained decoding satisfy the format with the shorter
+branch, and qwen2.5 takes it every time — the same failure
+`core/intent_classifier.py` already records for nested intent shapes. Removing
+the opt-out branch produces a real question every run.
+
+Because she now always has a question, "is it worth asking" moved from the
+model to deterministic guards: one undelivered question at a time, and never
+the same topic twice (`db.curiosity_topic_seen()`). Also fixed: the
+"While you were away, I noticed I don't really know about X." preamble was a
+hardcoded line of mine wrapped around a question of hers — removed from both
+delivery paths, which is the "disconnect" Craig described. And a new rule in
+her system prompt lets her ask **in the moment**, which nothing previously did.
+
+**3. Latency: ~0.6s off a 5.01s turn, and the cause was not the model.**
+Logs gave intent classification 1.00s mean. A *minimal* prompt through
+`generate_json` cost 0.76s, so the prompt was never the cost. Isolating it:
+
+| | measured |
+|---|---|
+| new `httpx.AsyncClient` per call | 0.78 0.84 0.80 0.79 |
+| one reused client | 0.45 0.43 0.44 0.46 |
+
+**~0.33s per call was TCP connection setup**, paid on every Ollama request in
+the process — Ollama's own `total_duration` for that request is 378ms, so
+roughly half of every short classification call was connection overhead.
+`llm/ollama_client.py` now holds one pooled client. It applies to
+`generate_stream` too, so it comes off time-to-first-chunk as well: intent +
+generation ≈ 0.6s saved per turn. Measured after: intent classification
+0.44-0.82s.
+
+A bounded reconnect-once retry was added with it, since a reused connection
+can be dropped server-side in a way a fresh-client-per-call design never hit.
+It only retries while nothing has been yielded.
+
+**4. Reflection is no longer invisible.** Craig asked whether she used an idle
+stretch for anything. She had — the bookmark advanced to his newest turn, so
+she reflected on everything — but produced no personality change and no
+question, and logged neither, so it was indistinguishable from never having
+run. Every pass now logs what it looked at and what it decided, "no change"
+included.
+
+**Still open on reflection, and it is the bigger point (Craig: "So other than
+run the reflection...it didn't actually DO anything. Do we need to look into
+that?").** Yes. Its only possible outputs are: adjust the personality string,
+re-word a stored phrase, or queue a question. It cannot form a conclusion,
+notice a pattern about itself, revise a belief, or propose a module. For
+"an entity with its own agency" that is a cosmetic self-editor, and it is the
+thing standing between Component 11 as built and Component 11 as described.
+Sequence it with the self-model — both are about her having a representation
+of herself to reason over.
+
+---
+
+## Backlog — measured, not yet built
+
+- **Intent-classification pre-gate.** Would skip the 1.00s classifier on
+  messages that cannot be any of its 5 categories. Built and validated
+  against 523 real utterances: a first-pass gate skipped 31% but **lost 4
+  real `permission_command` messages**, all override codes — "override code,
+  alphaomega", "approve elevated access for request 9". Adding authorization
+  vocabulary caught all 4 and the skip rate fell to 21.4%, 0 losses on that
+  corpus. **Not shipped**: ~0.2s mean against a measured-small but non-zero
+  risk of bypassing the security-relevant classifier, and the connection-pool
+  fix above already bought 3x that for free. Revisit only if latency matters
+  more than it does now.
+- **YouTube (Craig, 2026-09-20).** *"would it be possible to have her say
+  watch youtube with me? I think it would be a great way to expose her to
+  content, possibly generate questions, etc."* A real capability with a
+  research/approval path attached, not a quick change — it crosses Design
+  Principle 4 (no ambient network access), so it needs the gated-research
+  treatment rather than a direct client. Worth doing properly once she is out
+  of the troubleshooting phase, which is Craig's own framing of where she is:
+  *"I fear my interactions right now are all diagnostically based so I'm not
+  really using her as intended."*
+- **Mood is stateless.** `core/mood.py` computes from the current response
+  text alone — `_ALERT_MARKERS`, `_EDGE_CONTENT_MARKERS`, length/"?" →
+  focused, else calm. No state, no decay, no accumulation. Craig: *"I see it
+  changing but I'm not too sure it's behaving right. She seems to get over
+  things relatively quickly."* Correct observation: there is nothing to get
+  over. It is a per-response label, not a mood. Needs real state with decay
+  before it means anything.
+- **"Re-enable X" understood in any phrasing** (Craig: "I don't want this
+  command to be exactly this either"). Planned as a narrow binary check that
+  only runs while something is actually disabled — NOT a new category on the
+  shared classifier.
+- **Severity-based urgency** for disabled-feature notices. Needs a sense of
+  urgency she does not have.
+- **One `module_build_request` still sits in `approved`**, waiting to be built.
+
 **BACKLOG (Craig, 2026-09-20 — explicitly deferred): the Activity tab never
 forgets anything.** "Right now things just sit there, I assume forever. They
 should be flushed eventually if denied or manually. Possibly with an audit log

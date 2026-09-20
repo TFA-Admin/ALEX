@@ -50,9 +50,17 @@ async def _check_curiosity_delivery():
         return
 
     q = questions[0]
-    text = f"While you were away, I noticed I don't really know about {q['topic']}. {q['question']}"
 
-    delivered = await push_to_creator(text)
+    # 2026-09-20: the "While you were away, I noticed I don't really know
+    # about X." preamble that used to wrap this is gone. It was a hardcoded
+    # English sentence of mine bolted onto a question of hers — exactly the
+    # thing Craig objected to when a diagnostic did the same ("This is an
+    # advisory not something hard coded into her though correct?"), and he
+    # described the result here as a "disconnect". The question in
+    # curiosity_queue was written by her during reflection; it is already
+    # in her own voice and stands on its own. An unprompted question IS
+    # abrupt — that is what makes it unprompted.
+    delivered = await push_to_creator(q["question"])
     if delivered:
         logger.info(f"[ACTION] Proactively delivered curiosity question mid-session: {q['question']}")
         await mark_curiosity_questions_delivered()

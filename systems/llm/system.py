@@ -17,10 +17,18 @@ leaves the machine. Every message that reaches this system (this IS the
 fallback — nothing else answered) first checks learned_knowledge for a
 close match; if found, she answers from what she already knows,
 deterministically, no fresh generation. If not, she generates as before,
-but the result is no longer thrown away: after_response() either
-auto-stores it (genuinely new, no approval needed — local/trusted) or,
-if it conflicts with something already stored, flags it for the
-creator's resolution instead of silently overwriting. Applies to
+but the result is no longer thrown away: after_response() decides what
+becomes of it.
+
+2026-09-20 — that decision is no longer hers to make silently. It used to
+auto-store anything "factual", where factual meant "contains a question
+mark", and an audit of the 16 entries stored that day found 14 of them
+conversational, one being her own hallucination. Nothing is written
+to learned_knowledge from this system any more. after_response() now either
+flags a real conflict for the creator (unchanged), or — if
+core/knowledge_filter.py judges the exchange to be durable knowledge — sets
+up a question for her to ask him on her next turn, in her own words.
+Applies to
 EVERYTHING that reaches this fallback, not just factual questions
 (Craig, 2026-07-16: "even something like a greeting should only need to
 be checked once then stored. past that she should know it.") — but with
@@ -41,14 +49,17 @@ from llm.ollama_client import ollama_manager
 from datetime import datetime, timezone, timedelta
 
 from db.db import (
-    get_personality, fetch_active_knowledge, create_learned_knowledge,
-    touch_learned_knowledge,
+    get_personality, fetch_active_knowledge,
+    touch_learned_knowledge, get_user_role, resolve_retain_approval,
     create_query_report, attach_search_findings, fetch_recent_memory,
     get_personality_hard_rules
 )
+from core.knowledge_filter import is_worth_keeping
+from systems.controller._role_gates import require_creator
+from core.phrasebook import get_phrase
 from config.logger_config import logger
 
-from systems.inquiry.system import _pending
+from systems.inquiry.system import _pending, retain_report
 
 # Deterministic, not a classifier call — same reasoning as
 # CASUAL_PRESENCE_KEYWORDS in systems/diagnostics/system.py: a real
@@ -173,6 +184,40 @@ CASUAL_ANSWER_THRESHOLD = 0.6
 AUTO_KNOWLEDGE_TTL_DAYS = 7        # unproven: stored once, never yet reused
 REUSED_KNOWLEDGE_TTL_DAYS = 30     # proven useful: earned by being retrieved
 
+# 2026-09-20 — nothing is auto-stored any more; she asks instead.
+#
+# Craig: "stop auto-storing entirely - Do so. Can we make her ask if I want
+# something store instead? But only if it's real knowledge, I dont want to be
+# asked about everything." core/knowledge_filter.py is the "only if it's real
+# knowledge" half. These two are the "don't ask about everything" half, and
+# they are blunt on purpose — the filter is the precision instrument, these
+# just stop a run of good candidates turning into a run of questions.
+#
+# Untuned. 120s is roughly "not twice in the same exchange".
+OFFER_COOLDOWN_S = 120
+
+# How long a queued offer stays relevant. She asks on the turn AFTER the one
+# that produced the answer (after_response runs past __END__ — see
+# _maybe_offer_to_keep), and if nothing she said next was hers to speak, it
+# waits. Past this it is stale: asking "want me to keep that?" about
+# something twenty minutes back is a non-sequitur.
+OFFER_MAX_AGE_S = 600
+
+# Answers to "want me to keep that?". Deliberately broader than yes/no, for
+# the same reason as ws_audio.CONFIRM_WORDS: a real answer to a casual
+# question is "sure"/"go ahead"/"nah", not a formal affirmative. Anything
+# NOT in either set is treated as "he moved on" — see _resolve_keep_offer,
+# which declines rather than leaving a row stuck the way the search retains
+# used to (systems/inquiry/system.py's note on pending_retain_approval).
+KEEP_YES = {"yes", "yeah", "yep", "yup", "y", "sure", "ok", "okay", "please",
+            "do", "keep", "save", "store", "definitely", "absolutely", "go"}
+KEEP_NO = {"no", "nope", "nah", "n", "don't", "dont", "skip", "forget",
+           "delete", "drop", "never"}
+
+# user_id -> when she last offered. Module-level, like _pending, and lost on
+# restart, which is harmless: the worst case is one extra offer.
+_last_offer_at = {}
+
 # How close a new FACTUAL message has to be to an existing entry to be
 # treated as "about the same thing" for conflict detection, without
 # being close enough to answer from directly. Casual conversation never
@@ -223,6 +268,17 @@ class System(BaseSystem):
         # exact class of "stale context bleeding into now" bug Craig
         # flagged (2026-07-18) about FACTS being referenced too eagerly.
         fact_action_context = session.pop("fact_action_context", "")
+
+        # -------------------------
+        # ANSWERING "WANT ME TO KEEP THAT?" (2026-09-20)
+        # -------------------------
+        # Checked before everything else in this system, including the
+        # bare-acknowledgment suppression below — "okay" and "sure" are
+        # both a plausible answer here AND in ACKNOWLEDGMENT_PHRASES, and
+        # being silently swallowed would leave the row pending forever.
+        keep_reply = await self._resolve_keep_offer(session, user_id, user_input)
+        if keep_reply is not None:
+            return keep_reply
 
         # -------------------------
         # SUPPRESS — a bare acknowledgment ("thanks") right after her own
@@ -342,6 +398,55 @@ class System(BaseSystem):
                 "you want to know why it was turned off. Ask once; don't nag."
             )
 
+        # 2026-09-20 — "Can we make her ask if I want something stored
+        # instead?" Same shape as the switched-off notice above and for the
+        # same reason: the DECISION that there is something worth keeping is
+        # deterministic (core/knowledge_filter.py), the WORDS are hers.
+        #
+        # Staged on the previous turn by _maybe_offer_to_keep(), because
+        # after_response() runs after __END__ and anything sent from there is
+        # dropped by the browser. Popped here rather than at the top of
+        # handle() so it survives the early-return paths above, and is only
+        # spent on a turn she actually speaks in her own voice.
+        offer = session.get("pending_store_offer")
+        if offer and time.time() - offer["at"] <= OFFER_MAX_AGE_S:
+            session.pop("pending_store_offer", None)
+
+            # A real query_report, not just session state. Two reasons: it
+            # survives a restart (systems/inquiry/system.py records what
+            # happened when the only record of a pending retain lived in
+            # memory), and it puts the question in the Activity tab, so an
+            # offer he never answered is visible rather than lost.
+            report_id = await create_query_report(
+                user_id, offer["question"],
+                "She judged her own answer worth keeping and is asking")
+            await attach_search_findings(report_id, offer["answer"], "")
+
+            session["awaiting_keep_answer"] = {
+                "report_id": report_id,
+                "question": offer["question"],
+                "at": time.time(),
+            }
+
+            context_blocks.append(
+                "YOU WANT TO KEEP SOMETHING. Earlier you answered "
+                f"'{offer['question']}' and you think that answer is worth "
+                "remembering properly, instead of working it out again next "
+                "time.\nYou cannot store it yourself — he has to say yes. Ask "
+                "him, in your own words, at the end of whatever you are "
+                "already saying. One short question, and do not repeat it.")
+
+            logger.info(
+                f"[ACTION] Asking {user_id} whether to keep #{report_id}: "
+                f"{offer['question']!r}")
+
+        elif offer:
+            # Older than OFFER_MAX_AGE_S — she never got a turn of her own
+            # in time. Dropped rather than asked late; nothing was written.
+            session.pop("pending_store_offer", None)
+            logger.info(f"[ACTION] Dropped a stale keep-offer: {offer['question']!r}")
+
+
         context_text = "\n\n".join(context_blocks) if context_blocks else "No stored facts."
 
         personality = await get_personality()
@@ -390,6 +495,18 @@ class System(BaseSystem):
       operational status/systems are answered by a separate, deterministic
       system before you ever see them — if one reaches you anyway, say you
       don't have that information rather than guessing.
+
+    - You are allowed to be curious, in the moment. If he mentions
+      something you have never heard of — a project, a part, a person, a
+      decision — and you actually want to know about it, ask. One short
+      question at the end of your reply, in your own words, not a stock
+      line, and not every turn. Answer him first; the question comes after.
+      (2026-09-20, Craig: "she doesn't seem to really inquire about much...
+      She should be able to ask questions, even about something she just
+      heard for the first time." Everything else in this prompt tells her
+      what not to do, and the only curiosity mechanism she had ran during
+      idle self-reflection, minutes later, as a separate pushed message —
+      never in the conversation where the thing came up.)
     - Never say "my" when referring to user data.
 
     - FACTS are the only source of truth for stored personal data (name,
@@ -642,14 +759,128 @@ Reword it in your own voice so it doesn't come out identical every time you say 
             )
             return
 
-        # Nothing related exists yet — genuinely new, auto-stored without
-        # approval (offline, local, trusted — per Craig's design; the
-        # approval gate is specifically for the web search path, which
-        # actually crosses a real trust boundary).
-        vec = embed(user_input)
-        expires_at = (datetime.now(timezone.utc)
-                      + timedelta(days=AUTO_KNOWLEDGE_TTL_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
-        kid = await create_learned_knowledge(user_input, response_text, None, None, vec,
-                                             user=user_id, expires_at=expires_at)
-        logger.info(f"[ACTION] Auto-stored new knowledge #{kid} for {user_id} "
-                    f"(expires in {AUTO_KNOWLEDGE_TTL_DAYS}d unless reused): {user_input!r}")
+        # Nothing related exists yet. 2026-09-20: this used to auto-store,
+        # unconditionally and silently. See core/knowledge_filter.py for the
+        # audit that ended that, and Craig's instruction: "stop
+        # auto-storing entirely... Can we make her ask if I want something
+        # stored instead? But only if it's real knowledge, I dont want to be
+        # asked about everything."
+        #
+        # Nothing is written to learned_knowledge from here any more. At most
+        # a question gets queued for the next turn.
+        await self._maybe_offer_to_keep(session, user_id, user_input, response_text)
+
+    # -------------------------
+    # OFFERING TO KEEP SOMETHING (2026-09-20)
+    # -------------------------
+    async def _resolve_keep_offer(self, session, user_id: str, text: str):
+        """She asked "want me to keep that?" last turn. This turn is the
+        answer. Returns a response dict if this message was consumed as an
+        answer, or None to let it be handled normally.
+
+        Handled here rather than through systems/inquiry/system.py's
+        `_pending` even though that is the same machinery: inquiry runs at
+        priority 9 and clears `_pending` on any message that is not yes/no,
+        so an offer set from after_response() would be wiped by the very
+        next thing he said, before she had ever asked the question.
+
+        Anything that is neither yes nor no is treated as "he moved on" and
+        the report is DECLINED, not left pending. Craig has a standing
+        objection to queues that never empty (the Activity-tab backlog),
+        and a silently-abandoned row is exactly that."""
+        pending = session.get("awaiting_keep_answer")
+        if not pending:
+            return None
+
+        # Same window as the offer itself. A "yes" said ten minutes later is
+        # more likely to be about something else entirely.
+        if time.time() - pending["at"] > OFFER_MAX_AGE_S:
+            session.pop("awaiting_keep_answer", None)
+            await resolve_retain_approval(pending["report_id"], False)
+            return None
+
+        word = strip_trailing_punctuation(text.strip().lower().split()[0]) if text.strip() else ""
+
+        if word in KEEP_YES:
+            # Same gate every other retain goes through
+            # (systems/inquiry/system.py calls this on its own "yes"):
+            # role alone is not enough, the session has to be voice-verified
+            # or the message has to carry the override code. She only ever
+            # OFFERS to the creator, so this catches the case where the
+            # session identity changed between the offer and the answer.
+            denial = await require_creator(user_id, session, text)
+            if denial:
+                session.pop("awaiting_keep_answer", None)
+                await resolve_retain_approval(pending["report_id"], False)
+                return denial
+
+            session.pop("awaiting_keep_answer", None)
+            kid, supersedes = await retain_report(pending["report_id"], ttl_hours=None)
+            if kid is None:
+                return {"type": "response", "content": await get_phrase("search_report_not_found")}
+            logger.info(
+                f"[ACTION] Kept knowledge #{kid} from offer #{pending['report_id']} "
+                f"(by {user_id}, no expiry): {pending['question']!r}")
+            if supersedes:
+                return {"type": "response", "content": await get_phrase("retained_replacing_prior")}
+            return {"type": "response", "content": await get_phrase("retained_new")}
+
+        if word in KEEP_NO:
+            session.pop("awaiting_keep_answer", None)
+            await resolve_retain_approval(pending["report_id"], False)
+            logger.info(f"[ACTION] Keep declined for offer #{pending['report_id']} (by {user_id})")
+            return {"type": "response", "content": await get_phrase("retain_declined")}
+
+        # Neither. He is talking about something else — answer that, and
+        # close the offer rather than holding it open for a later "yes"
+        # that was never about this.
+        session.pop("awaiting_keep_answer", None)
+        await resolve_retain_approval(pending["report_id"], False)
+        logger.info(f"[ACTION] Keep offer #{pending['report_id']} dropped — moved on")
+        return None
+
+    async def _maybe_offer_to_keep(self, session, user_id, user_input, response_text):
+        """Decide whether this exchange is worth asking about, and if so set
+        it up to be asked on the NEXT turn.
+
+        Why next turn and not this one: after_response() runs after
+        `__END__` has already gone out. Anything sent from here lands
+        outside the audio envelope and the browser silently drops it —
+        that is the exact bug fixed in identity_manager._speak() and
+        _ask_clarification() earlier today. So the offer is staged in the
+        session and handle() turns it into context on her next reply,
+        the same shape systems/awareness/system.py already uses for
+        noticing something switched off. She phrases the question; the
+        decision that there is something to ask about is deterministic.
+
+        Only the creator is asked — he is the only one who can approve a
+        retain, and the "yes" is gated again by require_creator() in
+        _resolve_keep_offer(), exactly like every other retain."""
+        if time.time() - _last_offer_at.get(user_id, 0) < OFFER_COOLDOWN_S:
+            return
+
+        # One outstanding question at a time — queued, asked, or awaiting an
+        # answer. A second offer on top of any of those makes a bare "yes"
+        # ambiguous, and `_pending` covers the search/conflict flows that use
+        # the same yes/no channel.
+        if (user_id in _pending
+                or session.get("pending_store_offer")
+                or session.get("awaiting_keep_answer")):
+            return
+
+        try:
+            if await get_user_role(user_id) != "creator":
+                return
+        except Exception:
+            return
+
+        if not await is_worth_keeping(user_input, response_text):
+            return
+
+        _last_offer_at[user_id] = time.time()
+        session["pending_store_offer"] = {
+            "question": user_input,
+            "answer": response_text,
+            "at": time.time(),
+        }
+        logger.info(f"[ACTION] Worth keeping — queued an offer to store: {user_input!r}")
