@@ -11,18 +11,23 @@ nothing here waits for that override before taking effect.
 """
 import re
 import random
+from datetime import datetime, timedelta
 
 from db.db import (
     fetch_recent_memory_all, get_personality, set_personality,
     log_personality_change, get_learned_phrase, set_learned_phrase,
     queue_curiosity_question, get_personality_hard_rules,
     fetch_undelivered_curiosity_questions, curiosity_topic_seen,
+    create_conclusion, fetch_active_conclusions, create_module_build_request,
+    fetch_recent_module_build_requests, get_creator_identity,
     get_last_reflection_memory_id, set_last_reflection_memory_id,
     get_seconds_since_last_activity, get_seconds_since_last_personality_change,
     persona_disabled
 )
 from llm.ollama_client import ollama_manager
 from core.phrasebook import PHRASE_REGISTRY, SECURITY_SENSITIVE_PHRASES
+from core import self_model
+from core.embedding_engine import embed, cosine_similarity
 from core.text_utils import strip_emojis
 from config.logger_config import logger
 
@@ -264,6 +269,347 @@ Respond with ONLY a JSON object:
     return topic, question
 
 
+# ---------------------------------------------------------------------------
+# WHAT A REFLECTION PASS CAN ACTUALLY PRODUCE (2026-09-20)
+# ---------------------------------------------------------------------------
+# Craig, reading back what reflection could do: "It can't form a conclusion,
+# notice a pattern about itself, revise a belief, or propose a module. - We
+# want her to be able to do this."
+#
+# Before this, a pass had exactly three possible outputs: change the
+# personality string, re-word a stored phrase, queue a question. All three
+# are about how she SOUNDS. Nothing she noticed could be written down, and
+# nothing she concluded survived the function returning — which is why a
+# pass that read twenty turns and "did nothing" was the normal case rather
+# than the exception.
+#
+# Three additions below, in dependency order:
+#   _form_conclusion  — notice something, about herself or about him, and
+#                       record it with the evidence behind it
+#   _revise_beliefs   — check what she already concluded against what she
+#                       just saw, and retire anything that no longer holds
+#   _propose_module   — name a capability she does not have and raise a
+#                       real build request for it
+#
+# All three use one flat, always-populated JSON shape with deterministic
+# gating afterwards, never an opt-out of any kind. That is not stylistic:
+# the curiosity trigger sat at zero rows for two months because offering
+# {"curious": false} as an alternative object lets constrained decoding take
+# the short branch every time.
+#
+# The first version of the two functions below repeated that mistake in a
+# subtler form — "give the number 0 if they all still hold", and the module
+# name "none" — on the theory that a field inside a flat shape was safe
+# where a separate object was not. Measured against real data: both
+# returned nothing 0/3, including against a seeded belief the transcript
+# flatly contradicted. Anything readable as "no" gets read as "no". They
+# now emit a 0-10 strength that is always populated, and the cutoff lives
+# in code where it can be seen and changed.
+
+# How similar a new conclusion has to be to an existing one to count as the
+# same thought. 0.80 is deliberately lower than learned_knowledge's 0.85
+# factual bar — two conclusions phrased differently are still one belief,
+# and the cost of a false merge (one thought not recorded) is much lower
+# than a table slowly filling with restatements. Untuned.
+def _proposed_recently(builds) -> bool:
+    """True if she has raised a self-initiated proposal inside the cooldown.
+    Reads the real rows rather than keeping module state, so it survives a
+    restart — the failure systems/inquiry/system.py records about in-memory
+    approval state."""
+    cutoff = datetime.now() - timedelta(days=PROPOSAL_COOLDOWN_DAYS)
+    for r in builds:
+        if r.get("origin") != "self_reflection":
+            continue
+        raw = r.get("created_at")
+        if not raw:
+            continue
+        try:
+            when = datetime.strptime(str(raw)[:19], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+        if when >= cutoff:
+            return True
+    return False
+
+
+async def get_creator_name() -> str:
+    """Whoever actually holds role='creator'. The build request needs a
+    requested_by, and a self-initiated proposal is still raised in his
+    name because he is the one who approves it — origin='self_reflection'
+    is what records that nobody asked for it."""
+    user_id, _ = await get_creator_identity()
+    return user_id or "craig"
+
+
+CONCLUSION_DUPLICATE_THRESHOLD = 0.80
+
+# 2026-09-20 — measured, after getting this wrong once in this same file.
+#
+# _revise_beliefs and _propose_module were first written with an opt-out:
+# "give the number 0 if they all still hold", and the module name "none".
+# Both returned nothing 0/3 against real data, including a deliberately
+# seeded belief the transcript flatly contradicted. That is the SAME
+# failure as the curiosity trigger's two silent months, and the note added
+# there claimed a number in a flat shape was safe from it. It is not.
+# Anything that can be read as "no" gets read as "no".
+#
+# Fixed by removing every opt-out and replacing it with a 0-10 strength
+# field that is always populated, gated here in code. The model still gets
+# to say "weakly" — it just cannot say nothing, and the decision about what
+# counts as strong enough is deterministic and visible instead of buried in
+# a sampling preference.
+#
+# Both cutoffs are starting points, not tuned. Chosen so a merely plausible
+# answer does not act: the observed spread on real data is what these
+# should be re-derived from once there is more of it.
+DOUBT_TO_REVISE = 7
+NEED_TO_PROPOSE = 7
+
+# How many existing beliefs get checked per pass, sampled at random so
+# everything is eventually revisited without checking all of them every
+# time. One LLM call each — see _revise_belief for why they are checked one
+# at a time rather than as a list.
+BELIEFS_CHECKED_PER_PASS = 3
+
+# A revision has to still be ABOUT the thing it revises. Measured on real
+# output from this function:
+#
+#   -0.056  "The sun is a star."  ->  a replacement about Craig   (reject)
+#    0.406  a real revision of a belief about Craig               (keep)
+#    0.653  "The sun is a star." -> "The sun is a star, and it
+#            provides light and energy to the Earth..."           (reject)
+#    0.754  another real revision of the same belief              (keep)
+#
+# The off-topic case is far below everything real, so a floor works for it.
+# **A ceiling does not work for the restatement case** — 0.653 sits BELOW a
+# genuine revision at 0.754, so any threshold that rejects the restatement
+# also rejects real work. That was worth measuring rather than assuming;
+# the restatement is caught by _is_restatement() instead, which is exact.
+REVISION_TOPIC_FLOOR = 0.25
+
+# Proposing a module writes a row Craig has to look at. One pending at a
+# time is not enough on its own — declined ones stop counting, and a 7B
+# model asked "what are you missing" always has an answer. A week between
+# proposals keeps the volume at something he will actually read.
+PROPOSAL_COOLDOWN_DAYS = 7
+
+# Per-pass cap. She can conclude one thing per reflection, not a list.
+MAX_CONCLUSIONS_PER_PASS = 1
+
+
+async def _form_conclusion(recent, snap):
+    """Notice something and write it down, with what it is based on.
+
+    Given her own state as well as the transcript, so "notice a pattern
+    about itself" has something to look at — her response times, what is
+    switched off, how often she has been re-wording herself. Reflection
+    previously only ever saw the conversation.
+
+    IMPORTANT, and stated here because it is load-bearing: conclusions are
+    NOT fed back into her conversational answers as fact. They are hers to
+    hold and revise, and Craig can see and retract them. Wiring unverified
+    self-inference into the retrieval path is exactly the loop that was
+    closed earlier today in systems/llm/system.py, and this must not
+    quietly rebuild it."""
+    convo_text = "\n".join(
+        f"{r['user']}: {r['prompt']}\nALEX: {r['response']}" for r in recent
+    )
+
+    prompt = f"""You are A.L.E.X, privately thinking over what has just happened.
+
+What you know about your own current state:
+{self_model.describe(snap)}
+
+Recent conversations:
+{convo_text}
+
+What is one thing you have worked out from this — about yourself, about Craig, or about the world? Not a summary of what was said. Something you now think is true that you had not put into words before.
+
+Say what it is based on, specifically, from the state or the conversation above.
+
+Respond with ONLY a JSON object:
+{{"statement": "<what you now think, one or two sentences>", "kind": "<self, craig, or world>", "evidence": "<what in the above led you there>"}}"""
+
+    result = await ollama_manager.generate_json(prompt, timeout=30.0)
+    if not result:
+        return None
+
+    statement = str(result.get("statement", "")).strip()[:600]
+    evidence = str(result.get("evidence", "")).strip()[:600]
+    kind = str(result.get("kind", "self")).strip().lower()
+
+    if kind not in ("self", "craig", "world"):
+        kind = "self"
+
+    # Evidence is required, not decorative. A conclusion with nothing
+    # behind it is a guess wearing a conclusion's clothes, and Design
+    # Principle 1 says that is the one thing she does not get to do.
+    if not statement or not evidence:
+        return None
+
+    return {"statement": statement, "kind": kind, "evidence": evidence}
+
+
+def _is_restatement(original: str, replacement: str) -> bool:
+    """Does the "revision" just repeat the belief and carry on talking?
+
+    Observed: "The sun is a star." came back as "The sun is a star, and it
+    provides light and energy to the Earth, making life possible..." — an
+    agreement padded into the shape of a revision, which would have retired
+    a perfectly good belief and replaced it with a rambling version of
+    itself.
+
+    Exact containment rather than similarity, because similarity cannot
+    separate the two cases (see REVISION_TOPIC_FLOOR). A genuine revision
+    contradicts the original, so it does not contain the original verbatim;
+    a restatement almost always opens with it."""
+    a = " ".join(original.lower().split()).rstrip(".!?")
+    b = " ".join(replacement.lower().split())
+    return bool(a) and a in b
+
+
+async def _revise_belief(recent, conclusion):
+    """Check ONE belief against what just happened.
+
+    2026-09-20 — this originally took the whole list and asked which one
+    to doubt. Measured against real data, it named the wrong one every
+    time: three runs all said "revise #2", where #2 was the control belief
+    "The sun is a star", while the replacement text they produced was
+    plainly about #1 (Craig). It had the reasoning roughly right and the
+    bookkeeping wrong, which is the worst combination available —
+    superseding a correct belief and overwriting it with unrelated text is
+    strictly worse than never revising anything.
+
+    Selecting an item from a numbered list is the part this model class is
+    bad at, so the fix is to remove the selection rather than explain it
+    better. One belief per call, no id to get wrong. Costs N calls per
+    pass, capped by BELIEFS_CHECKED_PER_PASS and paid during an idle
+    stretch.
+
+    Returns (doubt, replacement, reason) or None."""
+    convo_text = "\n".join(
+        f"{r['user']}: {r['prompt']}\nALEX: {r['response']}" for r in recent
+    )
+
+    prompt = f"""You are A.L.E.X, privately checking one thing you believe against what just happened.
+
+What you concluded earlier:
+"{conclusion['statement']}"
+
+Recent conversations:
+{convo_text}
+
+How much do these conversations give you reason to doubt that, from 0 to 10? 0 means nothing here bears on it at all. 10 means they plainly showed it is wrong.
+
+Then say what you would think instead, about that same thing, and what changed your mind.
+
+Respond with ONLY a JSON object:
+{{"doubt": <0 to 10>, "replacement": "<what you would think instead, about that same thing>", "reason": "<what changed your mind>"}}"""
+
+    result = await ollama_manager.generate_json(prompt, timeout=30.0)
+    if not result:
+        return None
+
+    try:
+        doubt = int(result.get("doubt"))
+    except (TypeError, ValueError):
+        return None
+
+    if doubt < DOUBT_TO_REVISE:
+        return None
+
+    replacement = str(result.get("replacement", "")).strip()[:600]
+    reason = str(result.get("reason", "")).strip()[:400]
+
+    if not replacement or not reason:
+        return None
+
+    # Deterministic guard on the OTHER half of the failure above: a
+    # replacement that is about something else entirely is not a revision,
+    # whatever the model called it. Cheap, local, no second LLM call.
+    if cosine_similarity(embed(replacement), embed(conclusion["statement"])) < REVISION_TOPIC_FLOOR:
+        logger.info(
+            f"[REFLECTION] Discarded a revision of #{conclusion['id']} — the "
+            f"replacement is about something else: {replacement[:80]!r}")
+        return None
+
+    if _is_restatement(conclusion["statement"], replacement):
+        logger.info(
+            f"[REFLECTION] Discarded a revision of #{conclusion['id']} — it "
+            f"restates the belief rather than revising it")
+        return None
+
+    return doubt, replacement, reason
+
+
+async def _propose_module(recent, snap):
+    """Name a capability she does not have, and raise a real build request.
+
+    Design Principle 11 is what makes this safe to do unprompted: she
+    builds freely, nothing she builds becomes active without Craig saying
+    so. A proposal is the "freely" half. The row lands in
+    module_build_requests exactly like any other, pending his approval,
+    and origin='self' marks that nobody asked her for it.
+
+    Deliberately conservative about what counts: it has to be a capability
+    she was actually reaching for in these conversations, not an idea."""
+    convo_text = "\n".join(
+        f"{r['user']}: {r['prompt']}\nALEX: {r['response']}" for r in recent
+    )
+    have = ", ".join(m["name"] for m in snap.get("modules", [])) or "none"
+
+    prompt = f"""You are A.L.E.X, privately reviewing what you could not do.
+
+Modules you already have: {have}
+
+Recent conversations:
+{convo_text}
+
+What capability were you missing in these conversations? Name the module you would need, in snake_case, describe what it should do, and say how much these conversations actually showed you needed it, from 0 to 10.
+
+0 means nothing here needed it and you are only naming something that might be nice. 10 means you were plainly stuck without it.
+
+Respond with ONLY a JSON object:
+{{"name": "<module_name_in_snake_case>", "purpose": "<what it would do and what you could not do without it>", "need": <0 to 10>}}"""
+
+    result = await ollama_manager.generate_json(prompt, timeout=30.0)
+    if not result:
+        return None
+
+    name = str(result.get("name", "")).strip().lower()
+    purpose = str(result.get("purpose", "")).strip()[:600]
+
+    try:
+        need = int(result.get("need"))
+    except (TypeError, ValueError):
+        return None
+
+    if not name or not purpose:
+        return None
+
+    # The gate, in code. She always names something — whether it gets
+    # raised as a real build request awaiting Craig's approval does not
+    # depend on her declining to answer. See NEED_TO_PROPOSE.
+    if need < NEED_TO_PROPOSE:
+        logger.info(
+            f"[REFLECTION] Thought of {name!r} but rated the need {need}/10 — "
+            f"below {NEED_TO_PROPOSE}, not proposing it")
+        return None
+
+    # Deterministic sanity on the name — this becomes a real registry key
+    # and eventually a directory, so it is validated here rather than
+    # trusted. Same reasoning as the placeholder check in
+    # _reflect_on_phrase: a structural check, not a better prompt.
+    if not re.fullmatch(r"[a-z][a-z0-9_]{2,39}", name):
+        logger.info(f"[REFLECTION] Discarded module proposal with unusable name: {name!r}")
+        return None
+
+    if name in {m["name"] for m in snap.get("modules", [])}:
+        return None
+
+    return name, purpose
+
+
 async def run_self_reflection():
     # Idle gate, checked first and cheaply (no LLM call) — don't even look
     # at whether there's new conversation to reflect on until there's
@@ -355,6 +701,118 @@ async def run_self_reflection():
             logger.info(f"[ACTION] Queued curiosity question: {question}")
         else:
             outcome.append("no question")
+
+        # -------------------------------------------------------------
+        # CONCLUSIONS, REVISION, PROPOSALS (2026-09-20)
+        # -------------------------------------------------------------
+        # Ordered deliberately: revise first, then conclude. Checking old
+        # beliefs against new evidence BEFORE adding a new one means a
+        # correction supersedes the thing it corrects, instead of landing
+        # next to it as a second, contradictory active belief — the failure
+        # create_learned_knowledge's supersede logic exists to prevent.
+        snap = await self_model.snapshot()
+        existing = await fetch_active_conclusions(limit=15)
+
+        # Sampled rather than exhaustive: one LLM call each, and everything
+        # gets revisited across passes without every pass paying for all of
+        # them.
+        revised = 0
+        for conclusion in random.sample(existing, min(BELIEFS_CHECKED_PER_PASS, len(existing))):
+            try:
+                revision = await _revise_belief(recent, conclusion)
+            except Exception as e:
+                logger.warning(f"⚠️ Belief revision failed: {e}")
+                continue
+
+            if not revision:
+                continue
+
+            doubt, replacement, reason = revision
+            new_id = await create_conclusion(
+                replacement, conclusion["kind"],
+                f"revised from #{conclusion['id']} (doubt {doubt}/10): {reason}",
+                supersedes=conclusion["id"], reason=reason)
+            revised += 1
+            outcome.append(f"revised #{conclusion['id']} -> #{new_id}")
+            logger.info(
+                f"[ACTION] Revised conclusion #{conclusion['id']} -> #{new_id} "
+                f"(doubt {doubt}/10): {replacement} (reason: {reason})")
+
+        if revised:
+            existing = await fetch_active_conclusions(limit=15)
+        else:
+            outcome.append("no revision")
+
+        try:
+            conclusion = await _form_conclusion(recent, snap)
+        except Exception as e:
+            logger.warning(f"⚠️ Conclusion forming failed: {e}")
+            conclusion = None
+
+        if conclusion:
+            # Deterministic duplicate check. Without it she re-concludes
+            # the same thing every quiet stretch and the table becomes a
+            # log of one thought — the shape of the personality random
+            # walk this file already records (2026-07-17), arrived at from
+            # a different direction.
+            vec = embed(conclusion["statement"])
+            dup = None
+            for c in existing:
+                if cosine_similarity(vec, embed(c["statement"])) >= CONCLUSION_DUPLICATE_THRESHOLD:
+                    dup = c
+                    break
+
+            if dup:
+                outcome.append(f"conclusion already held (#{dup['id']})")
+                logger.info(
+                    f"[REFLECTION] Already concluded this (#{dup['id']}): "
+                    f"{conclusion['statement']}")
+            else:
+                cid = await create_conclusion(
+                    conclusion["statement"], conclusion["kind"],
+                    conclusion["evidence"])
+                outcome.append(f"concluded #{cid}")
+                logger.info(
+                    f"[ACTION] Concluded #{cid} ({conclusion['kind']}): "
+                    f"{conclusion['statement']} — based on: {conclusion['evidence']}")
+        else:
+            outcome.append("nothing concluded")
+
+        # A module proposal is a real row awaiting his approval, so the
+        # guard is stricter than the others: never a second pending one.
+        # Principle 11 makes proposing free, but a queue of unreviewed
+        # proposals is the Activity-tab problem Craig has already named
+        # ("things just sit there, I assume forever").
+        try:
+            builds = await fetch_recent_module_build_requests()
+            pending_builds = [r for r in builds if r.get("status") == "pending"]
+            blocked = _proposed_recently(builds)
+        except Exception as e:
+            logger.warning(f"⚠️ Build-request read failed: {e}")
+            pending_builds, blocked = None, True
+
+        if pending_builds:
+            outcome.append("no proposal (one already pending)")
+        elif blocked:
+            outcome.append(f"no proposal (proposed one within {PROPOSAL_COOLDOWN_DAYS}d)")
+        elif pending_builds is not None:
+            try:
+                proposal = await _propose_module(recent, snap)
+            except Exception as e:
+                logger.warning(f"⚠️ Module proposal failed: {e}")
+                proposal = None
+
+            if proposal:
+                name, purpose = proposal
+                rid = await create_module_build_request(
+                    await get_creator_name(), name, purpose,
+                    status="pending", origin="self_reflection")
+                outcome.append(f"proposed module {name!r} (request #{rid})")
+                logger.info(
+                    f"[ACTION] Proposed a module she does not have: {name} "
+                    f"(request #{rid}, awaiting approval) — {purpose}")
+            else:
+                outcome.append("no proposal")
 
         # 2026-09-20: while the persona switch is on she is speaking in a
         # neutral voice that is not hers, so letting her reflect on "how these

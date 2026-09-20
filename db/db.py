@@ -150,6 +150,41 @@ async def init_db():
             delivered INTEGER DEFAULT 0
         )''')
 
+        # 🧠 CONCLUSIONS (2026-09-20) — what she has worked out for
+        # herself, as distinct from what she has been told or looked up.
+        #
+        # Craig, on what self-reflection could not do: "It can't form a
+        # conclusion, notice a pattern about itself, revise a belief, or
+        # propose a module. - We want her to be able to do this."
+        #
+        # Deliberately NOT learned_knowledge. That table holds answers —
+        # question in, content out, retrieved and restated when the same
+        # question comes round again. A conclusion is not an answer to
+        # anything; it is an inference she drew, it may be wrong, and the
+        # whole point is that she can later decide it was and replace it.
+        # Mixing the two would put unverified self-inference on the same
+        # retrieval path as researched fact, which is the confabulation
+        # loop that was closed earlier the same day.
+        #
+        # kind: 'self' (about her own behaviour/state), 'craig' (about
+        # him), 'world' (everything else).
+        # status: 'active' | 'superseded' | 'retracted'.
+        # evidence: what in her own records led her here — required, so a
+        # conclusion with nothing behind it is visibly ungrounded rather
+        # than indistinguishable from a solid one (Design Principle 1).
+        await db.execute('''
+        CREATE TABLE IF NOT EXISTS conclusions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            statement TEXT NOT NULL,
+            kind TEXT DEFAULT 'self',
+            evidence TEXT,
+            status TEXT DEFAULT 'active',
+            supersedes INTEGER,
+            superseded_reason TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+
         # 🧩 MODULE STATE (per-user state blob for generated modules)
         await db.execute('''
         CREATE TABLE IF NOT EXISTS module_state (
@@ -765,6 +800,62 @@ async def acknowledge_personality_changes():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE personality_log SET acknowledged=1 WHERE acknowledged=0")
         await db.commit()
+
+
+# -------------------------
+# CONCLUSIONS (2026-09-20)
+# -------------------------
+async def create_conclusion(statement: str, kind: str, evidence: str,
+                            supersedes: int = None, reason: str = None) -> int:
+    """Records something she worked out. If it supersedes an earlier
+    conclusion, that one is retired in the same pass — same belief-revision
+    shape as create_learned_knowledge(), so a correction replaces what she
+    thought rather than sitting next to it contradicting itself."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        if supersedes:
+            await db.execute(
+                "UPDATE conclusions SET status='superseded', "
+                "superseded_reason=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (reason, supersedes)
+            )
+        cursor = await db.execute(
+            "INSERT INTO conclusions (statement, kind, evidence, supersedes, "
+            "superseded_reason) VALUES (?,?,?,?,?)",
+            (statement, kind, evidence, supersedes, reason)
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def fetch_active_conclusions(kind: str = None, limit: int = 25):
+    sql = "SELECT id, statement, kind, evidence, created_at FROM conclusions " \
+          "WHERE status='active'"
+    args = []
+    if kind:
+        sql += " AND kind=?"
+        args.append(kind)
+    sql += " ORDER BY id DESC LIMIT ?"
+    args.append(limit)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(sql, args)
+        rows = await cursor.fetchall()
+
+    keys = ["id", "statement", "kind", "evidence", "created_at"]
+    return [dict(zip(keys, r)) for r in rows]
+
+
+async def retract_conclusion(conclusion_id: int, reason: str) -> bool:
+    """Craig's override. Separate from superseding, which is her revising
+    her own view — this is him saying it was wrong, with no replacement."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE conclusions SET status='retracted', superseded_reason=?, "
+            "updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='active'",
+            (reason, conclusion_id)
+        )
+        await db.commit()
+        return cursor.rowcount > 0
 
 
 async def queue_curiosity_question(topic: str, question: str):
