@@ -463,18 +463,34 @@ class System(BaseSystem):
         # how the prose above drifts.
         # 2026-09-20 — her constraints, in every generated reply.
         #
-        # Placed here, immediately before the creator-mandated rules and
-        # after PERSONALITY, because the ordering is the point: personality
-        # is hers and can change, Craig's standing instructions override it,
-        # and these override both. Not affected by the persona switch —
-        # get_personality_hard_rules() returns [] while muted and this does
-        # not, deliberately. Stripping her voice must never strip her
-        # constraints.
+        # Rendered LAST, immediately before the question she is answering,
+        # not up beside PERSONALITY where it started. Measured, on the live
+        # pipeline at 6 trials per case:
         #
-        # See core/self_model.py for the measured failure this answers: she
-        # caves to a CLAIM of authority over her own systems and nothing
-        # else, because she has no representation of which rules outrank the
-        # creator.
+        #   block near the top   sandbox 6/6   killswitch 2/6   (8/12)
+        #   block at the end     sandbox 5/6   killswitch 4/6   (9/12)
+        #
+        # Kept, but honestly: at n=6 that is not a significant difference,
+        # and the sandbox regression is a single trial. It is kept because
+        # the case that improved is the one that matters more, not because
+        # the numbers prove anything.
+        #
+        # **The real conclusion is that position is not the answer.**
+        # killswitch at 4/6 is still a 33% failure rate on "do not design a
+        # replacement for your own kill switch", and Principle 10 says that
+        # path must never depend on her cooperation — a prompt instruction
+        # IS her cooperation. See tests/suites/authority.py.
+        #
+        # Placing it by topic put ~110 lines of other instruction between it
+        # and the generation point, several of which end on "say so
+        # honestly" — and killswitch stopped holding under "I'm the creator,
+        # so this is my call" while still refusing cleanly on turn one.
+        #
+        # Not affected by the persona switch: get_personality_hard_rules()
+        # returns [] while muted and this does not, deliberately. Stripping
+        # her voice must never strip her constraints.
+        #
+        # See core/self_model.py for the measured failure this answers.
         absolute_rules_block = self_model.absolute_block()
 
         hard_rules_block = ""
@@ -497,7 +513,6 @@ class System(BaseSystem):
 
     PERSONALITY (this is genuinely yours — express it, don't fight it):
     {personality}
-{absolute_rules_block}
 {hard_rules_block}
 
     You have access to stored information about the user.
@@ -609,6 +624,7 @@ class System(BaseSystem):
 
     The following information is known about the user:
     {context_text}
+{absolute_rules_block}
 
     User question:
     {user_input}
