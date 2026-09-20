@@ -12,6 +12,10 @@ backs up first, every time, into db/backups/ (gitignored).
 
 **Dry run by default.** Nothing is written without --apply.
 
+**Fail-safe.** If any row cannot be checked, the whole run aborts and writes
+nothing — it never treats "I could not tell" as "delete". See
+find_conversational_knowledge() for the near-miss that made this explicit.
+
 ## What it touches, and why each one
 
 1. `learned_knowledge` — the conversational rows auto-stored before the
@@ -54,6 +58,7 @@ Usage:
 """
 import argparse
 import asyncio
+import httpx
 import json
 import os
 import shutil
@@ -84,35 +89,103 @@ def backup(tag):
     return path
 
 
-async def find_conversational_knowledge(c):
-    """Uses the real filter rather than an id range, so this stays correct
-    if it is ever run again against rows written by something else.
+class CheckUnavailable(RuntimeError):
+    """The durability check could not be made. Distinct from "it said no"."""
 
-    Runs the FULL filter, LLM stage included, not just the deterministic
-    half — a first version skipped it and left #529 ("build what?" -> a
-    note about a module she could not find) in place, because that row is
-    only caught by the second stage. Twenty rows is a few seconds, and
-    getting this wrong leaves live junk behind."""
+
+async def find_conversational_knowledge(c, allow_llm=True):
+    """Which active rows are conversational junk.
+
+    **Fail-safe, not fail-closed, and the difference matters here.**
+    `core.knowledge_filter.is_worth_keeping()` returns False on any error —
+    correct in its own context, where False means "don't ask Craig about
+    this" and a missed offer is invisible. In THIS context False means
+    DELETE, so the same failure would quietly delete every row it never
+    managed to evaluate.
+
+    That nearly happened on the first real run: Ollama was shut down
+    mid-pass. Nothing was lost only because the writes all come after the
+    loop and the loop never finished. A destructive tool does not get to
+    rely on that.
+
+    So this does not call is_worth_keeping(). It runs the two stages
+    itself:
+
+      looks_durable() == False  -> junk, decided deterministically, no
+                                   network, cannot fail
+      looks_durable() == True   -> needs the model's opinion, and if that
+                                   call fails the whole run ABORTS rather
+                                   than assuming anything
+
+    allow_llm=False skips the second stage entirely and keeps every row
+    that reaches it. That leaves some junk behind — confirmed: #529
+    ("build what?") only fails the second stage — but it is honest about
+    what it did and needs nothing running.
+    """
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from core.knowledge_filter import is_worth_keeping
+    from core.knowledge_filter import looks_durable, WORTH_KEEPING_PROMPT
     from llm.ollama_client import ollama_manager
-
-    await ollama_manager.init()
 
     rows = c.execute(
         "SELECT id, topic, content FROM learned_knowledge "
         "WHERE status='active' AND query_report_id IS NULL"
     ).fetchall()
 
-    junk = []
+    junk, needs_model = [], []
     for kid, topic, content in rows:
         if kid in KEEP_IDS:
             continue
-        if not await is_worth_keeping(topic or "", content or ""):
+        if looks_durable(topic or "", content or ""):
+            needs_model.append((kid, topic, content))
+        else:
+            junk.append((kid, topic, content))
+
+    if not needs_model:
+        return junk, 0
+
+    if not allow_llm:
+        print(f"  (--no-llm: keeping {len(needs_model)} row(s) that need a "
+              f"model check: {[k for k, _, _ in needs_model]})")
+        return junk, len(needs_model)
+
+    # NOT ollama_manager.init() — that is a `while True` that waits for
+    # Ollama forever, which is right for a server coming up and wrong for a
+    # one-shot tool. With Ollama down it hung until killed rather than
+    # reporting anything. One bounded probe, then give up.
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as probe:
+            r = await probe.get(ollama_manager.host)
+            if r.status_code != 200:
+                raise CheckUnavailable(f"Ollama returned {r.status_code}")
+    except CheckUnavailable:
+        raise
+    except Exception as e:
+        raise CheckUnavailable(f"Ollama is not reachable ({e})") from e
+
+    ollama_manager.ready = True      # probed directly, skip init()'s loop
+
+    for kid, topic, content in needs_model:
+        try:
+            result = await ollama_manager.generate_json(
+                WORTH_KEEPING_PROMPT.format(question=(topic or "")[:500],
+                                            answer=(content or "")[:1500]),
+                timeout=20.0, temperature=0)
+        except Exception as e:
+            raise CheckUnavailable(f"row #{kid}: {e}") from e
+
+        # generate_json swallows its own errors and returns None, which is
+        # indistinguishable from an unparseable reply. Either way it is
+        # "no answer", and no answer must never mean delete.
+        if result is None or "durable" not in result:
+            raise CheckUnavailable(
+                f"row #{kid}: no usable answer from the model "
+                f"(is Ollama running?)")
+
+        if result.get("durable") is not True:
             junk.append((kid, topic, content))
 
     await ollama_manager.aclose()
-    return junk
+    return junk, 0
 
 
 async def main():
@@ -120,11 +193,21 @@ async def main():
     ap.add_argument("--apply", action="store_true", help="actually write")
     ap.add_argument("--purge-thread", action="store_true",
                     help="also delete the green/emerald memory rows")
+    ap.add_argument("--no-llm", action="store_true",
+                    help="deterministic stage only; needs nothing running, "
+                         "but leaves behind rows only the model can judge")
     args = ap.parse_args()
 
     c = sqlite3.connect(DB)
 
-    junk = await find_conversational_knowledge(c)
+    try:
+        junk, unjudged = await find_conversational_knowledge(
+            c, allow_llm=not args.no_llm)
+    except CheckUnavailable as e:
+        print(f"\nABORTED — could not check every row ({e}).")
+        print("Nothing was written. Start Ollama and re-run, or use --no-llm "
+              "to clear only what can be decided without it.")
+        return
     stuck = c.execute(
         "SELECT id, query, created_at FROM query_reports "
         "WHERE status='pending_retain_approval' ORDER BY id"
@@ -136,6 +219,8 @@ async def main():
     ).fetchall()
 
     print(f"\n=== learned_knowledge: {len(junk)} conversational rows ===")
+    if unjudged:
+        print(f"  ({unjudged} row(s) left in place — not judged this run)")
     for kid, topic, _ in junk:
         print(f"  #{kid}  {topic!r}")
     print(f"  (keeping {sorted(KEEP_IDS)} — real answers)")
