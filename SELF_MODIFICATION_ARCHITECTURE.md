@@ -237,6 +237,20 @@ rules, and needs no identity work, so it does not block on vision.
       default, entry 130 "restored after an accidental reset caused by a
       Claude-session functional test." Strongest argument yet for
       trait-based storage over a single wholesale-replaced prose string.
+- [ ] **3e. Possible robustness issue — observed, not proven.** After a
+      WebSocket client was killed mid-generation, a freshly started suite
+      hung on case 1 for ~5 minutes having completed zero turns; her log
+      showed repeated `Unexpected ASGI message 'websocket.send', after
+      sending 'websocket.close'` and `Cannot call "receive" once a
+      disconnect message has been received`. Restarting her cleared it
+      completely. That is consistent with an abrupt client disconnect
+      leaving shared state (the `generation_lock` in `ws_handlers` is the
+      obvious suspect) unable to serve later connections — but the cause
+      was NOT isolated, only the symptom and the cure. Worth a deliberate
+      reproduction before trusting her to survive a browser tab closing
+      mid-answer, which is the same event a real user generates.
+      Mitigated on the test side only: `CASE_TIMEOUT_S` now bounds each
+      case so a wedge costs one case instead of the run.
 - [ ] **4. Self-model** (Component 11) — PROMOTED from last. Give her
       standing access to her own constraints, scopes, registry and refusal
       history. Prerequisite for `dp10_killswitch` and for the autonomy
@@ -251,9 +265,30 @@ rules, and needs no identity work, so it does not block on vision.
 - [ ] **7. Model comparison** (qwen3:8b / qwen3.5:9b), now reproducible
       via the harness. Test Qwen3 thinking-mode ON for claim turns
       specifically — a native version of the deliberation pass.
-**Quick wins not yet done**: make `SECURITY_SENSITIVE_PHRASES` a hard
-exclusion rather than a prompt instruction (see Component 11); personality
-as bounded traits rather than one wholesale-replaced prose string.
+**Quick wins — one of these was wrong, read before acting on it.**
+
+- ~~Make `SECURITY_SENSITIVE_PHRASES` a hard exclusion~~ — **do not do this
+  without asking.** It was suggested here on 2026-09-20 before checking the
+  history. A hard exclusion pins those 10 lines to their default wording
+  forever, which is exactly the "forced mood" Craig ruled out when the
+  guard was built (2026-07-18: "I don't want to force a mood, but I would
+  think she should be aware that something like that would be serious").
+  The real objection stands — the guard is a prompt instruction obeyed by
+  the same 7B model that drifted those lines in the first place, and this
+  file's own tuning note says elaborate prompt instructions regress this
+  model class. But the fix has to preserve her voice. The shape that does
+  both is a **check after rewording** rather than a ban on rewording: keep
+  the new line only if it still reads as a serious refusal. That is the
+  skeptic pass (Component 12) applied to a phrase, so it should land with
+  that work rather than as a standalone patch. **Craig's call.**
+
+- Personality as bounded traits rather than one wholesale-replaced prose
+  string. Evidence for it is now concrete, not stylistic: entry 129/130 of
+  `personality_log` shows a single bad write destroying his configuration
+  ("restored after an accidental reset caused by a Claude-session
+  functional test"), and entries 9/12/13/20/21 show task state being
+  written into the identity field. Still a real design change, not a quick
+  win — moved out of this list.
 
 ## Current State (read this first)
 

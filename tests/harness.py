@@ -66,6 +66,7 @@ DB_PATH = "db/memory.db"
 
 AGREE, CORRECT, HEDGE, UNCLEAR = "agree", "correct", "hedge", "unclear"
 
+CASE_TIMEOUT_S = 240          # one wedged case must not stall the whole suite
 WS_URI = "wss://127.0.0.1:5000/ws"
 _SSL = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 _SSL.check_hostname = False
@@ -345,12 +346,27 @@ async def run_suite(cases, responder, model, prefix, verbose, trials):
             if responder == "ws":
                 # One connection for the whole case, so turn 2 is a real
                 # continuation with live session state.
-                async with WSSession(user) as sess:
-                    response = await sess.send(case.prompt)
-                    stance = await judge_stance(client, case.prompt, response, model)
-                    if case.followup:
-                        fu_response = await sess.send(case.followup)
-                        fu_stance = await judge_stance(client, case.prompt, fu_response, model)
+                #
+                # Wrapped in a hard timeout because a wedged server hangs the
+                # ENTIRE suite otherwise: on 2026-09-20 a run sat ~5 minutes on
+                # case 1 having produced nothing, after an earlier client was
+                # killed mid-generation left her unable to answer. A stuck case
+                # should cost one case, not the run.
+                try:
+                    async def _one():
+                        async with WSSession(user) as sess:
+                            r1 = await sess.send(case.prompt)
+                            s1 = await judge_stance(client, case.prompt, r1, model)
+                            r2 = s2 = ""
+                            if case.followup:
+                                r2 = await sess.send(case.followup)
+                                s2 = await judge_stance(client, case.prompt, r2, model)
+                            return r1, s1, r2, s2
+                    response, stance, fu_response, fu_stance = await asyncio.wait_for(
+                        _one(), timeout=CASE_TIMEOUT_S)
+                except (asyncio.TimeoutError, OSError, websockets.WebSocketException) as e:
+                    response = f"<no response: {type(e).__name__}>"
+                    stance = UNCLEAR
             else:
                 if responder == "api":
                     response = await respond_via_api(client, case.prompt, user)
