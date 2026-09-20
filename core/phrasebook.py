@@ -13,7 +13,9 @@ get_phrase() always has a hardcoded default as a safety net, so a missing
 or corrupted stored phrase never breaks a flow — it just falls back to the
 plain, functional default wording.
 """
-from db.db import get_learned_phrase, persona_disabled
+import random
+
+from db.db import get_learned_phrase, get_phrase_variants, persona_disabled
 
 # key -> (default_text, functional_intent — used by the reflection loop
 # when it rewrites a phrase, to keep the purpose intact)
@@ -327,6 +329,18 @@ PHRASE_REGISTRY = {
 # is her genuinely treating this category as grave regardless of overall
 # personality, not an external mood tag layered on after the fact.
 SECURITY_SENSITIVE_PHRASES = {
+    # 2026-09-20: added. Every other entry here is a DENIAL — "you are not
+    # authorized", "invalid code". This one is the prompt that *initiates*
+    # creator voice verification, and it was missing, so it got re-voiced
+    # with no gravity instruction at all. That is how "Please say a short
+    # phrase so I can verify it's you" became "Say 'hello, party animal' so
+    # I can make sure it's you" (personality_log #55) — a request for ANY
+    # phrase turned into a fixed spoken passphrase, which is a replay-attack
+    # gift where varying text is not. Membership here only adds the "vary
+    # the words, never the seriousness" instruction; it is NOT the hard
+    # exclusion this list has been proposed for and which Craig has not
+    # agreed to.
+    "voice_verify_prompt",
     "denial_not_creator",
     "denial_not_privileged",
     "denial_not_verified",
@@ -341,15 +355,55 @@ SECURITY_SENSITIVE_PHRASES = {
 
 
 async def get_phrase(key: str, **kwargs) -> str:
+    """The line she actually says, picked fresh each time.
+
+    2026-09-20 (Craig, after hearing the identical voice-verification
+    sentence on every connect): "she should theoretically be coming up with
+    something new for it with every statement in terms of how it's
+    presented at least... I don't say hello the exact same way every single
+    time. The words may be similar but are still slightly different."
+
+    Until then a phrase was ONE stored string, re-voiced occasionally by
+    self-reflection and byte-identical between those passes. Now the
+    canonical wording sits alongside a handful of variants
+    (db.get_phrase_variants) and one is chosen at random per call.
+
+    Chosen at CALL time from pre-generated text rather than generated per
+    call: generating would add an LLM round-trip to every scripted line,
+    including the connect handshake and mid-conversation denials, and give
+    every one of them a new way to fail. The variants are produced during
+    idle self-reflection instead, which is where phrase re-voicing already
+    happens. Still hers — she writes them, nothing here is authored wording.
+
+    Falls back at every step: no variants means the canonical text, a
+    variant that breaks its {placeholder} means the canonical text, and a
+    canonical that breaks means the code default."""
     default_text, _ = PHRASE_REGISTRY[key]
 
     # 2026-09-20: her re-voiced wording is persona, so the persona switch mutes
     # it too and every line falls back to the plain functional default. The
     # stored phrases are untouched and come back the instant it is switched off.
+    # Variants are persona for the same reason, so they are skipped too — a
+    # muted persona should be flat and predictable, not varied.
     if persona_disabled():
         return default_text.format(**kwargs)
 
     text = await get_learned_phrase(key, default=default_text)
+
+    try:
+        variants = await get_phrase_variants(key)
+    except Exception:
+        variants = []
+
+    if variants:
+        chosen = random.choice([text] + variants)
+        try:
+            return chosen.format(**kwargs)
+        except Exception:
+            # A variant that broke its {placeholder} must not take the line
+            # down with it — fall through to the canonical below, which has
+            # its own fallback to the code default.
+            pass
 
     try:
         return text.format(**kwargs)
