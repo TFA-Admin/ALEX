@@ -28,8 +28,26 @@ async def _speak(websocket, text):
     calling this, so the audio just needs to follow it over the same
     connection."""
     pcm = await synthesize_speech(text)
-    if pcm:
-        await websocket.send_bytes(pcm)
+    if not pcm:
+        return
+
+    # 2026-09-20: wrapped in the __START__/__END__ envelope. Craig, live:
+    # "she immediately prompted me upon hearing my voice but did not actually
+    # say anything." The text appeared, the audio never played.
+    #
+    # Cause: the browser sets clientInterrupted = true whenever he talks over
+    # her (stopAllPlayback), and scheduleAudioChunk() drops every chunk while
+    # that flag is set. It is cleared in exactly one place — the __START__
+    # handler. So any audio sent outside the envelope is silently discarded
+    # for the rest of the session once he has interrupted her even once, which
+    # in a voice-first assistant is immediately. Onboarding greetings were
+    # sent as bare text + bytes and hit this every time.
+    #
+    # The envelope is empty of text on purpose: callers already sent theirs,
+    # and __END__ only flushes pendingTexts, so nothing is displayed twice.
+    await websocket.send_text("__START__")
+    await websocket.send_bytes(pcm)
+    await websocket.send_text("__END__")
 
 
 class IdentityManager:

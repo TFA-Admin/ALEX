@@ -79,9 +79,19 @@ class AudioProcessor:
     async def _ask_clarification(self, websocket, prompt_text):
         question = f'Did you say "{prompt_text}"?'
         await websocket.send_text(question)
+
+        # 2026-09-20: same envelope fix as identity_manager._speak(). Craig
+        # saw this exact prompt appear as text with no speech — the browser
+        # drops every audio chunk while clientInterrupted is set, and that
+        # flag is only ever cleared by __START__. A clarification is the worst
+        # possible place to lose the audio: she is asking whether she heard
+        # him correctly, so a silent question invites no answer and she then
+        # looks like she is ignoring him.
         pcm = await synthesize_speech(question)
         if pcm:
+            await websocket.send_text("__START__")
             await websocket.send_bytes(pcm)
+            await websocket.send_text("__END__")
 
     async def process_end(self, audio_bytes: bytes, websocket, send_debug):
         now = asyncio.get_event_loop().time()

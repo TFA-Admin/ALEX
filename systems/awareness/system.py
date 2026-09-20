@@ -49,7 +49,8 @@ class System(BaseSystem):
         return True, ""
 
     async def handle(self, session, user_id: str, input_data: dict):
-        if not input_data.get("text"):
+        text = input_data.get("text")
+        if not text:
             return None
 
         # Only the creator is asked about this. Another user has no idea why
@@ -72,8 +73,23 @@ class System(BaseSystem):
             logger.warning(f"⚠️ disabled-feature check failed: {e}")
             return None
 
+        # If she asked last turn, THIS turn is almost certainly the answer.
+        # 2026-09-20: without this the loop was half-built — she raised the
+        # question and nothing captured the reply, so she would ask again next
+        # time. Craig answered "I turned it off for testing" and it went
+        # nowhere. Deliberately a positional heuristic rather than a
+        # classifier: the turn straight after her question is the answer often
+        # enough, and being wrong only means she stops asking about something
+        # she already asked about.
+        awaiting = session.pop("awaiting_disabled_reason", None)
+        if awaiting:
+            for feature in awaiting:
+                await disabled_watch.record_reason(feature, text)
+            logger.info(f"[AWARENESS] recorded reason for {list(awaiting)}: {text!r}")
+
         if pending:
             logger.info(f"[AWARENESS] noticed switched off, no reason given: {list(pending)}")
             session["pending_disabled_notice"] = pending
+            session["awaiting_disabled_reason"] = list(pending)
 
         return None      # never answers; only supplies context

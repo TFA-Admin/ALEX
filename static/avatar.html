@@ -118,12 +118,38 @@ body.rail-collapsed.chat-collapsed{ grid-template-columns: 34px 1fr 34px; }
   cursor: not-allowed;
 }
 
+/* Heard but deliberately not acted on. Deliberately muted and italic — it is
+   information about why nothing happened, not something she said. */
+.msg.unaddressed{
+  opacity: .62;
+  font-style: italic;
+  border-style: dashed;
+}
+
 .rail, .chat{ position: relative; overflow: hidden; }
 
 .rail-content, .chat-content{
   opacity: 1;
   transition: opacity 0.2s ease;
 }
+
+/* 2026-09-20: the accordion wrapper has to carry the column layout it
+   displaced. Craig, live: "in long responses the text field in which to type
+   actually disappears off the page preventing any further interaction."
+   .chat is a full-height flex column and .chat-body claims flex:1 with its own
+   scroll — but when the collapsible .chat-content div was inserted between
+   them, .chat-body lost its flex parent. flex:1 against a non-flex parent does
+   nothing, so the body grew with the transcript instead of scrolling, and
+   pushed .chat-input below the viewport. min-height:0 is required too, or a
+   flex child refuses to shrink below its content and scrolls the page rather
+   than itself. */
+.chat-content{
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 0;
+}
+.chat-body{ min-height: 0; }
 body.rail-collapsed .rail-content,
 body.chat-collapsed .chat-content{
   opacity: 0;
@@ -595,6 +621,21 @@ function clearResponseTimeout(){
 const ENGAGED_WINDOW_MS = 45000; // must match ws/ws_handlers.py's CONVERSATION_WINDOW_S
 let engagedDecayHandle = null;
 
+// 2026-09-20 — see the __UNADDRESSED__ branch in ws.onmessage.
+function showUnaddressed(text){
+    if(!latest) return;
+
+    const div = document.createElement("div");
+    div.className = "msg unaddressed";
+    div.textContent = `Heard “${text}” — but you weren't talking to me. Say “Alex” to bring me back in.`;
+
+    // Same latest/history rotation every other message uses, so it reads as
+    // part of the conversation rather than a floating system notice.
+    if(latest.firstChild){ historyContent.prepend(latest.firstChild); }
+    latest.innerHTML = "";
+    latest.appendChild(div);
+}
+
 function setEngaged(isEngaged){
     if(engagedDecayHandle){ clearTimeout(engagedDecayHandle); engagedDecayHandle = null; }
 
@@ -675,12 +716,15 @@ function setReadiness(state){
     // means degraded, not broken, and locking her out would be worse than
     // a slow first answer.
     const usable = (state === "ready" || state === "failed");
-    if(input){
-        input.disabled = !usable;
-        input.placeholder = usable
-            ? "Say something, or type it instead…"
-            : (READINESS_LABELS[state] || "Starting up…");
-    }
+    // 2026-09-20: the placeholder is deliberately left alone. It used to be
+    // overwritten with the readiness label, and Craig hit the consequence
+    // immediately — "when I turn auto listen off in the browser it shows
+    // starting up in the message field". Two independent pieces of state were
+    // sharing one bit of UI, so any path that re-ran this with a stale state
+    // left a misleading message sitting where the prompt should be. The banner
+    // above already says what is happening; the input only needs to be
+    // disabled, not narrated.
+    if(input) input.disabled = !usable;
     if(sendBtn) sendBtn.disabled = !usable;
 }
 
@@ -924,6 +968,15 @@ ws.onmessage = (e)=>{
 
     if(typeof data === "string" && data.startsWith("__READY__")){
         setReadiness(data.replace("__READY__", ""));
+        return;
+    }
+
+    // She heard it and deliberately dropped it — the addressed-window had
+    // lapsed. Shown in the transcript because that is where the person is
+    // looking when they wonder why nothing happened, and because "she ignored
+    // me" and "she is broken" are otherwise indistinguishable.
+    if(typeof data === "string" && data.startsWith("__UNADDRESSED__")){
+        showUnaddressed(data.replace("__UNADDRESSED__", ""));
         return;
     }
 

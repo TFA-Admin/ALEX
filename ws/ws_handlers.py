@@ -534,6 +534,25 @@ async def process_message(websocket, msg, user_id, session_id, audio, audio_byte
 
             if not (addressed or in_window):
                 await send_debug(websocket, f"🙉 Not addressed, ignored: {prompt_text!r}")
+
+                # 2026-09-20: tell the PAGE, not just the debug panel.
+                #
+                # Craig, live: "she then ignored another thing I stated. and
+                # seemed to continue to do so." The log shows exactly that —
+                # three consecutive utterances dropped over two minutes
+                # ("Okay, I'm turning your personality back on.", "No, I did
+                # not.", "your personality should be restored.") until he
+                # happened to say her name again.
+                #
+                # The gating itself is correct and deliberate: the window had
+                # genuinely lapsed (59s against CONVERSATION_WINDOW_S=45). The
+                # failure is that it is INVISIBLE. `send_debug` goes to a
+                # collapsible debug panel, and the "engaged: no" telemetry row
+                # lives in a rail that can be collapsed entirely. So from the
+                # outside, correct behaviour and a hung assistant look
+                # identical — and the natural response is to keep talking,
+                # which never re-engages her.
+                await websocket.send_text("__UNADDRESSED__" + prompt_text)
                 # 2026-07-18 (Craig: "her presence in the UI still says
                 # listening" after "stop listening" worked server-side) —
                 # the mic staying armed (continuous VAD, needed to catch
