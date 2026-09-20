@@ -497,11 +497,20 @@ DEFAULT_PERSONALITY = (
 )
 
 
-async def get_personality():
+async def get_personality(raw: bool = False):
+    """raw=True returns what is actually STORED, ignoring the persona switch.
+
+    Added 2026-09-20 because her own diagnostic caught the switch and reported
+    it as a fault: it compares the last personality_log entry against
+    get_personality(), and muting makes those legitimately diverge — which is
+    also the exact signature of a half-failed write, so the check was right to
+    fire. Integrity checks want the stored value; everything that shapes how
+    she actually speaks wants the effective one.
+    """
     # The switch is checked at the READ, not at the write, so flipping it takes
     # effect on her very next turn with no restart and without touching what
     # she has developed. Turning it back off restores her exactly as she was.
-    if persona_disabled():
+    if persona_disabled() and not raw:
         return PERSONA_OFF_DESCRIPTION
 
     async with aiosqlite.connect(DB_PATH) as db:

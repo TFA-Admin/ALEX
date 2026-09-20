@@ -5,7 +5,8 @@ import httpx
 from core.alex_core import alex_core
 from db.db import (
     fetch_recent_memory_all, list_module_registry, get_response_timings,
-    get_personality, get_last_personality_log_value
+    get_personality, get_last_personality_log_value,
+    persona_disabled
 )
 from module_runtime.module_loader import load_module
 
@@ -164,8 +165,13 @@ async def handle(command, state, user_id=None):
         # one of those writes silently failed partway and her actual
         # behavior is running on a value that doesn't match what the log
         # — and Craig, reading it — believes is current.
+        # 2026-09-20: compare against the STORED value, not the effective one.
+        # The persona switch deliberately overrides the read, so comparing the
+        # log to the active personality flagged a healthy system as broken the
+        # first time Craig used the switch. raw=True keeps this a real
+        # integrity check while muted instead of a guaranteed false positive.
         last_logged = await get_last_personality_log_value()
-        current = await get_personality()
+        current = await get_personality(raw=True)
         if last_logged is not None and last_logged != current:
             issues.append(
                 "personality drift: the last logged personality change doesn't "
@@ -173,10 +179,30 @@ async def handle(command, state, user_id=None):
                 f"(logged: {last_logged!r}, actual: {current!r})"
             )
 
+        # 2026-09-20 (Craig: "would it be possible to make it so things are
+        # simply disabled while being worked on, then upon completion she
+        # would be aware and prompt me to re-enable them?") — first instance
+        # of that idea. Something deliberately switched off is not a fault,
+        # but she should know it is off and say so, rather than either
+        # reporting it as broken or reporting all-clear while running in a
+        # mode the creator may have forgotten about.
+        notices = []
+        if persona_disabled():
+            notices.append(
+                "my personality is switched off at the Controller, so I'm "
+                "running plain right now — nothing I'd developed is lost, and "
+                "it comes back whenever you restore it"
+            )
+
         if not issues:
-            return "All core systems online. Ollama and the database are both reachable.", state
+            base = "All core systems online. Ollama and the database are both reachable."
+            if notices:
+                return base + "\n" + "\n".join(f"- {n}" for n in notices), state
+            return base, state
 
         report = "Diagnostic found a problem:\n" + "\n".join(f"- {i}" for i in issues)
+        if notices:
+            report += "\n\nAlso worth mentioning:\n" + "\n".join(f"- {n}" for n in notices)
         return report, state
 
     return "Ask me to check systems or run a diagnostic.", state
