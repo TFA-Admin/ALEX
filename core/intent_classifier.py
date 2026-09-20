@@ -101,6 +101,8 @@ PERSONALITY_SET_PROMPT = """You are A.L.E.X, an AI assistant. The user said: "{t
 
 Is the user DIRECTLY asking A.L.E.X. to adopt a NEW, DIFFERENT personality or way of talking (not just chatting, not asking her to reset/default, not about anything else)? This includes both describing a new trait ("set your personality to be more sarcastic", "be snarkier", "you should be more upbeat") AND telling her to stop/change a specific habit of hers ("stop saying you're here to assist me", "you don't need to keep telling me that", "stop being so repetitive", "stop offering to help every time").
 
+This must be an actual INSTRUCTION or REQUEST to change, not a plain statement, opinion, insult, or description of what A.L.E.X. currently is or does. "You are a glorified smartwatch", "you're so useless", "you are way too sarcastic" are just commentary/insults, not requests to change anything — respond "no" to those even though they say "you are". Only answer "set" when the person is clearly telling her to become or start doing something different going forward, not just remarking on how she already is.
+
 Respond with ONLY a JSON object:
 {{"personality_command": "set", "value": "<the desired personality/behavior change, as a short description>"}}
 or {{"personality_command": "no"}}"""

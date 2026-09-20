@@ -48,7 +48,54 @@ body{
   display: grid;
   grid-template-columns: 240px 1fr 360px;
   gap: 0;
+  transition: grid-template-columns 0.35s ease;
 }
+
+/* 2026-07-18 (Craig: "can we make the two side panels accordion, so if I
+   wanted all I would see is the glowing orb") — each panel collapses to
+   a thin strip (just enough for its toggle button) independently; the
+   center .stage column is 1fr, so it automatically absorbs whatever
+   width the collapsed panel gives up. */
+body.rail-collapsed{ grid-template-columns: 34px 1fr 360px; }
+body.chat-collapsed{ grid-template-columns: 240px 1fr 34px; }
+body.rail-collapsed.chat-collapsed{ grid-template-columns: 34px 1fr 34px; }
+
+.panel-toggle{
+  position: absolute;
+  top: 14px;
+  z-index: 5;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--dim);
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s ease, border-color 0.2s ease;
+}
+.panel-toggle:hover{ color: var(--ink); border-color: var(--dim); }
+.panel-toggle:focus-visible{ outline: 2px solid var(--signal-focus); outline-offset: 1px; }
+.panel-toggle{ right: 8px; }
+.panel-toggle-right{ right: auto; left: 8px; }
+
+.rail, .chat{ position: relative; overflow: hidden; }
+
+.rail-content, .chat-content{
+  opacity: 1;
+  transition: opacity 0.2s ease;
+}
+body.rail-collapsed .rail-content,
+body.chat-collapsed .chat-content{
+  opacity: 0;
+  pointer-events: none;
+}
+body.rail-collapsed .panel-toggle{ transform: rotate(180deg); }
+body.chat-collapsed .panel-toggle-right{ transform: rotate(180deg); }
 
 @media (max-width: 900px){
   body{ grid-template-columns: 1fr; grid-template-rows: auto auto auto; }
@@ -343,6 +390,8 @@ body{
 <body>
 
   <div class="rail">
+    <button class="panel-toggle" id="railToggle" onclick="toggleRail()" title="Collapse panel">&#10094;</button>
+    <div class="rail-content" id="railContent">
     <div class="rail-brand"><b>A.L.E.X.</b><br/>interface</div>
 
     <div class="tele-group">
@@ -379,6 +428,7 @@ body{
     </details>
 
     <div class="rail-foot" id="clock"></div>
+    </div>
   </div>
 
   <div class="stage">
@@ -390,6 +440,8 @@ body{
   </div>
 
   <div class="chat">
+    <button class="panel-toggle panel-toggle-right" id="chatToggle" onclick="toggleChat()" title="Collapse panel">&#10095;</button>
+    <div class="chat-content" id="chatContent">
     <div class="chat-head">
       <div class="eyebrow">Transcript</div>
       <div class="title">conversation</div>
@@ -408,6 +460,7 @@ body{
       <div class="chat-input-row">
         <button onclick="send()">Send</button>
       </div>
+    </div>
     </div>
   </div>
 
@@ -994,6 +1047,23 @@ function toggleAutoListen(){
         autoBtn.classList.add("active");
     }
 }
+
+// 2026-07-18 (Craig: "can we make the two side panels accordion, so if I
+// wanted all I would see is the glowing orb") — collapsed state persists
+// across reloads (localStorage) since this is a preference about how he
+// wants the interface to look, not per-session state.
+function toggleRail(){
+    const collapsed = document.body.classList.toggle("rail-collapsed");
+    localStorage.setItem("alex_rail_collapsed", collapsed ? "1" : "0");
+}
+
+function toggleChat(){
+    const collapsed = document.body.classList.toggle("chat-collapsed");
+    localStorage.setItem("alex_chat_collapsed", collapsed ? "1" : "0");
+}
+
+if(localStorage.getItem("alex_rail_collapsed") === "1"){ document.body.classList.add("rail-collapsed"); }
+if(localStorage.getItem("alex_chat_collapsed") === "1"){ document.body.classList.add("chat-collapsed"); }
 
 // 2026-07-17: Silero VAD (a small neural speech-detection model, via the
 // vendored @ricky0123/vad-web wrapper — see the <script> tags above and

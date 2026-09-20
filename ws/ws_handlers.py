@@ -264,11 +264,24 @@ async def ws_text(websocket: WebSocket):
         locked_fields[user_id] = {"all": True}
 
         if user_id.startswith("pending_user_"):
-            user_id = await identity_manager.onboard_new_user(
+            user_id, onboard_heard_text = await identity_manager.onboard_new_user(
                 websocket,
                 user_id,
                 session
             )
+
+            # 2026-07-18 (Craig: "my first utterance which she used to
+            # verify me is being eaten again") — the sibling of the
+            # 2026-07-17 verify_voice() fix: onboard_new_user()'s own
+            # voice-first recognition path had the exact same bug in a
+            # path that fix never touched (hit whenever the browser's
+            # cached username isn't recognized, same root cause as
+            # before, routing here instead of the later separate
+            # verification block). See identity_manager.py's docstring.
+            clean = re.sub(r'[^a-z ]', '', onboard_heard_text.lower()).strip()
+            if clean and clean not in {"now", "no now", "um", "uh", "okay", "ok", "hmm", "hm"}:
+                async with generation_lock:
+                    await process_message(websocket, onboard_heard_text, user_id, session_id, audio)
 
         # send profile
         facts = await enrich_profile(user_id)

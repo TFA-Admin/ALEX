@@ -358,9 +358,24 @@ class IdentityManager:
     # strip lead-in phrasing so "This is Craig" / "Alex, it's Craig" -> "Craig"
     # rather than being kept whole and treated as a literal (garbage) name
     NAME_LEADIN_PATTERNS = [
-        r"^(?:hey|hi|hello)?\s*alex[,]?\s*",
+        r"^(?:hey|hi|hello)?[,]?\s*alex[,.]?\s*",
         r"^(?:this is|it's|it is|i'm|i am|my name is|call me|the name's)\s+",
     ]
+
+    # 2026-07-18 (Sadie's onboarding got stuck in a loop): the anchored
+    # patterns above only strip a lead-in at the very START of the reply.
+    # Rambling, conversational speech ("Hello, Alex. Oh, it's not here...
+    # my name is Sadie.") buries the actual "my name is X" well past the
+    # start, so nothing got stripped, the leftover "hello" tripped
+    # NAME_REJECT_WORDS below, and the whole valid name got rejected. This
+    # searches for the same lead-in phrases ANYWHERE in the text and, if
+    # found, keeps only what follows the LAST one — the part of a rambling
+    # reply closest to "and that's my actual name" is the part after the
+    # last "my name is"/"it's"/etc, not the start of the sentence.
+    NAME_LEADIN_ANYWHERE = re.compile(
+        r"(?:this is|it's|it is|i'm|i am|my name is|call me|the name's)\s+",
+        re.IGNORECASE,
+    )
 
     # single words that mean this isn't a name attempt at all (checked as
     # whole words, not substrings — "how" must not reject "Howard")
@@ -375,6 +390,10 @@ class IdentityManager:
 
         for pattern in self.NAME_LEADIN_PATTERNS:
             text = re.sub(pattern, "", text).strip()
+
+        matches = list(self.NAME_LEADIN_ANYWHERE.finditer(text))
+        if matches:
+            text = text[matches[-1].end():].strip()
 
         return text
 
@@ -461,6 +480,21 @@ Respond with ONLY a JSON object, nothing else:
     # ONBOARDING (VOICE-FIRST, FALLS BACK TO NAME)
     # -------------------------
     async def onboard_new_user(self, websocket, temp_user_id, session=None):
+        """Returns (user_id, heard_text). heard_text is whatever the
+        person actually said during the voice-first recognition greeting
+        — empty string for the name-collection path below, since that
+        content is identity setup (their name), not a real request.
+
+        2026-07-18 (Craig: "my first utterance which she used to verify
+        me is being eaten again") — this is the sibling of the
+        2026-07-17 verify_voice() fix, in a path that fix never touched.
+        resolve_user_passive() failing to recognize a claimed name (same
+        root cause as before — the browser's cached username not being
+        sent) routes here instead of the later separate verification
+        block, and THIS path had the exact same bug: raw_response (what
+        was actually said) was captured and then only ever used to
+        recognize the VOICE, never answered. Whatever prompted the
+        original fix in verify_voice() applies here too."""
 
         while True:
             # ---------------- GREETING ----------------
@@ -485,7 +519,7 @@ Respond with ONLY a JSON object, nothing else:
                     await websocket.send_text(welcome)
                     await _speak(websocket, welcome)
 
-                    return recognized_owner
+                    return recognized_owner, raw_response
 
             name = await self._collect_valid_name(websocket, raw_response)
 
@@ -530,7 +564,7 @@ Respond with ONLY a JSON object, nothing else:
         await websocket.send_text(final_msg)
         await _speak(websocket, final_msg)
 
-        return name
+        return name, ""
 
 
 # -------------------------
