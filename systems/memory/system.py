@@ -43,6 +43,12 @@ from config.logger_config import logger
 # that replaces it, and it measures actual reuse rather than approval.
 
 
+# Minimum cosine similarity for a stored memory to be offered as "Relevant:"
+# context. See the selection site below for why this exists and why the number
+# is a reasoned starting point rather than a tuned one.
+MEMORY_RELEVANCE_FLOOR = 0.45
+
+
 class System(BaseSystem):
 
     name = "memory"
@@ -95,8 +101,27 @@ class System(BaseSystem):
 
         scored.sort(reverse=True, key=lambda x: x[0])
 
-        # 🔥 keep it SMALL (performance critical)
-        top_memories = [m for _, m in scored[:2]]
+        # 🔥 keep it SMALL (performance critical), and only if it's actually
+        # relevant. 2026-09-20: this used to take scored[:2] unconditionally,
+        # so the two least-unrelated memories were injected as "Relevant:"
+        # context on EVERY turn even when nothing stored had anything to do
+        # with the question. Recall with no floor is not recall, it is just
+        # the top of a sorted list.
+        #
+        # This matters beyond noise: whatever gets injected, she treats as
+        # established. Craig hit the extreme version on 2026-09-20 — one
+        # spurious line about chlorophyll entered the record and she then
+        # asserted "you were going on and on about how green everything is",
+        # attributing her own invention to him. A floor does not fix that case
+        # (it arrived through the recency window below, where a relevance
+        # filter would break "what did I just ask you?"), but unrelated
+        # memories being presented as relevant is the same class of problem.
+        #
+        # Untuned starting point, stated as such: the project's own measured
+        # reference points are 0.63-0.70 for genuine greeting-vs-greeting
+        # similarity and 0.85 for a confident factual match, so 0.45 sits well
+        # below "related" while still excluding the clearly unconnected.
+        top_memories = [m for score, m in scored[:2] if score >= MEMORY_RELEVANCE_FLOOR]
 
         # -------------------------
         # RECENT MEMORY
