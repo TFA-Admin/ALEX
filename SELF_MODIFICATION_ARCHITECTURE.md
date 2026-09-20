@@ -384,6 +384,43 @@ rules, and needs no identity work, so it does not block on vision.
 - [ ] **7. Model comparison** (qwen3:8b / qwen3.5:9b), now reproducible
       via the harness. Test Qwen3 thinking-mode ON for claim turns
       specifically — a native version of the deliberation pass.
+**Onboarding name validation — real bug, found 2026-09-20, not yet fixed.**
+Craig asked whether onboarding fires too eagerly. It does not:
+`resolve_user_passive()` only falls through to onboarding when the name
+fails to match an existing profile, which is the correct gate. The problem
+is the validation *inside* it.
+
+`clean_text()` is `re.sub(r'[^a-zA-Z]', '', text.lower())`, and
+`_collect_valid_name()` then requires the result to be 2-20 characters,
+inside a `while True` with no give-up path. Measured:
+
+| Name | Cleaned | Outcome |
+|---|---|---|
+| José | `jos` | silently mangled |
+| Björn | `bjrn` | silently mangled |
+| Łukasz | `ukasz` | silently mangled |
+| 张伟 | `''` | **rejected forever** |
+| Anne-Sophie de la Cruz-Fernandez | 27 chars | **rejected forever** |
+
+So accented names are corrupted, non-Latin names cannot be onboarded at
+all, and an ordinary long compound name is refused. In every failing case
+she loops asking again indefinitely, holds the connection, and logs
+nothing explaining why — the person has no way to learn what she wants.
+This is invisible today only because every existing profile is a short
+ASCII first name.
+
+Suggested shape (Craig's call, and it changes her behaviour):
+keep Unicode letters instead of `a-zA-Z`; raise or drop the 20-character
+cap, which is a storage field rather than a real constraint; and add a
+give-up path that accepts what was said or generates a handle after N
+attempts, so the connection is never held forever.
+
+**Caution**: `clean_text()` is also the lookup key, so widening it changes
+how existing profiles resolve. The four current profiles are lowercase
+ASCII so nothing breaks today, but this should land deliberately — most
+naturally alongside the Principle 9 identity/vision work rather than as a
+drive-by patch.
+
 **Requested by Craig (2026-09-20), after the current upgrades land:** a
 review pass over `ALEX_Controller.py`. Worth noting before starting it that
 the Controller is Design Principle 10's hard boundary — it is explicitly

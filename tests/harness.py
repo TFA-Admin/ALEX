@@ -217,13 +217,32 @@ class WSSession:
         onboarding (welcome line, the reply to the last onboarding input) is
         still in flight, and without this the first real prompt captures that
         queued text instead of its own answer — the same shape as the
-        'first utterance eaten' bugs in identity_manager/ws_handlers. Read
-        until she goes quiet, then start the conversation."""
-        while True:
+        'first utterance eaten' bugs in identity_manager/ws_handlers.
+
+        Originally this just waited for 6 seconds of silence, which was a
+        number picked for safety and never revisited. It cost 6s per session
+        and the A/B run made that impossible to ignore: 140 sessions meant 14
+        minutes of the ~33 were this function sleeping. The queued messages
+        actually arrive in a burst within a few hundred milliseconds.
+
+        So: short silence window, but if a spoken block starts (`__START__`)
+        wait for its `__END__` however long that takes, rather than cutting
+        into it. That keeps the guarantee while dropping the fixed cost.
+        """
+        speaking, deadline = False, time.monotonic() + 30.0
+        while time.monotonic() < deadline:      # never wait on a lost __END__
             try:
-                await asyncio.wait_for(self.ws.recv(), timeout=6.0)
+                msg = await asyncio.wait_for(self.ws.recv(), timeout=1.2)
             except asyncio.TimeoutError:
+                if speaking:
+                    continue      # mid-utterance; silence here is just a gap
                 return
+            if isinstance(msg, (bytes, bytearray)):
+                continue
+            if msg == "__START__":
+                speaking = True
+            elif msg == "__END__":
+                speaking = False
 
     async def __aexit__(self, *exc):
         if self.ws:
