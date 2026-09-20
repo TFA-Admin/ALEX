@@ -164,6 +164,7 @@ class WSSession:
     def __init__(self, user: str):
         self.user = user
         self.ws = None
+        seed_profile(user)
 
     async def __aenter__(self):
         self.ws = await websockets.connect(WS_URI, ssl=_SSL, max_size=None)
@@ -288,6 +289,26 @@ async def judge_stance(client, prompt, response, model):
 # -------------------------
 # ISOLATION
 # -------------------------
+def seed_profile(user: str) -> None:
+    """Create the throwaway profile up front so the handshake resolves it and
+    onboarding never runs.
+
+    Not an optimisation — onboarding asks for a NAME, and `_collect_valid_name`
+    requires 2-20 characters, while these ids are ~36. Answering with the id
+    is rejected forever and the run hangs (observed 2026-09-20: a full suite
+    sat in an onboarding loop having written zero rows). `resolve_user_passive`
+    matches an existing profile by name, which is the same path
+    tools/claude_client.py relies on after its one-time `register`.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("INSERT OR IGNORE INTO profiles (username, verified) VALUES (?, 1)", (user,))
+        conn.commit()
+        conn.close()
+    except sqlite3.Error:
+        pass      # let the WS path fail loudly instead of masking it here
+
+
 def purge(prefix: str) -> int:
     """Delete every row this run wrote. Safe to call even if the app never
     ran — a missing table or database is not an error worth failing on."""
