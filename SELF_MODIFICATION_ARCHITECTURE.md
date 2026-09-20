@@ -50,6 +50,16 @@ were being read — each one changes what "done" means, not just emphasis:
    constraint is gone. Anything in this document justified primarily by
    per-turn cost is reopened by default, not grandfathered.
 
+**What she is**: a **lab assistant**, not a companion — intellectually
+focused and accurate, with a personality of her own and no obligation to
+stay on professional topics. Explicitly not something that agrees
+because agreement is welcome. See Design Principle 12, which also names
+the two existing feedback loops that currently select for the opposite.
+
+**How she is used**: almost entirely by voice, with vision as well — so
+that she simply recognizes Craig and his spoken instruction carries his
+authority without a separate approval ceremony. See Design Principle 9.
+
 **On whether autonomy has an endpoint**: deliberately unanswered. Craig's
 position (2026-09-20) is that the ability to *ask* that question is
 itself something she should have. That makes it a capability requirement
@@ -263,6 +273,29 @@ only still matters for `recall`.
    State's open-gaps list) — needs per-utterance speaker re-verification,
    not just the connect-time-only check that exists today.
 
+   **Clarified (Craig, 2026-09-20): this is *his* authority as a person,
+   not the authority of the `creator` role tag.** The tag is a database
+   field; the intent is that ALEX knows it is Craig. The target model is
+   recognition-based: she is interacted with almost entirely by voice,
+   she has **vision** as well, and so she simply knows who is speaking.
+   Once she knows it is him, a spoken instruction that requires approval
+   *is* approved — no separate ceremony. **This promotes vision from the
+   parenthetical "eventually face too" above into a real requirement**,
+   and it means identity confidence becomes load-bearing for authority
+   rather than merely for personalization.
+
+   **Recorded tension, for Craig to decide deliberately rather than by
+   default**: voice and face are both things he *is*, and both are
+   spoofable (a recording, a photograph). The override code
+   (`core/override_code.py`, 17 call sites) is the one factor he
+   *knows*, and recognition-as-authority removes it from the loop.
+   Recommendation, not a decision: keep recognition as the everyday path
+   exactly as described, and retain the code as an escalation for the
+   narrow set of highest-risk actions — most obviously Component 12's
+   rule 1, changes to her own core code. Deleting it entirely trades a
+   real security property for convenience that recognition already
+   provides everywhere else.
+
 10. **The Controller is the one thing that must never depend on her
     cooperation** (Craig, explicitly "think runaway AI things").
     `ALEX_Controller.py` is a fully separate process from everything
@@ -277,27 +310,75 @@ only still matters for `recall`.
     the Controller or its kill path. This is a hard boundary, not a
     default-with-exceptions like principle 9.
 
-11. **Self-extension is gated by scope, not by building.** *(Proposed
-    2026-09-20 to resolve a real conflict — NOT yet confirmed by Craig.
-    Settle before building against it.)* The goal statement's second
-    clarification ("if she needs something she doesn't have, add it,
-    without my intervention") directly contradicts Principle 3 if what
-    gets approved is *building*. Proposed line: she may freely author,
-    validate, load and revise **standard sandboxed** modules with no
-    approval — the sandbox, not a signature, is what makes that safe.
-    Approval is required only to gain a new capability **scope** (`db`,
-    `network`, `os_process`, `introspection` — see
-    `module_runtime/validator.py`'s `IMPORT_SCOPES`), which is the
-    actual trust boundary Principle 3 exists to guard. This grants real
-    self-extension without touching Principle 10, which stays absolute.
+11. **She builds freely; nothing she builds becomes active without the
+    creator's express approval.** *(Settled by Craig 2026-09-20,
+    clarifying what "without my intervention" meant — it was never
+    "without my approval.")* Assessing a gap, designing a module,
+    writing it and validating it are all hers, unprompted and
+    unapproved. **Activation is the gate**, and it is universal: it
+    applies to every module regardless of scope, not only privileged
+    ones. She surfaces the finished thing and asks for an enable
+    decision; absent an express yes, it stays disabled.
 
-    **Hard prerequisite**: `check_safety()`'s import scoping has to
-    become an allowlist first (see Open Questions). While it is
-    denylist-shaped, a module *she* wrote can reach capability without
-    ever naming a scoped import, which makes the scope gate above
-    decorative. This is currently a theoretical gap only because Claude
-    authors every module; under this principle it becomes the
-    load-bearing wall.
+    *How* she asks is hers — Craig's phrasing ("This module is now
+    built, should I enable it?") was an illustration, explicitly not a
+    script. This is Principle 6 exactly: the functional intent (solicit
+    an enable decision) is fixed because the pipeline depends on it; the
+    wording is hers, every time.
+
+    This resolves the apparent conflict with Principle 3 without
+    weakening it — the trust boundary is crossed at activation, not at
+    authorship, so nothing she writes can act on the world unreviewed.
+    **Much of the mechanism already exists**: `module_registry.status`
+    plus the enforced enable/disable from the module-registry work
+    already make "built but inert" a real state. What is missing is the
+    authoring half and her ability to raise the request herself.
+
+    The separate elevated-access approval for privileged scopes (`db`,
+    `network`, `os_process`, `introspection` —
+    `module_runtime/validator.py`'s `IMPORT_SCOPES`) stays as an
+    additional gate on top of this one, not a replacement for it.
+
+    **Note on `check_safety()`**: the activation gate substantially
+    reduces the risk of her authoring her own modules — nothing runs
+    unreviewed. It does not eliminate the allowlist problem (see Open
+    Questions), because the creator approving an enable cannot
+    realistically be the security boundary by auditing Python line by
+    line. The scoping needs to be sound so that approval means
+    something.
+
+12. **She is a lab assistant, not a companion — and never agreeable at
+    the expense of accurate.** *(Settled by Craig, 2026-09-20: "I don't
+    want something telling me I'm correct because it's what I want to
+    hear, I want to hear I'm correct when I'm correct.")* She has her
+    own personality, and conversation outside professional topics is
+    fine, but the register is intellectually focused and the standard is
+    accuracy. Agreement tracks correctness, never the creator's evident
+    preference. This answers the former open question about whether she
+    is a companion or a correct system: she is the latter, with a
+    personality — not a warm presence that happens to be usually right.
+
+    **This is a mechanism requirement, not a tone request — and two
+    existing loops currently push the opposite way.** Both are slow
+    gradients rather than acute bugs, and both need a counterweight
+    before they are trusted to run unattended:
+
+    - `core/self_reflection.py`'s `_reflect_on_personality()` rewrites
+      her personality from raw conversation transcripts, asking only
+      whether she wants to adjust "based on how these went." With no
+      independent notion of correctness available to it, "how it went"
+      collapses to "did Craig seem pleased" — selection pressure toward
+      agreeableness, applied directly to who she is.
+    - `systems/memory/system.py`'s `_POSITIVE_REACTION_RE` fires
+      `reinforce_response()` on "thanks"/"perfect"/"exactly"/"good
+      call", and reinforced rows score higher in retrieval
+      (`WEIGHT_BOOST_PER_POINT`). Responses that pleased the creator
+      therefore resurface preferentially as context.
+
+    Nothing currently reinforces being right and unwelcome, and nothing
+    penalizes being agreeable and wrong. Building that counterweight is
+    what this principle concretely requires, and it belongs with
+    Component 11 and Component 12.
 
 ## Components
 
@@ -607,9 +688,15 @@ delay, and `core/self_reflection.py` gates each pass on
 `MIN_CONVERSATIONS_FOR_REFLECTION` (3). *(Corrected 2026-09-20 — this
 section described an hourly `sleep(3600)` loop, which has not been true
 since the 2026-07-17/18 voice-pipeline work.)* Still polling on a timer,
-so it still needs to become event-driven; note that every part of the
-idle gating exists because reflection competed with live conversation
-for the Titan X, which the 3080 swap no longer requires.
+so it still needs to become event-driven; every part of the idle gating
+exists because reflection competed with live conversation for the Titan
+X, which the 3080 swap no longer requires. **Craig's read (2026-09-20):**
+the delay was there to give her genuine self-reflection time, and "she
+may not even need that anymore." Recorded as his lean, not a decision —
+the open question is whether the gating was ever protecting *her*
+reflection quality or only protecting *his* latency. If only the latter,
+it can go entirely and Phase 6's "continuous, not scheduled" becomes
+straightforwardly reachable.
 
 **Craig's 2026-09-20 requirement — she needs a self-model.** For her to
 be able to question her own autonomy (see The goal), reflection needs
@@ -756,20 +843,27 @@ numbers below are dependency order and stay as-is so existing references
 keep working, but they no longer describe what to build next. Against
 "an entity with its own agency," the order is:
 
-1. Settle Design Principle 11 (scope-vs-approval), and make
-   `check_safety()` an allowlist — the prerequisite for anything that
-   extends itself.
-2. Per-utterance speaker re-verification (Design Principle 9's example).
-   Two of Component 12's three rules are creator-gated while identity is
-   still only verified at connect time. Resemblyzer is plain PyTorch, so
-   this is milliseconds on the 3080.
-3. **Phase 7 / Component 12 — the refusal layer.** The literal mechanism
+1. **Recognition as identity — per-utterance voice, then vision.** Now
+   foundational rather than a refinement: under Principle 9 the creator's
+   authority *is* recognition, and under Principle 11 the enable decision
+   has to come from him specifically. Both rest on her knowing who is
+   speaking, continuously, not once at connect. Voice re-verification is
+   milliseconds on the 3080 (Resemblyzer is plain PyTorch); vision is a
+   genuinely new capability and needs its own design pass.
+2. **Phase 7 / Component 12 — the refusal layer.** The literal mechanism
    of agency, the only major component still at zero, and its blocking
-   open question was a per-turn LLM budget problem that the 3080 answers.
-4. Restore capability-gap detection and let her author sandboxed modules
-   (Component 2/3) — the two halves of self-extension, both absent today.
-5. Give reflection a self-model (Component 11), so the autonomy question
-   is reachable at all.
+   open question was a per-turn LLM budget problem the 3080 answers.
+   Depends on 1 for its two creator-gated rules.
+3. **The agreeableness counterweight** (Design Principle 12). Currently
+   two loops select for telling him what he wants to hear. This is not a
+   new subsystem so much as a correction to reflection and reinforcement,
+   and it should land before either is trusted to run unattended.
+4. **Self-extension**: restore capability-gap detection, let her author
+   modules, and let her raise her own enable request (Component 2/3,
+   Principle 11). `check_safety()` becoming an allowlist belongs here —
+   it is the thing that makes an approval mean something.
+5. **A self-model for reflection** (Component 11), so the autonomy
+   question is reachable at all.
 
 Phases 2–4 (query reports, gated research, apply-learning) are unchanged
 in content and still carry the "never guess" half of the design.
@@ -855,13 +949,13 @@ in content and still carry the "never guess" half of the design.
   every module, load-bearing the moment Principle 11 lets her author her
   own.
 
-- **Is she a companion or a correct system when those conflict?**
-  *(Raised 2026-09-20, not answered.)* There is real investment in
-  presence — mood, the orb, proactive check-ins, remembering people —
-  and equal investment in rigor. Nothing says which wins when she would
-  have to be either warm and wrong or accurate and cold. This shapes
-  Component 12's weighting model and the refusal rules more than any
-  technical choice.
+- **Counterweight to the agreeableness gradient** (Design Principle 12):
+  the principle is settled, the mechanism is not. What independent
+  signal of *correctness* can reflection and reinforcement use, given
+  that the only signal available today is the creator's reaction? Likely
+  candidates: an explicit correction being weighted far more heavily
+  than praise, or tracking whether a claim she made was later revised.
+  Needs a real design pass before either loop is trusted unattended.
 
 ## Session History
 
