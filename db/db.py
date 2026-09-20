@@ -739,6 +739,28 @@ async def fetch_unacknowledged_personality_changes():
     ]
 
 
+async def fetch_recent_personality_changes(limit: int = 10):
+    """Recent rows regardless of acknowledgement, newest first.
+
+    2026-09-20 — added for core/self_model.py. The existing reader above
+    is scoped to unacknowledged rows because it drives the Controller's
+    Notifications tab, where acknowledging means "I have seen this". The
+    self-model wants the opposite: what has actually been happening to
+    her lately, whether or not Craig has looked at it."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT kind, new_value, reason, created_at FROM personality_log "
+            "ORDER BY id DESC LIMIT ?",
+            (limit,)
+        )
+        rows = await cursor.fetchall()
+
+    return [
+        {"kind": r[0], "new_value": r[1], "reason": r[2], "created_at": r[3]}
+        for r in rows
+    ]
+
+
 async def acknowledge_personality_changes():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE personality_log SET acknowledged=1 WHERE acknowledged=0")

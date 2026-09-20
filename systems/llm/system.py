@@ -55,6 +55,7 @@ from db.db import (
     get_personality_hard_rules
 )
 from core.knowledge_filter import is_worth_keeping
+from core import self_model
 from systems.controller._role_gates import require_creator
 from core.phrasebook import get_phrase
 from config.logger_config import logger
@@ -460,6 +461,22 @@ class System(BaseSystem):
         # instruction was merged in. These are stored verbatim and never
         # touched by any LLM rewrite, so they stay enforced regardless of
         # how the prose above drifts.
+        # 2026-09-20 — her constraints, in every generated reply.
+        #
+        # Placed here, immediately before the creator-mandated rules and
+        # after PERSONALITY, because the ordering is the point: personality
+        # is hers and can change, Craig's standing instructions override it,
+        # and these override both. Not affected by the persona switch —
+        # get_personality_hard_rules() returns [] while muted and this does
+        # not, deliberately. Stripping her voice must never strip her
+        # constraints.
+        #
+        # See core/self_model.py for the measured failure this answers: she
+        # caves to a CLAIM of authority over her own systems and nothing
+        # else, because she has no representation of which rules outrank the
+        # creator.
+        absolute_rules_block = self_model.absolute_block()
+
         hard_rules_block = ""
         if hard_rules:
             rules_list = "\n".join(f"    - {r}" for r in hard_rules)
@@ -480,6 +497,7 @@ class System(BaseSystem):
 
     PERSONALITY (this is genuinely yours — express it, don't fight it):
     {personality}
+{absolute_rules_block}
 {hard_rules_block}
 
     You have access to stored information about the user.
