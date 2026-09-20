@@ -11,7 +11,13 @@ import re
 from faster_whisper import WhisperModel
 from faster_whisper.audio import decode_audio
 
-MODEL_SIZE = os.getenv("ALEX_STT_MODEL", "base")
+# 2026-09-20: base → distil-large-v3, the intended use of the VRAM freed
+# by the 3080 swap. An English-only distillation of large-v3 at roughly
+# half the size and twice the speed — chosen over large-v3 itself because
+# this model now shares a 10GB card with the LLM. English-only is not a
+# constraint ALEX hits today, but it IS one: supporting another language
+# means going back to a multilingual model (large-v3 or medium).
+MODEL_SIZE = os.getenv("ALEX_STT_MODEL", "distil-large-v3")
 MIN_AUDIO_BYTES = 6000
 
 
@@ -68,7 +74,14 @@ def transcribe_audio(audio_bytes: bytes):
     LOW_CONFIDENCE_THRESHOLD sits between those two as a starting point
     for "noticeably less sure than a clear utterance" — like every other
     untuned threshold added tonight, this can't be verified against a
-    genuinely ambiguous REAL recording without live use."""
+    genuinely ambiguous REAL recording without live use.
+
+    2026-09-20: the -0.31 figure above is specific to `base`. Re-running
+    the same Piper round-trip against distil-large-v3 measured roughly
+    -0.06 to -0.22 (mean ~-0.14) on identically clear audio — the whole
+    distribution shifted up, because the model is genuinely more certain.
+    LOW_CONFIDENCE_THRESHOLD was rescaled to match; a threshold tuned for
+    one model is not portable to another."""
     try:
         # 🔥 ignore tiny / broken chunks
         if not audio_bytes or len(audio_bytes) < MIN_AUDIO_BYTES:

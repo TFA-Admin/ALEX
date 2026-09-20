@@ -17,7 +17,19 @@ SPEECH_DEBOUNCE = 1.8
 # the two) — a starting point, not tuned against a genuinely ambiguous
 # real recording, same caveat as every other untuned threshold added
 # tonight.
-LOW_CONFIDENCE_THRESHOLD = -0.6
+#
+# 2026-09-20 (3080 swap, base → distil-large-v3): rescaled, NOT retuned.
+# The -0.31 clear-speech reference above belongs to `base`. The same
+# Piper round-trip on distil-large-v3 measures ~-0.06 to -0.22 (mean
+# ~-0.14), so the old -0.6 sat far below anything the new model produces
+# on clean audio and would have quietly stopped firing — she would guess
+# where she used to ask, which is the exact behaviour this was added to
+# prevent. -0.5 keeps the original relative position: the old value sat
+# ~42% of the way from clear speech (-0.31) toward Whisper's own retry
+# cutoff (-1.0), and -0.5 is ~42% of the way from -0.14 to -1.0. Same
+# caveat as the original, now twice over: still never validated against a
+# genuinely ambiguous REAL recording, only clean synthetic speech.
+LOW_CONFIDENCE_THRESHOLD = -0.5
 
 # Reused both for the clarification follow-up below and nowhere else —
 # deliberately broader than a strict yes/no (a clarification answer is
