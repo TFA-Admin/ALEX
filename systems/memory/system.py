@@ -16,35 +16,31 @@ from core.system_base import BaseSystem
 from db.db import (
     fetch_recent_memory,
     fetch_vector_memories,
-    add_memory,
-    reinforce_response
+    add_memory
 )
 
 from core.embedding_engine import embed, cosine_similarity
 from config.logger_config import logger
 
-# 2026-07-18 (Craig: "this might be useful for adjusting her responses
-# based on the user's reaction to what she says") — reinforce_response()
-# already existed in db.py (bumps a memory row's weight, floor 1/ceiling
-# 10) but had zero callers anywhere; decay_memory() dutifully decremented
-# every row's weight hourly with nothing ever incrementing it back, and
-# retrieval never even looked at the column. Wiring in both halves: this
-# regex detects a genuine positive reaction to what she JUST said, and
-# the scoring boost below (WEIGHT_BOOST_PER_POINT) is what makes a
-# reinforced memory actually more likely to resurface later — without
-# it, reinforcement would be a number nobody ever reads.
-_POSITIVE_REACTION_RE = re.compile(
-    r"\b(thanks|thank you|perfect|exactly|nice one|"
-    r"that'?s (helpful|right|it|great|awesome|correct)|"
-    r"good (job|answer|point|call)|well done|that worked|"
-    r"love (it|that)|appreciate (it|that))\b",
-    re.IGNORECASE
-)
-
-# Modest per-weight-point multiplier on similarity score (weight 1 ->
-# 1.0x, weight 10 -> 1.45x) — reinforced memories surface somewhat more
-# readily without letting reinforcement alone override real relevance.
-WEIGHT_BOOST_PER_POINT = 0.05
+# 2026-09-20: the reinforcement/weight mechanism was removed entirely.
+#
+# It was wired up on 2026-07-18 - a regex detecting "thanks"/"perfect"/etc
+# bumped the preceding turn's weight, and retrieval multiplied similarity by
+# that weight. Measured 2026-09-20: all 572 memory rows sat at weight 1, so
+# the multiplier was 1.0x on every retrieval and the path did nothing at all.
+# The cause was that decay_memory() subtracted 1 per pass HOURLY while
+# reinforcement added 1 per positive reaction, so decay ran ~24 times a day
+# against a signal that fires a handful of times at best.
+#
+# Slowing decay would have made the numbers move, but Craig's call was to drop
+# it: "weight was an idea but if it's irrelevant and does nothing simplify it
+# by just removing it." It also had a design problem worth recording - it
+# reinforced memories that earned a pleased REACTION, which is a gradient
+# toward telling him what he wants to hear, and Design Principle 12 now
+# explicitly forbids that. It measured approval, not usefulness.
+#
+# learned_knowledge's touch-on-retrieval (added the same day) is the mechanism
+# that replaces it, and it measures actual reuse rather than approval.
 
 
 class System(BaseSystem):
@@ -93,7 +89,6 @@ class System(BaseSystem):
         for m in memories:
             try:
                 score = cosine_similarity(query_vec, m["embedding"])
-                score *= 1 + (m.get("weight", 1) - 1) * WEIGHT_BOOST_PER_POINT
                 scored.append((score, m))
             except:
                 continue
@@ -110,20 +105,6 @@ class System(BaseSystem):
             recent = await fetch_recent_memory(user_id)
         except:
             recent = []
-
-        # 2026-07-18 (Craig: "adjusting her responses based on the user's
-        # reaction to what she says") — a genuine positive reaction to
-        # what she JUST said reinforces that turn's weight, which the
-        # scoring boost above then uses to make it resurface more readily
-        # in future relevant context. Side effect only — still falls
-        # through to whatever actually answers this message (a "thanks"
-        # deserves its own reply too).
-        if recent and _POSITIVE_REACTION_RE.search(text):
-            last = recent[-1]
-            try:
-                await reinforce_response(user_id, last["prompt"], last["response"])
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to reinforce response: {e}")
 
         # 2026-07-16: widened from -2: to -4:, affordable now that
         # llm/ollama_client.py's shared num_ctx quadrupled. A 2-turn window

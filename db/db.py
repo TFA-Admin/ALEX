@@ -61,6 +61,11 @@ async def init_db():
             response TEXT,
             category TEXT DEFAULT 'conversation',
             embedding BLOB,
+            -- 2026-09-20: vestigial. The reinforcement mechanism that read
+            -- and wrote this was removed (see systems/memory/system.py for
+            -- why). The column stays because dropping one in SQLite means
+            -- rebuilding the table, which is not worth the risk for a few
+            -- unused bytes. Nothing reads it.
             weight INTEGER DEFAULT 1,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''')
@@ -852,7 +857,7 @@ async def get_preferred_model(user):
 async def fetch_vector_memories(user):
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "SELECT prompt,response,embedding,weight,created_at FROM memory WHERE user=? AND embedding IS NOT NULL",
+            "SELECT prompt,response,embedding,created_at FROM memory WHERE user=? AND embedding IS NOT NULL",
             (user,)
         )
         rows = await cursor.fetchall()
@@ -863,21 +868,11 @@ async def fetch_vector_memories(user):
             "prompt": r[0],
             "response": r[1],
             "embedding": pickle.loads(r[2]),
-            "weight": r[3] or 1,
-            "created_at": r[4]
+            "created_at": r[3]
         })
 
     return results
 
-
-async def reinforce_response(user, prompt, response):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            UPDATE memory
-            SET weight = MIN(10, weight + 1)
-            WHERE user=? AND prompt=? AND response=?
-        """, (user, prompt, response))
-        await db.commit()
 
 
 # -------------------------
@@ -890,12 +885,6 @@ async def decay_memory():
             UPDATE facts
             SET importance = MAX(1, importance - 1)
             WHERE importance > 1
-        """)
-
-        await db.execute("""
-            UPDATE memory
-            SET weight = MAX(1, weight - 1)
-            WHERE weight > 1
         """)
 
         await db.commit()

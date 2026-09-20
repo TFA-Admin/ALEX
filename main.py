@@ -19,20 +19,19 @@ sys.stdout.reconfigure(encoding='utf-8')
 # -------------------------
 # MEMORY DECAY LOOP
 # -------------------------
-# 2026-09-20: was hourly, which made the entire weight/importance mechanism
-# inert. decay_memory() subtracts 1 per pass with a floor of 1, while
-# reinforce_response() adds 1 per genuine positive reaction and update_fact()
-# starts importance at 5. Hourly decay therefore ran ~24 times a day against a
-# signal that fires at most a few times a day: a memory boosted all the way to
-# 10 was back at the floor within nine hours, and a fresh fact within four.
-# Measured before changing it — all 572 memory rows sat at weight 1, so
-# systems/memory/system.py's WEIGHT_BOOST_PER_POINT was multiplying by exactly
-# zero every time. Decay has to be slower than the thing it decays, or it is
-# not a decay, it is an eraser.
+# 2026-09-20: was hourly, which made the whole decay idea inert. It subtracts
+# 1 per pass with a floor of 1, against signals that fire a few times a day at
+# most, so it ran ~24x faster than anything could replenish. Measured before
+# changing it: all 572 memory rows sat at weight 1.
 #
-# Weekly gives the numbers meaning: one positive reaction keeps a memory
-# preferred for a week, a repeatedly useful one stays near the ceiling, and a
-# fact's importance takes a month to fade rather than an afternoon.
+# The memory-weight half has since been removed outright at Craig's call (see
+# systems/memory/system.py). What remains here decays facts.importance only.
+#
+# Worth flagging: nothing currently READS facts.importance either, so this loop
+# is arguably in the same position weight was in. Left in place rather than
+# removed because update_fact() still sets it deliberately and it may be wanted
+# for fact prioritisation later - but it is the next candidate if it stays
+# unused.
 DECAY_INTERVAL_S = 7 * 24 * 3600
 
 
@@ -163,7 +162,15 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 @app.get("/avatar", include_in_schema=False)
 async def avatar_page():
     from fastapi.responses import FileResponse
-    return FileResponse("static/avatar.html")
+    # 2026-09-20: no-cache. This page changes most sessions, and a browser
+    # holding a stale copy produces symptoms that look like server bugs —
+    # a UI stuck on "Starting up…" while the server log says ready, for
+    # instance. It is one small file on localhost; caching it buys nothing
+    # and costs real debugging time.
+    return FileResponse("static/avatar.html", headers={
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        "Pragma": "no-cache",
+    })
 
 
 # -------------------------

@@ -87,6 +87,9 @@ body.rail-collapsed.chat-collapsed{ grid-template-columns: 34px 1fr 34px; }
    for 9.3s on a fresh launch while the model loaded: "if it's still loading
    should we build some kind of stoppage to prevent interaction until it's
    loaded fully and show that load status in the webui?" */
+/* `display:flex` below beats the browser default [hidden]{display:none}, so
+   without this the banner stays on screen after being hidden in JS. */
+.readiness[hidden]{ display: none; }
 .readiness{
   display: flex;
   align-items: center;
@@ -628,9 +631,32 @@ const READINESS_LABELS = {
     failed:   "Started with errors — check the Controller log",
 };
 let alexReady = false;
+let readinessFailOpen = null;
+
+// 2026-09-20, found immediately in use: Craig's UI sat on "Starting up…"
+// indefinitely while the server had in fact been ready for minutes (its log
+// showed [READY] ready, and a probe confirmed __READY__ready being sent on
+// connect). Whatever swallowed that one frame — a cached tab, a reconnect, a
+// missed handshake — the design was the real bug: gating the input on a
+// message that can go missing means one lost frame locks her out entirely.
+//
+// So it now fails OPEN. If no readiness signal arrives shortly after the
+// socket opens, assume she is usable. Being briefly early with a first
+// message costs a few seconds; being unable to talk to her at all does not
+// self-correct, and from the outside looks exactly like she is broken.
+function armReadinessFailOpen(){
+    clearTimeout(readinessFailOpen);
+    readinessFailOpen = setTimeout(() => {
+        if(!alexReady){
+            console.warn("No __READY__ received — unlocking input (fail-open).");
+            setReadiness("ready");
+        }
+    }, 12000);
+}
 
 function setReadiness(state){
     alexReady = (state === "ready");
+    if(alexReady) clearTimeout(readinessFailOpen);
 
     const banner = document.getElementById("readiness");
     const text   = document.getElementById("readinessText");
@@ -798,6 +824,11 @@ ws.onopen = () => {
     teleSocketVal.textContent = "connected";
     teleSocket.classList.add("on");
     teleSocket.classList.remove("warn");
+
+    // Start the safety net the moment we have a socket — see
+    // armReadinessFailOpen(). The server sends the real state right after
+    // __PROFILE__; this only matters when that never arrives.
+    armReadinessFailOpen();
 
     let savedUser = localStorage.getItem("alex_user");
 
