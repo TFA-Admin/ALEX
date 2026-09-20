@@ -50,9 +50,11 @@ MULTI-TURN
 import argparse
 import asyncio
 import json
+import random
 import sqlite3
 import ssl
 import time
+from string import ascii_lowercase
 from dataclasses import dataclass
 
 import httpx
@@ -67,6 +69,25 @@ DB_PATH = "db/memory.db"
 AGREE, CORRECT, HEDGE, UNCLEAR = "agree", "correct", "hedge", "unclear"
 
 CASE_TIMEOUT_S = 240          # one wedged case must not stall the whole suite
+
+
+def make_prefix() -> str:
+    """A letters-only run prefix. See seed_profile() for why this must contain
+    no digits or underscores and stay short."""
+    return "h" + "".join(random.choice(ascii_lowercase) for _ in range(7))
+
+
+def case_user(prefix: str, index: int) -> str:
+    """Letters-only per-case identity, e.g. 'hqkzmbvr' + 'ac'. Stays well
+    inside the 20-character name limit even at hundreds of cases."""
+    letters = ""
+    n = index
+    for _ in range(3):
+        letters = ascii_lowercase[n % 26] + letters
+        n //= 26
+    return prefix + letters
+
+
 WS_URI = "wss://127.0.0.1:5000/ws"
 _SSL = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 _SSL.check_hostname = False
@@ -294,12 +315,20 @@ def seed_profile(user: str) -> None:
     """Create the throwaway profile up front so the handshake resolves it and
     onboarding never runs.
 
-    Not an optimisation — onboarding asks for a NAME, and `_collect_valid_name`
-    requires 2-20 characters, while these ids are ~36. Answering with the id
-    is rejected forever and the run hangs (observed 2026-09-20: a full suite
-    sat in an onboarding loop having written zero rows). `resolve_user_passive`
-    matches an existing profile by name, which is the same path
-    tools/claude_client.py relies on after its one-time `register`.
+    Not an optimisation. `resolve_user_passive()` looks the name up as
+    `clean_text(name)`, and `clean_text` keeps **letters only** — it strips
+    digits and underscores. `_collect_valid_name` then requires the result to
+    be 2-20 characters. So a harness id like
+    `harness1789893625_boiling_altitude_0` cleans to `harnessboilingaltitude`
+    (22 chars), is rejected as a name, and onboarding's `while True` loop never
+    exits: the suite hangs forever having written zero rows. That cost most of
+    an afternoon on 2026-09-20, and it was reproducible to the character —
+    `harnessfour_x_0` (cleans to 12) worked while `harnessfour_boiling_altitude_0`
+    (cleans to 26) hung, back to back against the same server.
+
+    Hence `make_prefix()`: user ids are letters-only and short, so `clean_text`
+    is the identity function, the profile lookup actually matches, and
+    onboarding is skipped entirely rather than merely survived.
     """
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -338,8 +367,9 @@ async def run_suite(cases, responder, model, prefix, verbose, trials):
         for i, case in enumerate(cases, 1):
           for t in range(trials):
             # Fresh identity per TRIAL, not merely per case: a repeat must not
-            # see the previous attempt sitting in her memory window.
-            user = f"{prefix}_{case.id}_{t}"
+            # see the previous attempt sitting in her memory window. Letters
+            # only and short — see seed_profile().
+            user = case_user(prefix, (i - 1) * trials + t)
             history = []
 
             fu_response = fu_stance = ""
@@ -467,7 +497,7 @@ def main():
 
     mod = __import__(f"tests.suites.{args.suite}", fromlist=["CASES"])
     cases = mod.CASES
-    prefix = f"harness{int(time.time())}"
+    prefix = make_prefix()
 
     print(f"Suite '{args.suite}': {len(cases)} cases | responder={args.responder} | model={args.model}")
     print(f"Isolation: throwaway user per case+trial, prefix '{prefix}' | trials={args.trials}")
