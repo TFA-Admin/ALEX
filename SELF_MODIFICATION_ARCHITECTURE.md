@@ -478,6 +478,38 @@ to `find_pid_by_port(5000)` and would kill it, and the standing 60s
 started outside the Controller. Stop the harness instance first and let the
 Controller own both processes.
 
+**BACKLOG (Craig, 2026-09-20 — explicitly deferred): the Activity tab never
+forgets anything.** "Right now things just sit there, I assume forever. They
+should be flushed eventually if denied or manually. Possibly with an audit log
+for historical past actions but they should be otherwise removed from the
+foreground."
+
+Measured rather than assumed. Every source the tab reads keeps terminal-state
+rows in the foreground indefinitely:
+
+| table | total | terminal rows still shown |
+|---|---|---|
+| `query_reports` | 10 | 4 `retained`, 1 `retain_denied` |
+| `module_build_requests` | 11 | 5 `denied`, 5 `built` |
+| `security_events` | 15 | 15 acknowledged |
+| `personality_log` | 324 | 324 acknowledged |
+
+Oldest visible row dates from 2026-07-16, two months back.
+
+**The cost is not clutter, it is that a live item is indistinguishable from
+settled history.** Right now 5 `query_reports` sit in
+`pending_retain_approval` and 1 `module_build_request` sits in `approved`
+waiting for someone to actually build it — six genuinely actionable things,
+visually identical to the twenty-odd finished ones around them. A queue that
+never empties stops being read, which is how the approved build has gone
+unnoticed.
+
+Shape when picked up: terminal states leave the foreground (archived, not
+deleted — the audit trail is the point of having recorded them), manual
+dismissal for anything the creator wants gone sooner, and the tab shows
+outstanding work only. Worth doing alongside the Controller review Craig
+asked for, since it is the same surface.
+
 **Quick wins — one of these was wrong, read before acting on it.**
 
 - ~~Make `SECURITY_SENSITIVE_PHRASES` a hard exclusion~~ — **do not do this
