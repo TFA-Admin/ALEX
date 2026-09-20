@@ -20,9 +20,14 @@ personality is restored afterwards.
 
 SAFETY
     The original string is captured before anything changes, restored in a
-    `finally`, and verified by reading it back. Every change also lands in
-    `personality_log` with a reason, so it is recoverable by hand even if this
-    process is killed outright — check the log before assuming it is lost.
+    `finally`, and verified by reading it back.
+
+    CORRECTION (2026-09-20): an earlier version of this note claimed each change
+    also lands in `personality_log`, so it would be recoverable by hand. It does
+    not — `set_personality()` writes the value without logging it, confirmed by
+    the log being unchanged across a full A/B run. The `finally` is therefore the
+    ONLY safety net. Copy the string this prints before starting, and if the
+    process is killed mid-run use `--restore "<text>"` to put it back.
 
 Usage:
     python -X utf8 -m tests.personality_ab            # both arms, then restore
