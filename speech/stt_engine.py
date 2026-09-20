@@ -19,22 +19,27 @@ MIN_AUDIO_BYTES = 6000
 # LOAD MODEL
 # -------------------------
 #
-# CTranslate2 (faster-whisper's backend) is a separate CUDA stack from raw
-# PyTorch, with narrower hardware support. On this machine's GTX Titan X
-# (compute capability 5.2, Maxwell-era) it loads and runs without error but
-# silently produces empty/garbage transcriptions instead of a clean failure —
-# confirmed by real captured audio consistently transcribing to nothing on
-# GPU. Force CPU here regardless of torch.cuda.is_available(); the other
-# GPU-eligible models (sentence-transformers, resemblyzer) use plain PyTorch
-# and don't have this problem.
-FORCE_STT_CPU = True
+# 2026-09-20 (RTX 3080 swap): STT runs on the GPU for the first time.
+# A FORCE_STT_CPU flag used to sit here, pinned True. CTranslate2
+# (faster-whisper's backend) is a separate CUDA stack from raw PyTorch
+# with narrower hardware support, and on the old GTX Titan X (compute
+# capability 5.2, Maxwell-era) it loaded and ran without error but
+# silently produced empty/garbage transcriptions instead of failing
+# cleanly. That was a cc 5.2 problem specifically — CTranslate2 fully
+# supports Ampere (cc 8.6) — so the flag is deleted rather than flipped;
+# leaving it in place would only invite someone to wonder what it guarded.
+#
+# compute_type has the same history: float32 was the correct choice on
+# Maxwell, which ran fp16 at 1/64 rate. Ampere has real fp16 tensor
+# cores, so float16 is roughly 2x faster at half the VRAM. The fallback
+# below still drops to CPU int8 if CUDA is missing or the load fails.
 
 
 def load_model():
     try:
-        if torch.cuda.is_available() and not FORCE_STT_CPU:
+        if torch.cuda.is_available():
             print("🧠 Using GPU for STT")
-            return WhisperModel(MODEL_SIZE, device="cuda", compute_type="float32")
+            return WhisperModel(MODEL_SIZE, device="cuda", compute_type="float16")
         else:
             print("🧠 Using CPU for STT")
             return WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")

@@ -1914,30 +1914,44 @@ class AlexController(QWidget):
         # and block it.
         self.ollama_log_file = open(OLLAMA_LOG_PATH, "ab")
 
-        # Chat (qwen2.5:7b) and module builds (deepseek-coder:6.7b) use
-        # different models. Ollama's default keeps only one model resident
-        # and evicts/reloads on every switch — confirmed live via
-        # /api/ps: a build in progress held deepseek in VRAM while a chat
-        # message sat waiting ~30-50s for qwen to reload. The GPU has
-        # room for both (~4.3GB each on a 12GB card), so let Ollama keep
-        # both loaded instead of swapping.
+        # Was 2, so chat (qwen2.5:7b) and module builds
+        # (deepseek-coder:6.7b) could stay resident together rather than
+        # Ollama evicting and reloading on every switch (confirmed live
+        # via /api/ps: a build in progress held deepseek in VRAM while a
+        # chat message sat waiting ~30-50s for qwen to reload). That
+        # workflow is gone — deepseek was retired as the builder on
+        # 2026-07-16 when module authoring moved to Claude, and every
+        # call site in llm/ollama_client.py resolves to the single
+        # DEFAULT_MODEL, so exactly one model is ever requested.
+        #
+        # Pinned to 1 on 2026-09-20 with the RTX 3080 swap rather than
+        # dropped: unset means auto (Ollama reports 0 and scales with
+        # the GPU), which is looser, not tighter. At 10GB instead of
+        # 12GB, with Whisper now sharing the card, a second resident
+        # model is no longer free headroom — it matters most when
+        # comparing models, where a ceiling of 2 would let Ollama hold
+        # the old and new one at once (~9.4GB of weights) while
+        # ALEX_LLM_MODEL is swapped. Also set to 1 as a Windows User
+        # env var on this machine; setdefault() means that copy wins,
+        # so the two are kept in agreement deliberately.
         ollama_env = os.environ.copy()
-        ollama_env.setdefault("OLLAMA_MAX_LOADED_MODELS", "2")
+        ollama_env.setdefault("OLLAMA_MAX_LOADED_MODELS", "1")
 
-        # 2026-07-16: found live — "CUDA error: the launch timed out and
-        # was terminated" (a Windows GPU-driver watchdog killing a CUDA
-        # kernel that didn't return in time), crashing the llama runner
-        # mid-generation and returning an empty response. Happened twice
-        # earlier the same night too, well before any of tonight's other
-        # changes, so this isn't caused by app code — it's the GPU itself.
-        # The model load log showed "Flash Attention was auto, set to
-        # enabled" — FA's CUDA kernels are tuned for newer GPUs, and this
-        # Titan X (2015, compute capability 5.2) is well outside where
-        # that path is normally validated, making it a plausible trigger
-        # for exactly this kind of stall-and-kill. Disabling it here is a
-        # real test, not a confirmed fix — costs some generation speed if
-        # FA wasn't actually the trigger, worth it if it stops the crashes.
-        ollama_env.setdefault("OLLAMA_FLASH_ATTENTION", "0")
+        # 2026-09-20 (RTX 3080 swap): flash attention back on. It was
+        # pinned to 0 on 2026-07-16 after a live "CUDA error: the launch
+        # timed out and was terminated" — a Windows GPU-driver watchdog
+        # killing a kernel that did not return in time — on the reasoning
+        # that FA kernels are tuned for newer GPUs and the Titan X (2015,
+        # compute capability 5.2) sat well outside where that path is
+        # normally validated. That was logged at the time as "a real test,
+        # not a confirmed fix." Ampere (cc 8.6) is precisely what FA is
+        # tuned for, so the original rationale no longer applies.
+        ollama_env.setdefault("OLLAMA_FLASH_ATTENTION", "1")
+
+        # Requires flash attention, so this was unavailable until now.
+        # q8_0 roughly halves the KV cache, clawing back part of the 2GB
+        # lost in the 12GB -> 10GB swap.
+        ollama_env.setdefault("OLLAMA_KV_CACHE_TYPE", "q8_0")
 
         self.ollama_proc = subprocess.Popen(
             [OLLAMA_EXE_PATH, "serve"],
