@@ -342,6 +342,15 @@ def seed_profile(user: str) -> None:
 def purge(prefix: str) -> int:
     """Delete every row this run wrote. Safe to call even if the app never
     ran — a missing table or database is not an error worth failing on."""
+    # This deletes from Craig's REAL database by prefix match, so a short
+    # prefix is a live footgun: purge("h") would take out any genuine user
+    # whose name begins with h. Run prefixes from make_prefix() are 8
+    # characters; anything shorter is a mistake, not a broad sweep.
+    if len(prefix) < 6:
+        raise ValueError(
+            f"refusing to purge on prefix {prefix!r}: too short to be a run prefix. "
+            "Pass the full prefix printed at the start of the run.")
+
     removed = 0
     try:
         conn = sqlite3.connect(DB_PATH)
