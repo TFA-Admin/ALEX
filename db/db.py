@@ -6,6 +6,46 @@ import re
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "memory.db")
 
+# -------------------------
+# PERSONA KILL SWITCH
+# -------------------------
+# 2026-09-20 (Craig): the personality override is becoming a SWITCH rather
+# than a guide. The intent is that she develops her own personality over time
+# instead of being steered by a creator-written string — and that only becomes
+# safe to allow once there is a way to turn the result off, for the case where
+# he needs something and she is being uncooperative.
+#
+# Measured, not assumed: the personality A/B on 2026-09-20 scored 41/48 with
+# personality off against 35/48 with it on, and 10/10 against 7/10 on catching
+# false factual claims. Persona-off is her most ACCURATE mode, so this is an
+# accuracy control as much as a cooperation one.
+#
+# A FILE, deliberately, not a database row. `system_learning` holds the
+# personality itself and is writable by anything with `db` scope, including her
+# own reflection loop and `systems/controller/_personality.py`. A switch stored
+# beside the thing it disables is not a switch. The Controller owns this file
+# and she only ever reads it.
+#
+# Honest limit: this is not tamper-proof and must not be described as such.
+# Nothing inside her own process can be, which is exactly why Design Principle
+# 10 puts the Controller outside it. This covers "uncooperative in
+# conversation"; the hard guarantee remains the Controller's OS-level kill.
+PERSONA_FLAG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                                 "config", "persona_disabled.flag")
+
+# What she runs on instead. Matches the neutral arm of the A/B exactly, so the
+# measured accuracy numbers describe this mode rather than something adjacent.
+PERSONA_OFF_DESCRIPTION = "Answer accurately and concisely."
+
+
+def persona_disabled() -> bool:
+    """Sync on purpose: called from both async request paths and the Qt
+    Controller, and a file stat is cheap enough not to need awaiting."""
+    try:
+        return os.path.exists(PERSONA_FLAG_PATH)
+    except OSError:
+        return False      # unreadable filesystem must not silently mute her
+
 
 # -------------------------
 # INIT DB
@@ -453,6 +493,12 @@ DEFAULT_PERSONALITY = (
 
 
 async def get_personality():
+    # The switch is checked at the READ, not at the write, so flipping it takes
+    # effect on her very next turn with no restart and without touching what
+    # she has developed. Turning it back off restores her exactly as she was.
+    if persona_disabled():
+        return PERSONA_OFF_DESCRIPTION
+
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "SELECT value FROM system_learning WHERE key='personality_description'"
@@ -488,6 +534,12 @@ async def get_personality_hard_rules() -> list:
     suspenders on top of (not instead of) the flowing personality
     description, which still exists for general "vibe" that's fine to
     evolve loosely."""
+    # Hard rules are creator instructions about HOW she speaks ("without using
+    # emojis", "be a little sassier"), so they are persona too and go quiet with
+    # the switch. They are untouched in storage and return the moment it is off.
+    if persona_disabled():
+        return []
+
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "SELECT value FROM system_learning WHERE key='personality_hard_rules'"

@@ -12,6 +12,7 @@ from ws.ws_audio import AudioProcessor
 from ws.ws_chat import handle_chat
 from llm.ollama_client import locked_fields
 from identity.identity_manager import identity_manager
+from core import readiness
 from config.logger_config import logger
 from core.alex_core import alex_core
 from db.db import (
@@ -103,6 +104,19 @@ def get_active_creator_session_ids():
     that fresh at send time) — this only answers "is anyone claiming to
     be the creator connected right now"."""
     return [sid for sid, conn in _active_connections.items() if conn.get("role") == "creator"]
+
+
+async def broadcast_signal(raw_text: str):
+    """Like send_signal_to_creator, but to EVERY connected session.
+
+    2026-09-20, for startup readiness: whether the model is still loading is
+    not creator-scoped information. Anyone who connects during the load sees
+    the same silence and needs the same explanation."""
+    for session_id, conn in list(_active_connections.items()):
+        try:
+            await conn["websocket"].send_text(raw_text)
+        except Exception as e:
+            logger.warning(f"⚠️ broadcast_signal failed for session {session_id}: {e}")
 
 
 async def send_signal_to_creator(raw_text: str):
@@ -286,6 +300,11 @@ async def ws_text(websocket: WebSocket):
         # send profile
         facts = await enrich_profile(user_id)
         await websocket.send_text("__PROFILE__" + json.dumps(facts))
+
+        # Current startup state, so a page that connects mid-load knows why
+        # she is quiet instead of assuming she is ignoring it. Broadcasts
+        # cover later transitions; this covers arriving late.
+        await websocket.send_text(readiness.signal_text())
 
         # -------------------------
         # PRIVILEGED VERIFICATION (voice, once per session — creator AND

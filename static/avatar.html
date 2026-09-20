@@ -83,6 +83,38 @@ body.rail-collapsed.chat-collapsed{ grid-template-columns: 34px 1fr 34px; }
 .panel-toggle{ right: 8px; }
 .panel-toggle-right{ right: auto; left: 8px; }
 
+/* 2026-09-20: startup readiness banner. Craig, after watching her sit silent
+   for 9.3s on a fresh launch while the model loaded: "if it's still loading
+   should we build some kind of stoppage to prevent interaction until it's
+   loaded fully and show that load status in the webui?" */
+.readiness{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  margin-bottom: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--dim);
+  font-size: 12px;
+}
+.readiness-dot{
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--orb-mid);
+  animation: readiness-pulse 1.4s ease-in-out infinite;
+  flex: none;
+}
+.readiness.failed .readiness-dot{ background: #b4574f; animation: none; }
+@keyframes readiness-pulse{ 0%,100%{ opacity:.35 } 50%{ opacity:1 } }
+
+/* Input is genuinely disabled while she cannot answer, rather than accepting
+   text that would sit unanswered and read as her ignoring you. */
+.chat-input textarea[disabled], .chat-input button[disabled]{
+  opacity: .45;
+  cursor: not-allowed;
+}
+
 .rail, .chat{ position: relative; overflow: hidden; }
 
 .rail-content, .chat-content{
@@ -456,9 +488,14 @@ body.chat-collapsed .panel-toggle-right{ transform: rotate(180deg); }
     </div>
 
     <div class="chat-input">
+      <!-- 2026-09-20: startup state. Hidden once ready, so the normal case
+           costs no space. See core/readiness.py for why this exists. -->
+      <div class="readiness" id="readiness" hidden>
+        <span class="readiness-dot"></span><span id="readinessText">Starting up…</span>
+      </div>
       <textarea id="input" placeholder="Say something, or type it instead…"></textarea>
       <div class="chat-input-row">
-        <button onclick="send()">Send</button>
+        <button id="sendBtn" onclick="send()">Send</button>
       </div>
     </div>
     </div>
@@ -579,6 +616,46 @@ function setEngaged(isEngaged){
 function setSelfwork(active){
     teleSelfworkVal.textContent = active ? "active" : "idle";
     teleSelfwork.classList.toggle("on", active);
+}
+
+// 2026-09-20 — startup readiness. The server pushes __READY__<state> on
+// connect and on every transition (core/readiness.py). Labels come from the
+// server rather than being duplicated here, so the two can't drift.
+const READINESS_LABELS = {
+    starting: "Starting up…",
+    loading:  "Loading language model…",
+    ready:    "Ready",
+    failed:   "Started with errors — check the Controller log",
+};
+let alexReady = false;
+
+function setReadiness(state){
+    alexReady = (state === "ready");
+
+    const banner = document.getElementById("readiness");
+    const text   = document.getElementById("readinessText");
+    const input  = document.getElementById("input");
+    const sendBtn= document.getElementById("sendBtn");
+
+    if(banner){
+        // "failed" stays visible: she works, just slowly on the first turn,
+        // and silently hiding that would make it undiagnosable later.
+        banner.hidden = (state === "ready");
+        banner.classList.toggle("failed", state === "failed");
+    }
+    if(text) text.textContent = READINESS_LABELS[state] || state;
+
+    // Anything other than a clean "ready" still accepts input — "failed"
+    // means degraded, not broken, and locking her out would be worse than
+    // a slow first answer.
+    const usable = (state === "ready" || state === "failed");
+    if(input){
+        input.disabled = !usable;
+        input.placeholder = usable
+            ? "Say something, or type it instead…"
+            : (READINESS_LABELS[state] || "Starting up…");
+    }
+    if(sendBtn) sendBtn.disabled = !usable;
 }
 
 /* ✅ DEBUG HELPER */
@@ -814,6 +891,11 @@ ws.onmessage = (e)=>{
         return;
     }
 
+    if(typeof data === "string" && data.startsWith("__READY__")){
+        setReadiness(data.replace("__READY__", ""));
+        return;
+    }
+
     if(data === "__START__"){
         currentMsg = "";
 
@@ -971,6 +1053,15 @@ function createRecorder(){
             return;
         }
 
+        // 2026-09-20: don't send speech she cannot answer yet. Auto-listen
+        // is on by default, so without this the model load window is exactly
+        // when a first "Alex?" gets captured and then sits unanswered —
+        // the behaviour that prompted the readiness work in the first place.
+        if(!alexReady){
+            setListenState("idle");
+            return;
+        }
+
         const buf = await blob.arrayBuffer();
         ws.send(buf);
         ws.send("__END_AUDIO__");
@@ -1027,6 +1118,10 @@ function stopListening(){
     clearResponseTimeout();
     setListenState("off");
     setEngaged(false);
+    // Start locked. The server sends the real state on connect, so the only
+    // window this covers is page-load before the socket is up — but that is
+    // precisely when someone types their first message.
+    setReadiness("starting");
     try{ recorder.stop(); }catch{}
     // micVad now persists across listen/stop cycles (real VAD models want
     // to keep their internal state warm) instead of being torn down and

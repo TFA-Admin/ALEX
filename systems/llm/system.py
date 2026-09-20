@@ -248,12 +248,32 @@ class System(BaseSystem):
         logger.info(f"[TIMING] learned_knowledge retrieval check: {time.time() - t0:.2f}s")
 
         is_factual = _is_factual_question(user_input)
-        answer_threshold = FACTUAL_ANSWER_THRESHOLD if is_factual else CASUAL_ANSWER_THRESHOLD
         has_content = _has_content_words(user_input)
 
         session["_llm_match"] = (best_entry, best_sim, is_factual, has_content)
 
-        if has_content and best_entry and best_sim >= answer_threshold:
+        # 2026-09-20: CASUAL MATCHES ARE NEVER REPLAYED. Only a factual
+        # question can be answered from stored knowledge now.
+        #
+        # Found live, and it is the clearest example yet of the thing this
+        # whole project is trying not to be. Craig said "alex." — it matched
+        # entry #132, topic "alex, you know who this is", at 0.77 against the
+        # old casual threshold of 0.6, and she replied "Yeah, Craig, I've got
+        # you pegged. Chlorophyll, much? Did you switch to neon green chewing
+        # gum or what?" That was a one-off joke from a conversation on
+        # 2026-07-18, stored with no expiry, recited two months later into a
+        # conversation it had nothing to do with. Craig: "extremely out of
+        # place, confusing actually... the whole point of her memory was for
+        # her to have a reference not just grab old conversations and repeat
+        # herself."
+        #
+        # Three things combined: 0.6 was loose, short utterances match loosely
+        # (a bare "alex." scoring 0.77), and _has_content_words() passes "alex"
+        # because it is not a function word. Rather than tune three numbers,
+        # the category goes: a casual reply has no reuse value, because what
+        # made it right was the moment it was said. Factual reference — the
+        # actual point of learned_knowledge — is untouched at 0.85.
+        if has_content and is_factual and best_entry and best_sim >= FACTUAL_ANSWER_THRESHOLD:
             logger.info(
                 f"[ACTION] Answered {user_id} from learned_knowledge #{best_entry['id']} "
                 f"(similarity={best_sim:.2f}, {'factual' if is_factual else 'casual'}): {user_input!r}"
@@ -525,16 +545,21 @@ Reword it in your own voice so it doesn't come out identical every time you say 
             return
 
         if not is_factual:
-            # Casual: no conflict detection, ever. If something related
-            # already exists, a near-duplicate isn't worth storing again;
-            # otherwise, auto-store the new pattern. Either way, no
-            # approval, no query_report — this is routine, not audited.
-            if best_entry and best_sim >= RELATED_THRESHOLD:
-                return
-
-            vec = embed(user_input)
-            kid = await create_learned_knowledge(user_input, response_text, None, None, vec, user=user_id)
-            logger.info(f"[ACTION] Auto-stored new casual pattern #{kid} for {user_id}: {user_input!r}")
+            # 2026-09-20: casual replies are no longer stored at all.
+            #
+            # This is the other half of the chlorophyll fix above. Storing them
+            # was the root cause; not replaying them only stops the symptom, and
+            # would leave the table quietly filling with dead banter that any
+            # future matching change could resurrect.
+            #
+            # The reasoning that put this here was that a casual exchange is a
+            # reusable "pattern". It is not. What made a casual reply right was
+            # the moment — who was talking, what had just been said, what was
+            # funny thirty seconds earlier. Stored, it keeps the words and loses
+            # every bit of that. Conversation history in `memory` is the right
+            # home for this: it stays available as CONTEXT she reasons from,
+            # which is what Craig wanted memory for, rather than an answer she
+            # can hand back verbatim.
             return
 
         if best_entry and best_sim >= RELATED_THRESHOLD:

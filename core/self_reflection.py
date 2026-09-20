@@ -17,7 +17,8 @@ from db.db import (
     log_personality_change, get_learned_phrase, set_learned_phrase,
     queue_curiosity_question, get_personality_hard_rules,
     get_last_reflection_memory_id, set_last_reflection_memory_id,
-    get_seconds_since_last_activity, get_seconds_since_last_personality_change
+    get_seconds_since_last_activity, get_seconds_since_last_personality_change,
+    persona_disabled
 )
 from llm.ollama_client import ollama_manager
 from core.phrasebook import PHRASE_REGISTRY, SECURITY_SENSITIVE_PHRASES
@@ -280,6 +281,17 @@ async def run_self_reflection():
             topic, question = curiosity
             await queue_curiosity_question(topic, question)
             logger.info(f"[ACTION] Queued curiosity question: {question}")
+
+        # 2026-09-20: while the persona switch is on she is speaking in a
+        # neutral voice that is not hers, so letting her reflect on "how these
+        # went" would evolve her personality from conversations her personality
+        # never took part in — and then that drift would be waiting when the
+        # switch comes off. Curiosity above still runs; it is about the world,
+        # not about who she is. Phrase re-voicing below is skipped with it,
+        # since it is downstream of a personality change that cannot happen.
+        if persona_disabled():
+            logger.info("[PERSONALITY] Persona switch on — skipping personality reflection")
+            return
 
         personality_change = await _reflect_on_personality(recent)
 

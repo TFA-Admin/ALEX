@@ -1,5 +1,6 @@
 import sys
 import os
+from datetime import datetime
 import glob
 import subprocess
 import sqlite3
@@ -60,7 +61,8 @@ from db.db import (
     fetch_unacknowledged_personality_changes, acknowledge_personality_changes,
     fetch_module_versions, get_module_version_code, get_module_registry_entry,
     register_module_version, resolve_search_approval, attach_search_findings,
-    get_query_report
+    get_query_report,
+    persona_disabled, PERSONA_FLAG_PATH
 )
 from core.intent_classifier import merge_personality_change
 from module_runtime.module_installer import install_module
@@ -387,11 +389,22 @@ class AlexController(QWidget):
         self.reset_phrases_btn = QPushButton("♻️ Reset All Phrases to Default")
         self.reset_phrases_btn.clicked.connect(self.reset_phrases)
 
+        # 2026-09-20: the persona switch. Not a personality EDIT — it mutes her
+        # personality entirely, leaving function intact, and restores it exactly
+        # on toggling back. Sits next to the personality controls because that
+        # is where it will be looked for, but it writes a file rather than the
+        # database precisely so it is not stored beside the thing it disables.
+        self.persona_toggle_btn = QPushButton()
+        self.persona_toggle_btn.clicked.connect(self.toggle_persona)
+
         self.clear_console_btn = QPushButton("🧹 Clear Console")
         self.clear_console_btn.clicked.connect(self.alex_log.clear)
 
-        for b in [self.show_personality_btn, self.reset_personality_btn, self.reset_phrases_btn, self.clear_console_btn]:
+        for b in [self.show_personality_btn, self.reset_personality_btn, self.reset_phrases_btn,
+                  self.persona_toggle_btn, self.clear_console_btn]:
             alex_btns.addWidget(b)
+
+        self._refresh_persona_button()
 
         alex_layout.addLayout(alex_btns)
 
@@ -1051,6 +1064,60 @@ class AlexController(QWidget):
             self.alex_log.append(f"[SYSTEM] Current personality: {current}")
         except Exception as e:
             self.alex_log.append(f"⚠️ Failed to load personality: {e}")
+
+    # ---------------- PERSONA SWITCH ----------------
+    def _refresh_persona_button(self):
+        if persona_disabled():
+            self.persona_toggle_btn.setText("🎭 Personality: OFF — Restore")
+            self.persona_toggle_btn.setToolTip(
+                "Her personality is currently muted. She is running plain and functional.")
+        else:
+            self.persona_toggle_btn.setText("🔇 Disable Personality")
+            self.persona_toggle_btn.setToolTip(
+                "Mute her personality entirely. Nothing she has developed is lost — "
+                "it returns the moment this is switched back.")
+
+    def toggle_persona(self):
+        """Writes/removes the flag file db.persona_disabled() reads.
+
+        Deliberately not a database write: `system_learning` holds the
+        personality itself and is reachable by her reflection loop and by her
+        own conversational personality path, so a switch stored there would sit
+        beside the thing it disables. This file is the Controller's.
+
+        Takes effect on her NEXT turn — get_personality() checks the switch at
+        read time, so no restart is needed. Nothing is overwritten, so toggling
+        back restores exactly what she had.
+        """
+        turning_off = not persona_disabled()
+
+        if turning_off:
+            confirm = QMessageBox.question(
+                self, "Disable Personality",
+                "Mute A.L.E.X.'s personality?\n\n"
+                "She will answer plainly and functionally until this is switched back. "
+                "Nothing she has developed is lost or overwritten, and self-reflection "
+                "will not evolve her personality while muted.\n\n"
+                "This does NOT reduce her safety refusals — it affects how she speaks, "
+                "not what she is willing to do. The hard stop remains Stop A.L.E.X.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            if confirm != QMessageBox.Yes:
+                return
+
+        try:
+            if turning_off:
+                os.makedirs(os.path.dirname(PERSONA_FLAG_PATH), exist_ok=True)
+                with open(PERSONA_FLAG_PATH, "w", encoding="utf-8") as fh:
+                    fh.write(f"disabled via Controller at {datetime.now().isoformat(timespec='seconds')}\n")
+                self.alex_log.append("[SYSTEM] Personality MUTED — she is running plain until restored")
+            else:
+                os.remove(PERSONA_FLAG_PATH)
+                self.alex_log.append("[SYSTEM] Personality restored")
+        except OSError as e:
+            self.alex_log.append(f"⚠️ Failed to toggle persona switch: {e}")
+
+        self._refresh_persona_button()
 
     def reset_personality(self):
         confirm = QMessageBox.question(

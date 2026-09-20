@@ -13,7 +13,7 @@ get_phrase() always has a hardcoded default as a safety net, so a missing
 or corrupted stored phrase never breaks a flow — it just falls back to the
 plain, functional default wording.
 """
-from db.db import get_learned_phrase
+from db.db import get_learned_phrase, persona_disabled
 
 # key -> (default_text, functional_intent — used by the reflection loop
 # when it rewrites a phrase, to keep the purpose intact)
@@ -342,6 +342,13 @@ SECURITY_SENSITIVE_PHRASES = {
 
 async def get_phrase(key: str, **kwargs) -> str:
     default_text, _ = PHRASE_REGISTRY[key]
+
+    # 2026-09-20: her re-voiced wording is persona, so the persona switch mutes
+    # it too and every line falls back to the plain functional default. The
+    # stored phrases are untouched and come back the instant it is switched off.
+    if persona_disabled():
+        return default_text.format(**kwargs)
+
     text = await get_learned_phrase(key, default=default_text)
 
     try:

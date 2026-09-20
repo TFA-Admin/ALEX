@@ -12,6 +12,7 @@ from llm.ollama_client import ollama_manager
 from speech.tts_engine import shutdown_tts
 from core.self_reflection import run_self_reflection
 from core.proactive import periodic_proactive_check
+from core import readiness
 from config.logger_config import logger
 
 sys.stdout.reconfigure(encoding='utf-8')
@@ -96,6 +97,14 @@ async def lifespan(app: FastAPI):
 
     threading.Thread(target=start_ollama, daemon=True).start()
     logger.info("🌐 Ollama starting in background")
+
+    # 2026-09-20: pull the model into VRAM now, while the UI is still
+    # connecting, instead of on the first thing anyone says. Craig measured
+    # the old behaviour live — 9.3s of silence after "Alex." on a fresh
+    # launch, all of it the model loading. Runs as a task so startup is not
+    # blocked on it, and broadcasts its state so the page can say what is
+    # happening rather than looking unresponsive. See core/readiness.py.
+    asyncio.create_task(readiness.warm_up(ollama_manager))
 
     from core.alex_core import alex_core
     await alex_core.init_systems()
