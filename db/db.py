@@ -1556,6 +1556,38 @@ async def create_learned_knowledge(topic, content, source_url, query_report_id, 
         return cursor.lastrowid
 
 
+async def touch_learned_knowledge(entry_id: int, days: int):
+    """Push an entry's expiry out because it was actually just used.
+
+    2026-09-20 (Craig: "I do want her to retain knowledge, not have her entire
+    memory wiped after a month. Is that level of comprehension viable? Where
+    she can note if something is worth storing into long term memory or not.")
+
+    This is the cheap half of the answer, and it needs no comprehension at all.
+    Judging up front whether something will matter later is a prediction;
+    watching whether it gets used is a measurement. An entry retrieved and
+    reused has demonstrated its worth, so it earns more life; one never
+    retrieved quietly ages out. It cannot misjudge, because reality supplies
+    the verdict rather than a classifier guessing at it in advance.
+
+    Only ever extends, never shortens — a deliberately monotonic operation, so
+    a retrieval can never accidentally bring an entry's death forward.
+    """
+    from datetime import datetime, timezone, timedelta
+    new_expiry = (datetime.now(timezone.utc) + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            UPDATE learned_knowledge
+            SET expires_at = ?
+            WHERE id = ?
+              AND expires_at IS NOT NULL
+              AND expires_at != ''
+              AND expires_at < ?
+        """, (new_expiry, entry_id, new_expiry))
+        await db.commit()
+
+
 async def fetch_active_knowledge(user=None):
     """Every currently-active (not superseded/retracted, not expired)
     belief visible to this user, for retrieval — same shape as

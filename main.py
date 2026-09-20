@@ -19,6 +19,23 @@ sys.stdout.reconfigure(encoding='utf-8')
 # -------------------------
 # MEMORY DECAY LOOP
 # -------------------------
+# 2026-09-20: was hourly, which made the entire weight/importance mechanism
+# inert. decay_memory() subtracts 1 per pass with a floor of 1, while
+# reinforce_response() adds 1 per genuine positive reaction and update_fact()
+# starts importance at 5. Hourly decay therefore ran ~24 times a day against a
+# signal that fires at most a few times a day: a memory boosted all the way to
+# 10 was back at the floor within nine hours, and a fresh fact within four.
+# Measured before changing it — all 572 memory rows sat at weight 1, so
+# systems/memory/system.py's WEIGHT_BOOST_PER_POINT was multiplying by exactly
+# zero every time. Decay has to be slower than the thing it decays, or it is
+# not a decay, it is an eraser.
+#
+# Weekly gives the numbers meaning: one positive reaction keeps a memory
+# preferred for a week, a repeatedly useful one stays near the ceiling, and a
+# fact's importance takes a month to fade rather than an afternoon.
+DECAY_INTERVAL_S = 7 * 24 * 3600
+
+
 async def periodic_decay():
     while True:
         try:
@@ -27,7 +44,7 @@ async def periodic_decay():
         except Exception as e:
             logger.exception(f"❌ Memory decay failed: {e}")
 
-        await asyncio.sleep(3600)  # every hour
+        await asyncio.sleep(DECAY_INTERVAL_S)
 
 
 # -------------------------

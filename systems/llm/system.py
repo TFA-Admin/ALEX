@@ -38,8 +38,11 @@ from core.system_base import BaseSystem
 from core.embedding_engine import embed, cosine_similarity
 from core.text_utils import strip_trailing_punctuation, strip_emojis
 from llm.ollama_client import ollama_manager
+from datetime import datetime, timezone, timedelta
+
 from db.db import (
     get_personality, fetch_active_knowledge, create_learned_knowledge,
+    touch_learned_knowledge,
     create_query_report, attach_search_findings, fetch_recent_memory,
     get_personality_hard_rules
 )
@@ -153,6 +156,22 @@ def _has_content_words(text: str) -> bool:
 # real embedding tests, not guesses.
 FACTUAL_ANSWER_THRESHOLD = 0.85
 CASUAL_ANSWER_THRESHOLD = 0.6
+
+# 2026-09-20 — retention by use, not by prediction.
+#
+# Craig wanted an expiry on auto-stored knowledge without "her entire memory
+# wiped after a month". Two things make that safe. First, this table is not her
+# memory: conversation history lives in `memory` and durable facts about people
+# live in `facts`, and nothing deletes from either. This is the cache of
+# pre-formed answers — the thing that produced the chlorophyll line.
+#
+# Second, anything she actually uses never expires in practice. A new entry
+# gets a short life; every real retrieval pushes it out again
+# (db.touch_learned_knowledge). Something asked about repeatedly effectively
+# becomes permanent, something never asked about again fades, and no
+# classifier has to predict which is which in advance.
+AUTO_KNOWLEDGE_TTL_DAYS = 7        # unproven: stored once, never yet reused
+REUSED_KNOWLEDGE_TTL_DAYS = 30     # proven useful: earned by being retrieved
 
 # How close a new FACTUAL message has to be to an existing entry to be
 # treated as "about the same thing" for conflict detection, without
@@ -278,6 +297,10 @@ class System(BaseSystem):
                 f"[ACTION] Answered {user_id} from learned_knowledge #{best_entry['id']} "
                 f"(similarity={best_sim:.2f}, {'factual' if is_factual else 'casual'}): {user_input!r}"
             )
+            # It just proved itself useful, so it earns more life. See
+            # AUTO_KNOWLEDGE_TTL_DAYS above — this is what stops a short
+            # default expiry from throwing away things she actually relies on.
+            await touch_learned_knowledge(best_entry["id"], REUSED_KNOWLEDGE_TTL_DAYS)
             content = await self._reword_learned_answer(best_entry["content"])
             return {"type": "response", "content": content}
 
@@ -600,5 +623,9 @@ Reword it in your own voice so it doesn't come out identical every time you say 
         # approval gate is specifically for the web search path, which
         # actually crosses a real trust boundary).
         vec = embed(user_input)
-        kid = await create_learned_knowledge(user_input, response_text, None, None, vec, user=user_id)
-        logger.info(f"[ACTION] Auto-stored new knowledge #{kid} for {user_id}: {user_input!r}")
+        expires_at = (datetime.now(timezone.utc)
+                      + timedelta(days=AUTO_KNOWLEDGE_TTL_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
+        kid = await create_learned_knowledge(user_input, response_text, None, None, vec,
+                                             user=user_id, expires_at=expires_at)
+        logger.info(f"[ACTION] Auto-stored new knowledge #{kid} for {user_id} "
+                    f"(expires in {AUTO_KNOWLEDGE_TTL_DAYS}d unless reused): {user_input!r}")
