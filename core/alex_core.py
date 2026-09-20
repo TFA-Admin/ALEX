@@ -37,6 +37,7 @@ class AlexCore:
         await self.load_system("diagnostics")
         await self.load_system("inquiry")
         await self.load_system("modules")
+        await self.load_system("awareness")
         await self.load_system("llm")
 
     # -------------------------

@@ -644,6 +644,28 @@ async def get_response_timings() -> list:
         return []
 
 
+async def get_system_value(key: str, default=None):
+    """Generic system_learning read. Added 2026-09-20 — personality, hard
+    rules, phrases and response timings each grew their own near-identical
+    accessor pair, and the disabled-feature watch needed a fifth. This is that
+    shape once."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT value FROM system_learning WHERE key=?", (key,))
+        row = await cursor.fetchone()
+    return row[0] if row else default
+
+
+async def set_system_value(key: str, value: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT INTO system_learning(key, value)
+            VALUES(?, ?)
+            ON CONFLICT(key)
+            DO UPDATE SET value=excluded.value
+        """, (key, value))
+        await db.commit()
+
+
 async def get_learned_phrase(key: str, default: str) -> str:
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(

@@ -318,6 +318,30 @@ class System(BaseSystem):
         if fact_action_context:
             context_blocks.append(f"WHAT JUST HAPPENED (state this truthfully, nothing else):\n{fact_action_context}")
 
+        # 2026-09-20 (Craig): "mid conversation even if you were to switch
+        # something off, for her to notice and ask me why this is now off."
+        #
+        # Given as CONTEXT, not as a line to deliver. The fact is fixed — this
+        # is genuinely off and she has not been told why — but the question is
+        # hers to phrase, and she can fold it into whatever she was already
+        # saying instead of emitting a notice. That is Design Principle 6
+        # applied to behaviour rather than just wording, and it is the fix for
+        # the hardcoded advisory Craig caught earlier the same day.
+        #
+        # Deliberately NOT urgent: she waits for whatever she is already
+        # replying to rather than interrupting. Craig wants severity-based
+        # timing eventually, which needs a sense of urgency she does not have
+        # yet — see core/disabled_watch.py.
+        pending_off = session.pop("pending_disabled_notice", None)
+        if pending_off:
+            items = "; ".join(pending_off.values())
+            context_blocks.append(
+                "SOMETHING OF YOURS IS SWITCHED OFF, and you have not been told "
+                f"why: {items}.\nYou noticed this yourself just now. Work a "
+                "genuine question about it into your reply, in your own words — "
+                "you want to know why it was turned off. Ask once; don't nag."
+            )
+
         context_text = "\n\n".join(context_blocks) if context_blocks else "No stored facts."
 
         personality = await get_personality()
