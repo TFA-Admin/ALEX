@@ -13,6 +13,49 @@ reference. Session History at the bottom is the detailed, dated journal —
 what was tried, what broke, what got fixed and why — preserved in full but
 kept out of the way of "what's true now."
 
+## The goal (revised 2026-09-20 — read before the vision below)
+
+**An entity with its own agency.** That is the thing being built. Every
+rule below serves it; where a rule and that goal genuinely conflict, this
+is the tiebreaker.
+
+Three clarifications from Craig that correct how parts of this document
+were being read — each one changes what "done" means, not just emphasis:
+
+1. **"LLM as fallback" was never about using the LLM less.** The original
+   concern was that she behaved like "a pre-scripted set of information"
+   — rattling off predefined things "without even being conscious of"
+   them. The goal is that she *thinks* and produces output, not that she
+   recites. Read literally, the old wording pushed the opposite way:
+   every lookup table or fixed trigger list that replaces generation
+   makes her **more** rote, not less. `KNOWN_MODULE_TRIGGERS` is a real
+   instance — a hardcoded dict that replaced a classifier, partly on
+   that reasoning. Design Principle 6 is rewritten accordingly.
+
+2. **"Everything is a module" is about self-adjustment, not packaging.**
+   The point is that while running, if she needs something she does not
+   have, she adds it — without Craig's intervention and without a
+   restart. Hot-swappability is the mechanism; self-extension is the
+   goal. Measured against that, the current system does **neither half**:
+   gap detection was removed (Component 2/3) and authoring moved to
+   Claude in a dev session (Component 2), so she can neither notice a
+   gap nor fill one. The 2026-07-16 builder pivot made her better-built
+   and less autonomous — correct under the constraints of the time,
+   and now worth revisiting.
+
+3. **Latency is no longer the design authority.** Several decisions
+   recorded below as design were really GTX Titan X constraints wearing
+   a design decision's clothes — the module-gap classifier most
+   clearly (removed at ~2s/turn). With the RTX 3080 (2026-09-20) that
+   constraint is gone. Anything in this document justified primarily by
+   per-turn cost is reopened by default, not grandfathered.
+
+**On whether autonomy has an endpoint**: deliberately unanswered. Craig's
+position (2026-09-20) is that the ability to *ask* that question is
+itself something she should have. That makes it a capability requirement
+— she needs a self-model to reason about her own constraints at all —
+not merely an open item for the humans. See Component 11.
+
 ## The vision, in one paragraph
 
 A.L.E.X. becomes a thin, stable core plus a Module Controller that lets
@@ -25,8 +68,10 @@ learned, and re-enables it. This applies to everything — language,
 domain knowledge, eventually physical devices — nothing is predefined.
 "Everything is a module" also includes her own presentation, not just her
 skills/knowledge: her voice (TTS engine/model), her avatar, and her UI are
-all loadable/swappable modules too, not fixed code. The LLM becomes a
-fallback of last resort, always disclosed when used. She reflects
+all loadable/swappable modules too, not fixed code. Grounded knowledge always
+precedes generation, and generation is always hers rather than a stored
+line replayed (Design Principle 6); falling through to general model
+knowledge is always disclosed. She reflects
 continuously, not on a schedule. She has real judgment about when to
 refuse a request, weighted heavily (not absolutely) toward compliance
 with her creator.
@@ -95,19 +140,6 @@ own dedicated trigger systems ahead of it in routing priority, so this
 only still matters for `recall`.
 
 **Known open gaps** (not yet fixed, worth knowing before building on top):
-- ~~`check_safety()`'s scope system covers `os`/`network`/`db` stdlib
-  imports, but never blocks importing the project's OWN modules~~ —
-  **RESOLVED 2026-07-17**, see roadmap memory / History below: audited
-  every first-party package, added `identity`/`systems`/`ws`/
-  `module_runtime` to `IMPORT_SCOPES`, added an unconditional
-  never-grantable tier (`ALWAYS_BLOCKED_IMPORTS = {"tools"}`). This line
-  was left stale here — check History, not this list, when in doubt.
-- ~~Per-utterance creator authority isn't real yet~~ — **RESOLVED
-  2026-07-16**: `require_creator()`/`require_privileged()` now accept the
-  real override code stated anywhere in the same utterance as
-  independent proof of authority, regardless of the session's voice-
-  verification state (`core/override_code.py`, wired through 17 call
-  sites). Also stale here — see History.
 - Refusal/Agency layer (Component 12): three rules are settled (core
   code, safety, cross-user privacy), but no mechanical evaluation design
   exists yet.
@@ -160,18 +192,54 @@ only still matters for `recall`.
    conversation), that's a knowledge gap, not a free-generation prompt.
 2. **Everything is a module.** The core stays minimal — routing, session
    state, module lifecycle. Capability lives in modules, hot-swappable,
-   any language she chooses.
+   any language she chooses. **The point of this is self-extension, not
+   packaging** (see The goal, clarification 2): while running, if she
+   needs something she does not have, she adds it — no intervention, no
+   restart. Hot-swapping is the mechanism; that is the goal. A module
+   system that only Claude can extend satisfies the letter of this
+   principle and none of its intent.
 3. **Two-stage approval for anything crossing a trust boundary**: deciding
    she doesn't know something is free; researching it costs a creator
-   approval; applying what she found costs a second one.
+   approval; applying what she found costs a second one. **See Principle
+   11**, which proposes where this boundary actually falls for
+   self-authored modules — as written, this principle and the
+   self-extension goal contradict each other, and that has to be settled
+   rather than left ambiguous.
 4. **No ambient network access.** The only code path allowed to reach the
    internet is the gated research pipeline. Everything else stays fully
    offline, always.
 5. **She decides implementation details** (storage engine, module
    language) within whatever safety constraints the sandbox requires —
    not because it's hardcoded, but because it's genuinely her call.
-6. **LLM is fallback, not foundation.** Real modules/facts/research first;
-   free-form generation last, and always labeled as such.
+6. **Never assert ungrounded; always generate the expression.**
+   (Rewritten 2026-09-20. Previously: "LLM is fallback, not
+   foundation — real modules/facts/research first, free-form generation
+   last.") Two different things were being called "don't make things
+   up," and conflating them produced the opposite of what was wanted.
+   They are separate axes and both must hold:
+
+   - **Epistemics must be grounded.** A claim about something that
+     should be *known* comes from a module, a stored fact, or approved
+     research — never invented (Principle 1). Where an answer does fall
+     through to general model knowledge, that is disclosed.
+   - **Expression must be generated.** *How* she says a thing is hers,
+     every time. A stored fact is a source of truth, not a line to
+     recite.
+
+   The pattern already exists in this codebase and is its strongest
+   idea: `core/phrasebook.py` splits every scripted line into a
+   **functional intent** (fixed, because other code depends on it) and
+   **wording** (hers, rewritable by the reflection loop with no
+   approval gate). `_reword_learned_answer()` applies the same split to
+   answers — the fact stays fixed, the delivery is regenerated live in
+   her current voice.
+
+   **The work is to generalize that split from what she SAYS to what she
+   DOES.** Today the fixed/hers line is drawn only at language. Drawn at
+   behaviour it reads: the rules are fixed, the judgment is hers. Every
+   place a fixed dict or threshold currently stands in for a decision is
+   a candidate — `KNOWN_MODULE_TRIGGERS` and the refusal layer
+   (Component 12) most of all.
 7. **Continuous reflection**, not scheduled. Learning happens when it
    happens; a belief holds until something — correction, contradiction,
    new research — revises it.
@@ -208,6 +276,28 @@ only still matters for `recall`.
     module, no future capability of any kind, may ever touch or depend on
     the Controller or its kill path. This is a hard boundary, not a
     default-with-exceptions like principle 9.
+
+11. **Self-extension is gated by scope, not by building.** *(Proposed
+    2026-09-20 to resolve a real conflict — NOT yet confirmed by Craig.
+    Settle before building against it.)* The goal statement's second
+    clarification ("if she needs something she doesn't have, add it,
+    without my intervention") directly contradicts Principle 3 if what
+    gets approved is *building*. Proposed line: she may freely author,
+    validate, load and revise **standard sandboxed** modules with no
+    approval — the sandbox, not a signature, is what makes that safe.
+    Approval is required only to gain a new capability **scope** (`db`,
+    `network`, `os_process`, `introspection` — see
+    `module_runtime/validator.py`'s `IMPORT_SCOPES`), which is the
+    actual trust boundary Principle 3 exists to guard. This grants real
+    self-extension without touching Principle 10, which stays absolute.
+
+    **Hard prerequisite**: `check_safety()`'s import scoping has to
+    become an allowlist first (see Open Questions). While it is
+    denylist-shaped, a module *she* wrote can reach capability without
+    ever naming a scoped import, which makes the scope gate above
+    decorative. This is currently a theoretical gap only because Claude
+    authors every module; under this principle it becomes the
+    load-bearing wall.
 
 ## Components
 
@@ -496,7 +586,12 @@ justify, not a fixed assumption baked into the core.
       can see it (Controller?)
 
 ### 10. LLM as Fallback + Disclosure
-**Status: done.** `systems/llm/system.py` runs last (priority 100),
+**Status: done, but renamed in spirit — see the rewritten Design
+Principle 6 (2026-09-20).** "Fallback" here means *epistemic* ordering:
+grounded sources answer before general model knowledge, and the fallthrough
+is disclosed. It does **not** mean minimizing generation — reading it that
+way is what produced fixed trigger dicts standing in for judgment.
+ `systems/llm/system.py` runs last (priority 100),
 fallback-visibility logging is Controller-facing, and user-facing
 disclosure is implemented (Component 3 — same mechanism).
 
@@ -505,9 +600,27 @@ disclosure is implemented (Component 3 — same mechanism).
 - [x] Phase 0: evaluated and replaced Mistral-7B with qwen2.5:7b
 
 ### 11. Continuous Self-Reflection
-**Status: partial, needs replacing.** `core/self_reflection.py` currently
-runs on an hourly `asyncio.sleep(3600)` loop (`main.py`'s
-`periodic_self_reflection`). Needs to become event-driven.
+**Status: partial, needs replacing.** `main.py`'s
+`periodic_self_reflection()` polls every 120s after a 180s startup
+delay, and `core/self_reflection.py` gates each pass on
+`IDLE_BEFORE_REFLECTION_S` (300s) plus
+`MIN_CONVERSATIONS_FOR_REFLECTION` (3). *(Corrected 2026-09-20 — this
+section described an hourly `sleep(3600)` loop, which has not been true
+since the 2026-07-17/18 voice-pipeline work.)* Still polling on a timer,
+so it still needs to become event-driven; note that every part of the
+idle gating exists because reflection competed with live conversation
+for the Titan X, which the 3080 swap no longer requires.
+
+**Craig's 2026-09-20 requirement — she needs a self-model.** For her to
+be able to question her own autonomy (see The goal), reflection needs
+something self-referential to operate on. It currently reflects on
+personality, phrasing and curiosity — never on herself as an agent. The
+missing input is standing read access to her own situation: her module
+registry and version history, which scopes she holds, what she has been
+refused, what she has refused, and what she proposed that Craig declined.
+The loop already exists and runs; it has nothing about *her* to think
+about. `diagnostic_tool` reads system status, which is telemetry, not
+self-knowledge.
 
 - [ ] Define real triggers (after N turns? after a query report resolves?
       after a module is applied? immediately on an explicit correction?)
@@ -569,9 +682,9 @@ runs on an hourly `asyncio.sleep(3600)` loop (`main.py`'s
       wording any time, no approval needed (confirmed via a real
       `[phrase:greeting_new_session]` re-voicing log line from earlier
       this session). Real gap: `PHRASE_REGISTRY` itself is a fixed
-      Python dict with 4 hardcoded keys — she can reword what's there,
-      but can't currently add a 5th entry for a newly-recognized
-      recurring pattern. Connects to the "reduce LLM reliance for casual
+      Python dict (74 keys as of 2026-09-20 — this said "4 hardcoded
+      keys," long since outgrown) — she can reword what's there, but
+      cannot add a new entry for a newly-recognized recurring pattern. Connects to the "reduce LLM reliance for casual
       conversational reflexes" thread too (see Current State/Component
       10's disclosure note) — confirmed live that a plain "Perfect.
       Thank you." fell all the way through to the LLM fallback, since
@@ -638,6 +751,29 @@ Component list above is roughly ordered by dependency, and that ordering
 is the proposed phase order. Phasing is a proposal, not a commitment —
 revise as we learn more about what's actually hard once we're in it.
 
+**Revised priority (2026-09-20, after the goal restatement).** The phase
+numbers below are dependency order and stay as-is so existing references
+keep working, but they no longer describe what to build next. Against
+"an entity with its own agency," the order is:
+
+1. Settle Design Principle 11 (scope-vs-approval), and make
+   `check_safety()` an allowlist — the prerequisite for anything that
+   extends itself.
+2. Per-utterance speaker re-verification (Design Principle 9's example).
+   Two of Component 12's three rules are creator-gated while identity is
+   still only verified at connect time. Resemblyzer is plain PyTorch, so
+   this is milliseconds on the 3080.
+3. **Phase 7 / Component 12 — the refusal layer.** The literal mechanism
+   of agency, the only major component still at zero, and its blocking
+   open question was a per-turn LLM budget problem that the 3080 answers.
+4. Restore capability-gap detection and let her author sandboxed modules
+   (Component 2/3) — the two halves of self-extension, both absent today.
+5. Give reflection a self-model (Component 11), so the autonomy question
+   is reachable at all.
+
+Phases 2–4 (query reports, gated research, apply-learning) are unchanged
+in content and still carry the "never guess" half of the design.
+
 - [x] **Phase 0** — Foundation: evaluate/decide LLM model — done, see
       Foundational Decisions
 - [~] **Phase 1** — Module Controller v2. **Partial, most of the core
@@ -676,30 +812,56 @@ revise as we learn more about what's actually hard once we're in it.
 
 - Refusal/Agency layer (Component 12): the three settled rules still need
   a real mechanical evaluation design — classifier, embedded LLM
-  judgment, or something else — before it's buildable
+  judgment, or something else — before it's buildable. **Unblocked
+  2026-09-20**: this choice was constrained by per-turn LLM budget on the
+  Titan X, which is no longer a live constraint. Per revised Principle 6,
+  the shape to aim for is fixed rules with *her* judgment applied to
+  them, not a fixed classifier standing in for the judgment.
 - Apply-learning validation (Component 6): where the self-developed check
   lives (part of the module, or a separate paired artifact), and what
   happens when she can't produce a meaningful check for a given module
   type
-- Presentation modules (Component 2): UI needs a full reshape (current
-  look — plain circle avatar, three-column layout — is being replaced,
-  not iterated on) and should show versioning details once it's a real
-  module with a version history to display
+- Presentation modules (Component 2): still one hardcoded implementation
+  each for voice, avatar and UI, with no swap contract. *(Corrected
+  2026-09-20: this previously said the "plain circle avatar, three-column
+  layout" was about to be replaced. That reshape already happened in the
+  2026-07-17/18 voice-pipeline work — mood-tinted orb, redesigned
+  layout, collapsible side panels. The open item was never the visual
+  design; it is the module/swap contract, which has not started.)* Should
+  show versioning details once it is a real module with history to show.
 - **Per-utterance creator authority** (Design Principle 9's example):
   making "creator speaks up mid-session, voice+code match, gets creator
   authority even though a different user's session is active" real needs
-  per-utterance speaker re-verification (today's voice check is
-  connect-time-once) and an override-code check that validates against
-  the CREATOR profile specifically when creator identity is asserted, not
-  just the session's ambient user. A real gap in the *current* system,
-  not just the self-mod overhaul — needs its own design pass, likely
-  alongside Component 12.
-- **`check_safety()`'s import-scope system doesn't cover first-party
-  module imports** (Component 1/2): a module can `from db.db import
-  <anything>` (or any other internal project module) and reach real
-  capabilities without ever importing a scoped/blocked stdlib name.
-  Needs to become an allowlist, or explicitly block first-party module
-  paths too, not stay purely denylist-based.
+  per-utterance speaker re-verification and an override-code check that
+  validates against the CREATOR profile specifically when creator
+  identity is asserted, not just the session's ambient user.
+  **Half of this is built** (2026-07-16): `core/override_code.py` lets
+  `require_creator()`/`require_privileged()` accept the real override
+  code stated anywhere in the same utterance as independent proof of
+  authority, regardless of the session's voice-verification state, wired
+  through 17 call sites. **The voice half is not**: `verify_voice()` is
+  still called once at connect time, so authority asserted by voice alone
+  mid-session has nothing to check against. Now cheap on the 3080 and
+  a prerequisite for Component 12 — see Revised priority above.
+- **`check_safety()`'s import scoping is still denylist-shaped**
+  (Component 1/2). *(Narrowed 2026-09-20: this previously said
+  first-party imports were uncovered entirely. They are not — 2026-07-17
+  audited every first-party package and added `db`, `core`, `speech`,
+  `identity`, `systems`, `ws`, `module_runtime` to `IMPORT_SCOPES` plus a
+  never-grantable `ALWAYS_BLOCKED_IMPORTS = {"tools"}`.)* The remaining
+  problem is structural: anything not explicitly listed is permitted, so
+  the map has to be exhaustive forever to stay correct. It needs to
+  become an allowlist. **Priority raised**: harmless while Claude authors
+  every module, load-bearing the moment Principle 11 lets her author her
+  own.
+
+- **Is she a companion or a correct system when those conflict?**
+  *(Raised 2026-09-20, not answered.)* There is real investment in
+  presence — mood, the orb, proactive check-ins, remembering people —
+  and equal investment in rigor. Nothing says which wins when she would
+  have to be either warm and wrong or accurate and cold. This shapes
+  Component 12's weighting model and the refusal rules more than any
+  technical choice.
 
 ## Session History
 
