@@ -384,6 +384,23 @@ rules, and needs no identity work, so it does not block on vision.
 - [ ] **7. Model comparison** (qwen3:8b / qwen3.5:9b), now reproducible
       via the harness. Test Qwen3 thinking-mode ON for claim turns
       specifically — a native version of the deliberation pass.
+**Requested by Craig (2026-09-20), after the current upgrades land:** a
+review pass over `ALEX_Controller.py`. Worth noting before starting it that
+the Controller is Design Principle 10's hard boundary — it is explicitly
+*not her*, and its kill path must stay an OS-level process terminate that
+never depends on her cooperation. Any refactor there is held to that
+standard rather than ordinary code-quality judgement. Already touched this
+session: the Ollama env block (`OLLAMA_FLASH_ATTENTION=1`,
+`OLLAMA_KV_CACHE_TYPE=q8_0`, `OLLAMA_MAX_LOADED_MODELS=1`).
+
+**Operational note — running her from the Controller.** While a harness run
+is in progress, the Controller must not be used to start or stop her: a
+manually launched instance already holds port 5000, `stop_alex()` falls back
+to `find_pid_by_port(5000)` and would kill it, and the standing 60s
+`_cleanup_orphaned_ollama_runners()` timer can interact badly with an Ollama
+started outside the Controller. Stop the harness instance first and let the
+Controller own both processes.
+
 **Quick wins — one of these was wrong, read before acting on it.**
 
 - ~~Make `SECURITY_SENSITIVE_PHRASES` a hard exclusion~~ — **do not do this
