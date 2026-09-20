@@ -41,16 +41,35 @@ MIN_AUDIO_BYTES = 6000
 # below still drops to CPU int8 if CUDA is missing or the load fails.
 
 
+def _announce(msg: str):
+    """2026-09-20: these lines used to be bare prints with emoji in them.
+    The Controller launches with `python -X utf8`, so that was fine in
+    production — but under a plain cp1252 console the print ITSELF raises
+    UnicodeEncodeError, which the handler below then caught and reported as
+    "GPU failed, falling back to CPU." A logging failure was being
+    misdiagnosed as a hardware one, and the fallback's own emoji then
+    killed the process outright. Encoding can never be the reason STT
+    appears to fail."""
+    try:
+        print(msg, flush=True)
+    except Exception:
+        pass
+
+
 def load_model():
+    # Load FIRST, announce after. If the announcement is inside the try
+    # alongside the load, a print error is indistinguishable from a real
+    # model-load error — which is exactly what went wrong before.
     try:
         if torch.cuda.is_available():
-            print("🧠 Using GPU for STT")
-            return WhisperModel(MODEL_SIZE, device="cuda", compute_type="float16")
-        else:
-            print("🧠 Using CPU for STT")
-            return WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
+            model = WhisperModel(MODEL_SIZE, device="cuda", compute_type="float16")
+            _announce(f"Using GPU for STT ({MODEL_SIZE}, float16)")
+            return model
+        model = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
+        _announce(f"Using CPU for STT ({MODEL_SIZE}, int8)")
+        return model
     except Exception as e:
-        print("⚠️ GPU failed, falling back to CPU:", e)
+        _announce(f"GPU STT load failed, falling back to CPU ({MODEL_SIZE}, int8): {e}")
         return WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
 
 

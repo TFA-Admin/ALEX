@@ -40,7 +40,7 @@ code:
 | `ALEX_OLLAMA_EXE` | `ALEX_Controller.py` (Start Ollama button) | `D:/project_ALEX/Ollama/ollama.exe` |
 | `ALEX_PIPER_PATH` | `speech/tts_engine.py` | `D:\project_ALEX\piper\piper.exe` |
 | `ALEX_PIPER_MODEL` | `speech/tts_engine.py` | `D:\project_ALEX\piper\models\glados_piper_medium.onnx` |
-| `ALEX_STT_MODEL` | `speech/stt_engine.py` | `base` (faster-whisper model size) |
+| `ALEX_STT_MODEL` | `speech/stt_engine.py` | `distil-large-v3` (faster-whisper model) |
 | `ALEX_LLM_MODEL` | `llm/ollama_client.py` | `qwen2.5:7b` (Ollama model tag) |
 
 (If you launch `ALEX.py` directly rather than through
@@ -58,7 +58,10 @@ locally, or the very first run will fail to fetch them:
 
 - `sentence-transformers` model `all-MiniLM-L6-v2` (used for memory
   similarity)
-- `faster-whisper` model, size set by `ALEX_STT_MODEL` (default `base`)
+- `faster-whisper` model, set by `ALEX_STT_MODEL` (default `distil-large-v3`
+  as of 2026-09-20, was `base`). It must already be in the local Hugging
+  Face cache: `HF_HUB_OFFLINE=1` is set deliberately, so she will fail
+  rather than download one. Fetch it out-of-band if it is missing.
 
 Easiest path: temporarily unset `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE`
 (or comment out those two lines) for one run with internet access so the
