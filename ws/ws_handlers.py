@@ -13,6 +13,7 @@ from ws.ws_chat import handle_chat
 from llm.ollama_client import locked_fields
 from identity.identity_manager import identity_manager
 from core import readiness
+from db.db import remember_own_utterance
 from config.logger_config import logger
 from core.alex_core import alex_core
 from db.db import (
@@ -100,6 +101,13 @@ async def _push_now(text, speak, alex_core, synthesize_speech) -> bool:
             # this push at all.
             await websocket.send_text("__ENGAGED__1")
             delivered = True
+
+            # She just spoke. Record it, or her next turn has no idea she
+            # did — see db.remember_own_utterance().
+            try:
+                await remember_own_utterance(conn.get("user_id") or "craig", text)
+            except Exception as e:
+                logger.warning(f"⚠️ could not record her own utterance: {e}")
         except Exception as e:
             logger.warning(f"⚠️ push_to_creator failed for session {session_id}: {e}")
 

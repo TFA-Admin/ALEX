@@ -6,6 +6,7 @@ import asyncio
 from fastapi import WebSocketDisconnect
 
 from db.db import (
+    remember_own_utterance,
     update_fact, migrate_user, create_profile, profile_exists,
     reinforce_voice_sample, fetch_voice_samples, fetch_all_voice_profiles, find_profile_by_prefix
 )
@@ -31,7 +32,7 @@ from speech.tts_engine import SAMPLE_RATE as TTS_SAMPLE_RATE
 SPEECH_SETTLE_S = 0.4
 
 
-async def _speak(websocket, text):
+async def _speak(websocket, text, user_id=None):
     """2026-07-16: speech now plays through the browser (Web Audio API),
     not a server-side speaker — every former speak(text) call site here
     already sends the same text via websocket.send_text() right before
@@ -87,6 +88,15 @@ async def _speak(websocket, text):
     # and is exactly what must NOT happen while she is asking who you are.
     seconds = len(pcm) / (TTS_SAMPLE_RATE * 2)
     await asyncio.sleep(seconds + SPEECH_SETTLE_S)
+
+    # And remember that she said it. Without this her next turn has no
+    # record of the question she just asked — see
+    # db.remember_own_utterance() for the three faults that traces to.
+    if user_id:
+        try:
+            await remember_own_utterance(user_id, text)
+        except Exception:
+            pass
 
 
 def _is_just_the_prompt(heard: str, prompt: str) -> bool:
@@ -365,7 +375,7 @@ class IdentityManager:
 
         msg = await get_phrase("voice_enroll_intro")
         await websocket.send_text(msg)
-        await _speak(websocket, msg)
+        await _speak(websocket, msg, user_id=user_id)
 
         collected = 0
         attempts = 0
@@ -376,7 +386,7 @@ class IdentityManager:
 
             prompt = "Say a short sentence." if collected == 0 else "One more — say another sentence."
             await websocket.send_text(prompt)
-            await _speak(websocket, prompt)
+            await _speak(websocket, prompt, user_id=user_id)
 
             audio, typed = await self.receive_voice_sample(websocket)
 
@@ -388,7 +398,7 @@ class IdentityManager:
                         "hear you. Turn Auto Listen on, or keep going in text "
                         "and I'll work without voice recognition.")
                 await websocket.send_text(note)
-                await _speak(websocket, note)
+                await _speak(websocket, note, user_id=user_id)
                 return collected
 
             if not audio:
@@ -397,7 +407,7 @@ class IdentityManager:
                 if empty_in_a_row >= 2:
                     hint = "I'm not hearing any audio — check that Auto Listen is on and your mic is allowed."
                     await websocket.send_text(hint)
-                    await _speak(websocket, hint)
+                    await _speak(websocket, hint, user_id=user_id)
 
                 continue
 
@@ -450,7 +460,7 @@ class IdentityManager:
                 "Didn't quite match — try saying a bit more, a full sentence."
             )
             await websocket.send_text(msg)
-            await _speak(websocket, msg)
+            await _speak(websocket, msg, user_id=user_id)
 
             audio, typed = await self.receive_voice_sample(websocket)
 
@@ -670,7 +680,7 @@ Respond with ONLY a JSON object, nothing else:
             # ---------------- GREETING ----------------
             msg = await get_phrase("greeting_new_session")
             await websocket.send_text(msg)
-            await _speak(websocket, msg)
+            await _speak(websocket, msg, user_id=user_id)
 
             raw_response, raw_audio = await self.receive_greeting_response(websocket)
 
@@ -687,7 +697,7 @@ Respond with ONLY a JSON object, nothing else:
 
                     welcome = await get_phrase("greeting_returning_user", name=recognized_owner)
                     await websocket.send_text(welcome)
-                    await _speak(websocket, welcome)
+                    await _speak(websocket, welcome, user_id=user_id)
 
                     return recognized_owner, raw_response
 
@@ -696,7 +706,7 @@ Respond with ONLY a JSON object, nothing else:
             # ---------------- CONFIRM ----------------
             confirm_msg = await get_phrase("onboard_confirm_name", name=name)
             await websocket.send_text(confirm_msg)
-            await _speak(websocket, confirm_msg)
+            await _speak(websocket, confirm_msg, user_id=user_id)
 
             raw_confirm = await self.receive_input(websocket)
             confirm = self.clean_text(raw_confirm)
@@ -709,7 +719,7 @@ Respond with ONLY a JSON object, nothing else:
 
             retry_msg = await get_phrase("onboard_confirm_retry")
             await websocket.send_text(retry_msg)
-            await _speak(websocket, retry_msg)
+            await _speak(websocket, retry_msg, user_id=user_id)
             # loop back and ask for the name again
 
         # ---------------- MIGRATION ----------------
@@ -727,12 +737,12 @@ Respond with ONLY a JSON object, nothing else:
         if collected > 0:
             learned_msg = "Voice learned."
             await websocket.send_text(learned_msg)
-            await _speak(websocket, learned_msg)
+            await _speak(websocket, learned_msg, user_id=user_id)
 
         # ---------------- FINAL ----------------
         final_msg = "Confirmed."
         await websocket.send_text(final_msg)
-        await _speak(websocket, final_msg)
+        await _speak(websocket, final_msg, user_id=user_id)
 
         return name, ""
 

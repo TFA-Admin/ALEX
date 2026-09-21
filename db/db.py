@@ -445,6 +445,37 @@ async def add_memory(user, prompt, response, category="conversation", embedding=
         await db.commit()
 
 
+async def remember_own_utterance(user: str, text: str):
+    """Records something she said that did NOT come from the normal
+    response path — a curiosity question pushed unprompted, a verification
+    or enrolment prompt, a clarification.
+
+    2026-09-20 (Craig, on the third symptom of this in one evening): "She
+    asked me a question, when I inquired she acted as though I was the one
+    starting the conversation."
+
+    Only `systems/memory/system.py`'s after_response() ever called
+    add_memory(), and it only runs for pipeline replies. Everything she
+    said any other way — push_to_creator(), identity_manager._speak(),
+    _ask_clarification() — was sent to the browser and then forgotten
+    immediately. Her next prompt's MEMORY block therefore had no record of
+    her having spoken at all, so his answer arrived with no antecedent and
+    she treated it as an opening remark.
+
+    **This is the single cause behind three separate-looking faults the
+    same evening**: reading back her own requested passphrase as a command,
+    not knowing she had just asked a question, and appearing to ignore a
+    direct reply. Each was patched where it surfaced; this is the thing
+    underneath them.
+
+    The prompt side is a marker rather than empty text, because the memory
+    block renders as "{prompt} -> {response}" and a blank left her looking
+    at " -> I asked you something", which reads like the user said
+    nothing rather than like she spoke first."""
+    await add_memory(user, "(unprompted — you spoke first)", text,
+                     category="unprompted")
+
+
 async def fetch_recent_memory(user, limit=5):
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
