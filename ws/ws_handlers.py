@@ -280,12 +280,23 @@ async def ws_text(websocket: WebSocket):
             except:
                 pass
 
+        # 2026-09-21: say what the handshake was. Found live — a page with
+        # no saved name sent nothing, the server waited here in silence,
+        # and the log had "WS connected" and not one line more to explain
+        # why she never spoke.
+        logger.info(
+            f"🤝 Handshake {session_id[:8]}: "
+            + (f"claimed {claimed_name!r}" if claimed_name else
+               "no name" + (" (audio first)" if first_message is None else f" (first message {first_message[:40]!r})")))
+
         session = alex_core.get_session(session_id)
 
         user_id = await identity_manager.resolve_user_passive(
             claimed_name,
             session_id
         )
+        logger.info(f"🤝 Resolved {session_id[:8]} -> {user_id}"
+                    + (" (onboarding)" if user_id.startswith("pending_user_") else ""))
 
         # 🔒 default lock
         locked_fields[user_id] = {"all": True}

@@ -897,7 +897,19 @@ ws.onopen = () => {
             console.log("⚠️ Invalid stored user, clearing");
             logDebug("Invalid stored user, clearing");
             localStorage.removeItem("alex_user");
+            savedUser = null;
         }
+    }
+
+    // 2026-09-21 (Craig: "when I connect to her she doesn't say anything"):
+    // with no saved name this page used to send NOTHING, so the server sat
+    // in its handshake wait, never sent __PROFILE__ or __READY__, and the
+    // microphone stayed locked until the 12s fail-open — silence on both
+    // sides, and nothing in her log to say why. Tell her there is no name
+    // instead; she goes straight to onboarding and asks who this is.
+    if(!savedUser){
+        logDebug("No saved name on this browser — she will ask who you are");
+        ws.send(JSON.stringify({ user_name: null }));
     }
 };
 
