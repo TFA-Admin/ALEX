@@ -1007,11 +1007,32 @@ class AlexController(QWidget):
 
         self.reasoning_tab.setLayout(reasoning_layout)
 
+        # -------------------------
+        # COMMANDS TAB (2026-09-21)
+        # -------------------------
+        # COMMANDS.md, rendered. Craig: "I won't remember them all... I
+        # need some kind of reference." The file is the one source
+        # (tools/commands_drift.py keeps it honest against the code); this
+        # only shows it. Also at /commands on her page.
+        self.commands_tab = QWidget()
+        commands_layout = QVBoxLayout()
+        commands_layout.addWidget(QLabel(
+            "Every fixed phrase she listens for, who may say it, and what "
+            "gate applies. From COMMANDS.md."))
+        self.commands_view = QTextEdit()
+        self.commands_view.setReadOnly(True)
+        commands_layout.addWidget(self.commands_view)
+        self.commands_refresh_btn = QPushButton("🔄 Refresh")
+        self.commands_refresh_btn.clicked.connect(self.refresh_commands)
+        commands_layout.addWidget(self.commands_refresh_btn)
+        self.commands_tab.setLayout(commands_layout)
+
         self.tabs.addTab(self.alex_tab, "A.L.E.X.")
         self.tabs.addTab(self.requests_tab, "Modules")
         self.tabs.addTab(self.activity_tab, "Activity")
         self.tabs.addTab(self.notifications_tab, "Notifications")
         self.tabs.addTab(self.reasoning_tab, "🧭 Reasoning")
+        self.tabs.addTab(self.commands_tab, "Commands")
         self.tabs.addTab(self.users_tab, "Users")
         self.tabs.addTab(self.ollama_tab, "Ollama")
         self.tabs.addTab(self.system_log, "System")
@@ -1063,6 +1084,7 @@ class AlexController(QWidget):
         self.refresh_notifications()
         self.refresh_reasoning()
         self.refresh_hard_rules()
+        self.refresh_commands()
 
         # Silent unless it finds something — no need to nag on a clean start.
         self.check_for_orphans(prompt_if_none=False)
@@ -2147,6 +2169,15 @@ class AlexController(QWidget):
             ])
         self.reasoning_table.resizeRowsToContents()
         self.refresh_beliefs()
+
+    def refresh_commands(self):
+        """COMMANDS.md as the tab's content. Qt's own markdown renderer
+        handles the headings and tables it uses."""
+        try:
+            with open(os.path.join(ALEX_DIR, "COMMANDS.md"), encoding="utf-8") as fh:
+                self.commands_view.setMarkdown(fh.read())
+        except Exception as e:
+            self.commands_view.setPlainText(f"Could not read COMMANDS.md: {e}")
 
     def refresh_beliefs(self):
         """Her live beliefs — unconfirmed and confirmed — newest first."""

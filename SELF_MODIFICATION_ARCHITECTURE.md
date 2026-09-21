@@ -712,8 +712,10 @@ The items, in build order:
    `startswith("...")` literal under systems/ and fails if one is missing
    from the document; it caught three gaps in the first draft. She can
    read the file herself (her rule points at it; `read_my_source`), so
-   "what can I tell you to do?" has a true answer. The Controller pass
-   (item 13) should render it as a tab from the same file.
+   "what can I tell you to do?" has a true answer. Shown in the
+   Controller's Commands tab (Qt's markdown renderer) and at `/commands`
+   on her page (`core/markdown_lite.py`, since no markdown library is
+   installed and she stays offline), from the same file, no cache.
 
    From the same conversation, four faults fixed the same hour (ANOMALIES
    Closed): recall answering questions with its own description; "keep

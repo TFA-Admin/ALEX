@@ -174,6 +174,25 @@ async def avatar_page():
 
 
 # -------------------------
+# COMMANDS REFERENCE (2026-09-21)
+# -------------------------
+# Craig: "I was hoping more for a reference either in the webui or the
+# controller." COMMANDS.md, drawn by core/markdown_lite.py, at /commands;
+# the avatar page's rail has a button to it. One source, no cache, so an
+# edit to the file is what you see on the next open.
+@app.get("/commands", include_in_schema=False)
+async def commands_page():
+    from fastapi.responses import HTMLResponse
+    from core.markdown_lite import render_page
+    with open("COMMANDS.md", encoding="utf-8") as fh:
+        text = fh.read()
+    return HTMLResponse(render_page(text, title="What you can say to her"), headers={
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        "Pragma": "no-cache",
+    })
+
+
+# -------------------------
 # START LOG
 # -------------------------
 LAN_IP = get_lan_ip()

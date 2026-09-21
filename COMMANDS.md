@@ -8,7 +8,9 @@ July 2026 version had drifted (it still said answers were auto-stored).
 the trigger lists and `startswith("...")` literals out of the code and
 fails if any of them is missing from this file. Run it after adding or
 changing a trigger. She can read this file herself: ask her what you can
-tell her to do and she reads it (her `read_my_source` tool).
+tell her to do and she reads it (her `read_my_source` tool). You can read
+it in the Controller's **Commands** tab, or from the **What can I say?**
+button on her page, which opens it at `/commands`.
 
 **Where this is going.** Craig, 2026-09-21: "She should be able to derive
 my goal through speech." Everything in section 2 already works that way,
