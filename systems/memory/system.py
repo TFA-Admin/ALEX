@@ -127,7 +127,25 @@ class System(BaseSystem):
         # RECENT MEMORY
         # -------------------------
         try:
-            recent = await fetch_recent_memory(user_id)
+            # 2026-09-20: 12, not the default 5.
+            #
+            # Watched this cause a real argument. She said "let's talk
+            # about something thrilling — like optimizing your daily
+            # routine" at 01:58. Five turns later he quoted it back and she
+            # insisted, repeatedly, that HE had said it. She was not lying
+            # and she was not confabulating from nothing: her own statement
+            # had fallen out of the five-turn window, so she could not see
+            # it, and a personality tuned never to back down filled the gap
+            # with confidence.
+            #
+            # Five turns is roughly four minutes of speech. Any
+            # disagreement about what was just said outlives it. The prompt
+            # was measured at ~2670 of 4096 tokens with 1400 spare, and
+            # twelve turns costs about 250 of them — the cheapest fix
+            # available for the most corrosive failure she has, which is
+            # confidently contradicting him about what he can plainly
+            # remember.
+            recent = await fetch_recent_memory(user_id, limit=12)
         except:
             recent = []
 

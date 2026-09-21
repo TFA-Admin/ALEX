@@ -40,9 +40,22 @@ me. if talking to someone else she can choose to listen to them or not."
 import re
 
 _CORRECTION_PATTERNS = (
+    # "referencing"/"mentioning"/"bringing up" belong here as well as in
+    # _NAMED_TARGET_PATTERNS. 2026-09-20: they were added to the extractor
+    # and not to this gate, so "stop referencing green" — Craig's actual
+    # words during the emerald loop — was not even recognised AS a
+    # correction, and the extractor that could have handled it never ran.
     r"\bstop saying\b", r"\bdon'?t say\b", r"\bquit saying\b",
+    r"\bstop (?:referencing|mentioning|bringing up)\b",
+    r"\b(?:don'?t|do not|never) (?:reference|mention|bring up)\b",
     r"\bstop with\b", r"\bstop repeating\b", r"\byou keep saying\b",
-    r"\byou said that\b", r"\bstop that\b", r"\bdrop that\b",
+    # NOT "you said that" — dropped 2026-09-20 after it fired on
+    # "Alex, stop. See, that's where you said that you found it thrilling.
+    # I did not. You did." He was QUOTING her back to settle a dispute
+    # about who said what, and it was recorded as an instruction to stop
+    # saying "thrilling". Quoting her is the opposite of correcting her,
+    # and it happens constantly in an argument.
+    r"\bstop that\b", r"\bdrop that\b",
     r"\benough of\b", r"\bno more\b", r"\bstop it\b",
     # "say deal with it again and there will be repercussions" — his
     # actual words, and the plainest correction in the whole transcript.

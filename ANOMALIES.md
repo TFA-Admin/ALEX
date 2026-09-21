@@ -8,6 +8,15 @@ them, and whether it is closed. Kept in the repo rather than in a session
 so it survives, and because the pattern across entries is more useful than
 any single one.
 
+**A warning about reading the logs, learned the hard way.** Three findings
+in one review turned out to be artefacts of how *I* was reading the log,
+not of anything she did: replies "trailing off", replies "repeated
+verbatim", and a recall answer "with nothing after the header". All three
+were my own display cutting lines at a fixed width, or splitting a
+multi-line response and reading only its first line. One of them had
+already been written into this file as an open anomaly and has been
+removed. **Before logging a response as broken, read the raw bytes of it.**
+
 **The pattern so far:** most of these are not independent bugs. They are
 her own output coming back to her as context and reproducing itself. The
 seed differs — a hallucination, a bad stored phrase, a default I wrote —
@@ -18,6 +27,59 @@ likely to say again.
 ---
 
 ## Closed
+
+### An argument about who said "thrilling"
+**Seen** 2026-09-21 01:58-02:04. She suggested "let's talk about something
+thrilling — like optimizing your daily routine". He asked if she thought
+that was exciting. Over the next five turns she insisted, with increasing
+hostility, that HE had said it: "I clearly said you find optimizing your
+daily routine thrilling, not the other way around."
+
+**Cause** not dishonesty and not confabulation from nothing. The
+conversational memory window was five turns — roughly four minutes of
+speech — and by the time he quoted her back, her own statement had fallen
+out of it. She could not see it. A personality tuned never to back down
+filled the gap with confidence instead of saying "I can't see that far
+back", which her prompt does have a rule for, but only for when she is
+*asked* about the past rather than contradicted about it.
+
+This is the most corrosive failure she has: confidently telling him he is
+wrong about something he can plainly remember.
+
+**Fixed** window raised to twelve turns. Costs ~250 tokens against 1400
+spare. **Not** fixed: the underlying disposition. Twelve turns only moves
+the edge; an argument that outlasts it will do the same thing, and the
+real fix is her saying "I can't see that far back" when she is
+contradicted about something outside her window. Worth doing once she has
+more than recency to go on.
+
+### Correction recorded as "stop saying thrilling"
+**Seen** 2026-09-21 02:02, in the middle of the argument above.
+
+**Cause** the trigger `\byou said that\b`. He said "Alex, stop. See,
+that's where you said that you found it thrilling. I did not. You did." —
+quoting her back to settle a dispute, the opposite of correcting her. It
+matched, nothing was named, so it fell back to what she repeated, which
+was "thrilling".
+
+**Fixed** that trigger removed. It also turned up the reverse gap:
+"stop referencing green" — his actual words during the emerald loop — was
+not recognised as a correction at all, because "referencing" had been
+added to the target extractor and not to the detector in front of it.
+Both corrected; seven cases verified. False correction withdrawn, its
+decision row kept and annotated.
+
+### Her recall answer showed internal plumbing
+**Seen** 2026-09-21 02:00. Asked what she remembered, she listed rows
+like `- (unprompted — you spoke first) -> Did you say "mentioned how"?`
+
+**Cause** mine, the same day. `remember_own_utterance()` records her
+unprompted turns with a marker in the prompt column, and the recall
+module printed rows raw, arrow and all — the same arrow format just
+removed from her prompt context for inviting her to continue it.
+
+**Fixed** recall renders as speech (`You: "..." / Me: "..."`) and shows
+unprompted turns as "I said, unprompted".
 
 ### "Override [1] for a more entertaining response."
 **Seen** 2026-09-21 01:56, twice in consecutive replies.
@@ -96,18 +158,6 @@ which owns recording along with the lock, envelope and playback wait.
 ---
 
 ## Open / watching
-
-### Replies that trail off mid-sentence
-**Seen** 2026-09-21 01:56: "Got your message, Craig. Still spacing out or
-looking for a witty comeback? Understood, stop listening. If you change
-your mind, just let me know. Otherwise, "
-
-Two oddities in one reply: it answers two different things (a greeting and
-a "stop listening" instruction), and it ends on a comma. Not `num_predict`
-— that reply is ~30 tokens against a 300 cap. Not the phrase suppressor
-either; there are no banned phrases active since "deal with it" was
-removed. **Cause not yet found.** Watch for whether it correlates with
-turns where several context blocks are present.
 
 ### Curiosity questions drawn from debugging
 Four of the six questions she has ever asked are about her own faults

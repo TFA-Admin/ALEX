@@ -57,7 +57,23 @@ async def handle(command, state, user_id=None):
         if not recent:
             return "I don't have any stored memory for you yet.", state
 
-        lines = [f"- {m['prompt']} -> {m['response']}" for m in recent]
+        # 2026-09-20: rendered as speech, and the internal marker hidden.
+        # Craig asked what she remembered and got rows like
+        #   - (unprompted — you spoke first) -> Did you say "mentioned how"?
+        # which is db.remember_own_utterance()'s marker, added the same day,
+        # leaking straight into a user-facing answer. The arrow format is
+        # also the shape that was just removed from her prompt context for
+        # inviting her to continue it; there is no reason to show it to him
+        # either.
+        lines = []
+        for m in recent:
+            said = (m["prompt"] or "").strip()
+            replied = (m["response"] or "").strip()
+            if said.startswith("(unprompted"):
+                lines.append(f'- I said, unprompted: "{replied}"')
+            else:
+                lines.append(f'- You: "{said}"\n  Me: "{replied}"')
+
         return "Here's what I remember from our recent conversations:\n" + "\n".join(lines), state
 
     return "Ask me what I remember, or what I remember about a specific topic.", state
