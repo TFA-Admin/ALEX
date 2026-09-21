@@ -359,6 +359,10 @@ async def ws_text(websocket: WebSocket):
                 # first time this profile has connected — bootstrap voice enrollment
                 collected = await identity_manager.enroll_voice(websocket, user_id)
                 session["creator_verified"] = collected > 0
+                try:
+                    await session_verified(session_id, session["creator_verified"])
+                except Exception:
+                    pass
 
                 if session["creator_verified"]:
                     await send_debug(websocket, f"✅ Voice enrolled ({collected} sample(s)) — verified for this session.")
