@@ -80,6 +80,13 @@ class SpeechLock:
         self._holder = task
         return self
 
+    def locked(self) -> bool:
+        """Is anyone speaking right now? (2026-09-21: core/idle_author.py
+        asks before starting work nobody is waiting on; the first build
+        assumed asyncio.Lock's method and warned once a minute for four
+        hours instead.)"""
+        return self._lock.locked()
+
     async def __aexit__(self, *exc):
         if getattr(self, "_reentered", 0):
             self._reentered -= 1

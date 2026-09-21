@@ -180,7 +180,8 @@ async def run():
         try:
             if enabled() and idle_for() >= IDLE_AFTER_S and not _busy:
                 from core.voice import speech_lock
-                if not speech_lock.locked():
+                speaking = getattr(speech_lock, "locked", lambda: False)()
+                if not speaking:
                     _busy = True
                     _task = asyncio.create_task(run_once())
                     try:
