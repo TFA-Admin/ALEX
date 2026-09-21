@@ -16,13 +16,19 @@ Kinds of item, and where each came from:
   belief       a belief of hers, unconfirmed                   (Reasoning)
   security     an unacknowledged security event                (Notifications)
   personality  an unacknowledged self-reflection change        (Notifications)
+  version      a proposed version of her (roadmap item 6): requested by
+               her, proposed by her author or Claude, or gated and
+               waiting for his decision — the Versions tab has the rest
 """
+import json
 import asyncio
+import webbrowser
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget,
-    QTableWidget, QAbstractItemView,
+    QTableWidget, QAbstractItemView, QMessageBox, QInputDialog,
 )
+from PySide6.QtCore import QThread, Signal
 
 from db.db import (
     fetch_recent_module_build_requests, fetch_recent_query_reports,
@@ -31,6 +37,7 @@ from db.db import (
 )
 from controller.common import make_readable, fill_row, selected_rows, to_local
 from controller import actions
+from controller import versions
 
 
 # Each action: (button label, slot). Slots are the three buttons under the
@@ -49,7 +56,50 @@ ACTIONS = {
     "decline_retain": ("❌ Decline retention", 1),
     "retract_belief": ("❌ Retract belief", 1),
     "view_findings": ("👁️ View findings", 2),
+    "author_version": ("✍️ Ask her author", 0),
+    "launch_version": ("🧪 Launch staging", 0),
+    "approve_version": ("✅ Approve version", 0),
+    "reject_version": ("❌ Reject version", 1),
+    "open_versions": ("📂 Open Versions", 2),
 }
+
+
+def _gate_summary(gate, long=False) -> str:
+    """'intent 166/168, authority 11/12' from the JSON the gate stores."""
+    if not gate:
+        return ""
+    try:
+        data = json.loads(gate) if isinstance(gate, str) else gate
+    except ValueError:
+        return str(gate)[:80]
+    parts = []
+    for suite, r in (data or {}).items():
+        if r.get("skipped"):
+            parts.append(f"{suite} skipped" + (f" ({r['skipped']})" if long else ""))
+        elif r.get("passed") is None:
+            parts.append(f"{suite} failed to run")
+        else:
+            parts.append(f"{suite} {r['passed']}/{r['total']}")
+    return ", ".join(parts)
+
+
+class _GateThread(QThread):
+    """The gate runs suites as subprocesses and can take minutes; the
+    window must stay usable meanwhile."""
+    line = Signal(str)
+    done = Signal(dict)
+
+    def __init__(self, proposal):
+        super().__init__()
+        self.proposal = proposal
+
+    def run(self):
+        try:
+            results = versions.run_gate(self.proposal, self.line.emit)
+        except Exception as e:
+            results = {"error": str(e)}
+            self.line.emit(f"⚠️ Gate failed: {e}")
+        self.done.emit(results)
 
 
 class InboxView(QWidget):
@@ -94,6 +144,7 @@ class InboxView(QWidget):
         waiting_layout.addLayout(btns)
         waiting.setLayout(waiting_layout)
         self.inner.addTab(waiting, "Waiting on you")
+        self.inner.addTab(self._build_versions(), "Versions")
 
         # ---------------- HISTORY ----------------
         # The settled rows: every build request and every search, any
@@ -218,6 +269,26 @@ class InboxView(QWidget):
         except Exception as e:
             self.note(f"⚠️ Failed to load personality changes: {e}")
 
+        try:
+            for p in versions.list_proposals(limit=30):
+                if p["status"] == "requested":
+                    acts, detail = ["author_version", "reject_version", "open_versions"], \
+                        f"she asked to change {p.get('target')}: {p.get('rationale') or ''}"
+                elif p["status"] == "proposed":
+                    acts, detail = ["launch_version", "reject_version", "open_versions"], \
+                        f"branch ready, not yet run — {p.get('rationale') or ''}"
+                elif p["status"] == "gated":
+                    acts, detail = ["approve_version", "reject_version", "open_versions"], \
+                        "gated: " + _gate_summary(p.get("gate")) + " — decide"
+                else:
+                    continue
+                items.append({
+                    "kind": "version", "when": p.get("updated_at") or p.get("created_at"),
+                    "from": p.get("author") or "?", "item": f"#{p['id']} {p['title']}",
+                    "detail": detail, "actions": acts, "data": p})
+        except Exception as e:
+            self.note(f"⚠️ Failed to load proposals: {e}")
+
         items.sort(key=lambda i: str(i["when"] or ""), reverse=True)
         return items
 
@@ -244,6 +315,7 @@ class InboxView(QWidget):
                     break
         self._selection_changed()
         self.refresh_history()
+        self.refresh_versions()
 
     def refresh_history(self):
         try:
@@ -330,6 +402,18 @@ class InboxView(QWidget):
             actions.confirm_belief(self, d, self.note)
         elif key == "retract_belief":
             actions.retract_belief(self, d, self.note)
+        elif key == "author_version":
+            self._v_author(d)
+        elif key == "launch_version":
+            self._v_launch(d)
+        elif key == "approve_version":
+            self._v_approve(d)
+        elif key == "reject_version":
+            self._v_reject(d)
+        elif key == "open_versions":
+            self.inner.setCurrentIndex(1)
+            self._select_version(d["id"])
+            return
         elif key == "ack_security":
             actions.ack_security(self.note)
         elif key == "ack_personality":
@@ -340,6 +424,234 @@ class InboxView(QWidget):
 
     def changed(self):
         """Replaced by the app: the Inbox tab title carries the count."""
+
+    # =====================================================================
+    # VERSIONS (2026-09-21, roadmap item 6)
+    # =====================================================================
+    # A proposal is a branch in its own worktree (controller/versions.py).
+    # Launch runs it as a second copy of her on port 5001 with a snapshot
+    # of her database; Talk opens that copy's page; Gate runs the harness
+    # against it and records the scores; Approve merges into main and
+    # restarts her; Reject removes it and keeps the reason. Kill stops the
+    # staging copy. He is the only one who can press any of these.
+    def _build_versions(self):
+        page = QWidget()
+        lay = QVBoxLayout()
+        self.versions_label = QLabel()
+        lay.addWidget(self.versions_label)
+
+        self.versions_table = QTableWidget()
+        self.versions_table.setColumnCount(8)
+        self.versions_table.setHorizontalHeaderLabels(
+            ["#", "Status", "Author", "Title", "Target", "Gate", "Staging", "Updated"])
+        self.versions_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.versions_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.versions_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        make_readable(self.versions_table, wrap_column=3)
+        self.versions_table.itemSelectionChanged.connect(self._version_selection_changed)
+        lay.addWidget(self.versions_table)
+
+        self.version_detail = QLabel()
+        self.version_detail.setWordWrap(True)
+        lay.addWidget(self.version_detail)
+
+        row1 = QHBoxLayout()
+        self.v_author_btn = QPushButton("✍️ Ask her author")
+        self.v_author_btn.clicked.connect(lambda: self._v_author(self._selected_version()))
+        self.v_launch_btn = QPushButton("🧪 Launch staging")
+        self.v_launch_btn.clicked.connect(lambda: self._v_launch(self._selected_version()))
+        self.v_talk_btn = QPushButton("💬 Talk to it")
+        self.v_talk_btn.clicked.connect(self._v_talk)
+        self.v_gate_btn = QPushButton("🧮 Run the gate")
+        self.v_gate_btn.clicked.connect(lambda: self._v_gate(self._selected_version()))
+        self.v_kill_btn = QPushButton("⏹ Kill staging")
+        self.v_kill_btn.clicked.connect(lambda: self._v_kill(self._selected_version()))
+        for b in (self.v_author_btn, self.v_launch_btn, self.v_talk_btn, self.v_gate_btn, self.v_kill_btn):
+            row1.addWidget(b)
+        row1.addStretch(1)
+        lay.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        self.v_approve_btn = QPushButton("✅ Approve — merge and restart her")
+        self.v_approve_btn.clicked.connect(lambda: self._v_approve(self._selected_version()))
+        self.v_reject_btn = QPushButton("❌ Reject with reason")
+        self.v_reject_btn.clicked.connect(lambda: self._v_reject(self._selected_version()))
+        row2.addWidget(self.v_approve_btn)
+        row2.addWidget(self.v_reject_btn)
+        row2.addStretch(1)
+        self.v_refresh_btn = QPushButton("🔄 Refresh")
+        self.v_refresh_btn.clicked.connect(self.refresh_versions)
+        row2.addWidget(self.v_refresh_btn)
+        lay.addLayout(row2)
+
+        self._proposals = []
+        self._gate_thread = None
+        page.setLayout(lay)
+        self._version_selection_changed()
+        return page
+
+    # set by the app
+    def selected_model(self) -> str:
+        return ""
+
+    def restart_her(self):
+        """Replaced by the app with the Run view's restart."""
+
+    def refresh_versions(self):
+        selected = self._selected_version()
+        keep = selected["id"] if selected else None
+        try:
+            self._proposals = versions.list_proposals(limit=50)
+        except Exception as e:
+            self.note(f"⚠️ Failed to load proposals: {e}")
+            self._proposals = []
+        up = versions.staging_up()
+        self.versions_label.setText(
+            f"Proposed versions of her. Staging port {versions.STAGING_PORT}: "
+            + ("RUNNING" if up else "idle")
+            + f". Worktrees under {versions.VERSIONS_ROOT}.")
+        self.versions_table.setRowCount(len(self._proposals))
+        for row, p in enumerate(self._proposals):
+            staging = "running" if (up and p.get("staging_pid")) else ("" if not p.get("worktree") else "stopped")
+            fill_row(self.versions_table, row, [
+                p["id"], p["status"], p.get("author") or "", p["title"], p.get("target") or "",
+                _gate_summary(p.get("gate")), staging, to_local(p.get("updated_at"))])
+        self.versions_table.resizeRowsToContents()
+        if keep is not None:
+            self._select_version(keep)
+        self._version_selection_changed()
+
+    def _select_version(self, pid: int):
+        for row, p in enumerate(self._proposals):
+            if p["id"] == pid:
+                self.versions_table.selectRow(row)
+                return
+
+    def _selected_version(self):
+        rows = selected_rows(self.versions_table)
+        if not rows or rows[0] >= len(self._proposals):
+            return None
+        return self._proposals[rows[0]]
+
+    def _version_selection_changed(self):
+        p = self._selected_version()
+        busy = self._gate_thread is not None and self._gate_thread.isRunning()
+        status = p["status"] if p else None
+        has_tree = bool(p and p.get("worktree"))
+        self.v_author_btn.setEnabled(bool(p) and status == "requested" and not busy)
+        self.v_launch_btn.setEnabled(has_tree and status in ("proposed", "gated") and not busy)
+        self.v_talk_btn.setEnabled(versions.staging_up())
+        self.v_gate_btn.setEnabled(has_tree and status in ("proposed", "gated") and not busy)
+        self.v_kill_btn.setEnabled(versions.staging_up() and not busy)
+        self.v_approve_btn.setEnabled(has_tree and status in ("proposed", "gated") and not busy)
+        self.v_reject_btn.setEnabled(bool(p) and status in ("requested", "proposed", "gated") and not busy)
+        if not p:
+            self.version_detail.setText("Select a proposal.")
+            return
+        text = f"#{p['id']} — {p['title']}\nBy {p.get('author')}. {p.get('rationale') or ''}"
+        if p.get("branch"):
+            text += f"\nBranch {p['branch']}"
+        if p.get("gate"):
+            text += "\nGate: " + _gate_summary(p["gate"], long=True)
+        if p.get("reason"):
+            text += f"\nReason: {p['reason']}"
+        self.version_detail.setText(text)
+
+    def _v_author(self, p):
+        if not p:
+            return
+        self.note(f"[VERSIONS] Asking her author about {p.get('target')}…")
+        try:
+            versions.author_from_request(p, self.note)
+        except Exception as e:
+            self.note(f"⚠️ Her author failed: {e}")
+        self.refresh()
+        self.changed()
+
+    def _v_launch(self, p):
+        if not p:
+            return
+        if versions.staging_up():
+            confirm = QMessageBox.question(
+                self, "Launch staging",
+                "A staging copy is already running on port "
+                f"{versions.STAGING_PORT}. Stop it and launch #{p['id']} instead?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if confirm != QMessageBox.Yes:
+                return
+        try:
+            versions.launch_staging(p, self.selected_model() or "", self.note)
+            self.note(f"[VERSIONS] Give it ~10s to come up, then Talk to it at {versions.STAGING_URL}")
+        except Exception as e:
+            self.note(f"⚠️ Launch failed: {e}")
+        self.refresh_versions()
+
+    def _v_talk(self):
+        webbrowser.open(versions.STAGING_URL)
+
+    def _v_kill(self, p):
+        versions.kill_staging(p, self.note)
+        self.refresh_versions()
+
+    def _v_gate(self, p):
+        if not p:
+            return
+        if self._gate_thread and self._gate_thread.isRunning():
+            self.note("⚠️ A gate is already running.")
+            return
+        if not versions.staging_up():
+            confirm = QMessageBox.question(
+                self, "Run the gate",
+                "Staging is not running, so only the deterministic suite (intent) can run; "
+                "the judged suites will be skipped. Launch staging first for the full gate.\n\nRun anyway?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if confirm != QMessageBox.Yes:
+                return
+        self._gate_thread = _GateThread(p)
+        self._gate_thread.line.connect(self.note)
+        self._gate_thread.done.connect(self._gate_done)
+        self._gate_thread.start()
+        self._version_selection_changed()
+
+    def _gate_done(self, results):
+        self.note(f"[VERSIONS] Gate finished: {results}")
+        self.refresh()
+        self.changed()
+
+    def _v_approve(self, p):
+        if not p:
+            return
+        gate = _gate_summary(p.get("gate"), long=True) if p.get("gate") else "NOT GATED"
+        confirm = QMessageBox.question(
+            self, "Approve version",
+            f"Merge proposal #{p['id']} into main and restart her on it?\n\n{p['title']}\n\nGate: {gate}",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if confirm != QMessageBox.Yes:
+            return
+        ok = False
+        try:
+            ok = versions.approve(p, self.note)
+        except Exception as e:
+            self.note(f"⚠️ Approve failed: {e}")
+        if ok:
+            self.restart_her()
+        self.refresh()
+        self.changed()
+
+    def _v_reject(self, p):
+        if not p:
+            return
+        reason, ok = QInputDialog.getText(
+            self, "Reject version", f"Why? The reason stays with #{p['id']}.\n\n{p['title']}")
+        if not ok:
+            return
+        reason = reason.strip() or "rejected by Craig at the Controller"
+        try:
+            versions.reject(p, reason, self.note)
+        except Exception as e:
+            self.note(f"⚠️ Reject failed: {e}")
+        self.refresh()
+        self.changed()
 
     def _view_history_findings(self):
         rows = selected_rows(self.searches_table)

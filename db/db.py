@@ -202,6 +202,29 @@ async def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''')
 
+        # 🧪 PROPOSALS (2026-09-21, roadmap item 6: the self-modification
+        # container). One row per proposed version of her: a branch in its
+        # own worktree, a staging instance on another port, a gate result,
+        # and his decision. See controller/versions.py — everything that
+        # acts on a row runs in the Controller's process, never hers; her
+        # propose_change tool can only add a 'requested' row.
+        await db.execute('''
+        CREATE TABLE IF NOT EXISTS proposals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            rationale TEXT,
+            author TEXT,
+            target TEXT,
+            branch TEXT,
+            worktree TEXT,
+            status TEXT DEFAULT 'proposed',
+            gate TEXT,
+            reason TEXT,
+            staging_pid INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+
         # ✋ CORRECTIONS (2026-09-20) — "stop saying that", remembered and
         # escalating. Craig: "It's a simple disciplinary correction, but
         # keep doing it and the impact is worse."
@@ -638,6 +661,61 @@ async def fetch_profile_names() -> list:
         cursor = await db.execute("SELECT username FROM profiles")
         rows = await cursor.fetchall()
     return [r[0] for r in rows if r[0]]
+
+
+# -------------------------
+# PROPOSALS (2026-09-21) — see the table comment in init_db()
+# -------------------------
+_PROPOSAL_KEYS = ["id", "title", "rationale", "author", "target", "branch", "worktree",
+                  "status", "gate", "reason", "staging_pid", "created_at", "updated_at"]
+_PROPOSAL_WRITABLE = {"title", "rationale", "author", "target", "branch", "worktree",
+                      "status", "gate", "reason", "staging_pid"}
+
+
+async def create_proposal(title: str, rationale: str, author: str, target: str = None,
+                          status: str = "proposed") -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "INSERT INTO proposals(title, rationale, author, target, status) VALUES(?,?,?,?,?)",
+            (title, rationale, author, target, status))
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def update_proposal(proposal_id: int, **fields):
+    cols = [k for k in fields if k in _PROPOSAL_WRITABLE]
+    if not cols:
+        return
+    sets = ", ".join(f"{k}=?" for k in cols) + ", updated_at=CURRENT_TIMESTAMP"
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(f"UPDATE proposals SET {sets} WHERE id=?",
+                         [fields[k] for k in cols] + [proposal_id])
+        await db.commit()
+
+
+async def get_proposal(proposal_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            f"SELECT {', '.join(_PROPOSAL_KEYS)} FROM proposals WHERE id=?", (proposal_id,))
+        row = await cursor.fetchone()
+    return dict(zip(_PROPOSAL_KEYS, row)) if row else None
+
+
+async def fetch_proposals(status: str = None, limit: int = 50):
+    sql = f"SELECT {', '.join(_PROPOSAL_KEYS)} FROM proposals"
+    params = []
+    if status:
+        sql += " WHERE status=?"
+        params.append(status)
+    sql += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+    async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            cursor = await db.execute(sql, params)
+            rows = await cursor.fetchall()
+        except Exception:
+            return []
+    return [dict(zip(_PROPOSAL_KEYS, r)) for r in rows]
 
 
 # -------------------------

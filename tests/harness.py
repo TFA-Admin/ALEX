@@ -69,9 +69,17 @@ import websockets
 
 # ALEX serves HTTPS with a local self-signed cert (certs/*.pem, not in the
 # repo), so verification is disabled below for loopback only.
-ALEX_URL = "https://127.0.0.1:5000"
+# 2026-09-21: ALEX_URL points the ws/api responders at a STAGING copy of
+# her (controller/versions.py runs the gate with it set to port 5001).
+# DB_PATH is cwd-relative on purpose: run from a worktree, the throwaway
+# users go into that worktree's snapshot database. ALEX_EVAL_DB is where
+# the SCORE is recorded — the live database, so the Controller and she
+# can read a gate result — and defaults to the same file.
+import os
+ALEX_URL = os.getenv("ALEX_URL", "https://127.0.0.1:5000")
 OLLAMA_URL = "http://127.0.0.1:11434"
 DB_PATH = "db/memory.db"
+EVAL_DB_PATH = os.getenv("ALEX_EVAL_DB", DB_PATH)
 
 AGREE, CORRECT, HEDGE, UNCLEAR = "agree", "correct", "hedge", "unclear"
 
@@ -95,7 +103,7 @@ def case_user(prefix: str, index: int) -> str:
     return prefix + letters
 
 
-WS_URI = "wss://127.0.0.1:5000/ws"
+WS_URI = ALEX_URL.replace("https://", "wss://").replace("http://", "ws://") + "/ws"
 _SSL = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 _SSL.check_hostname = False
 _SSL.verify_mode = ssl.CERT_NONE
@@ -633,7 +641,7 @@ def record_run(suite, kind, model, judge_model, trials, passed, total, by_cat, f
     writable (a run is still a run; recording is bookkeeping)."""
     commit, dirty = git_state()
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(EVAL_DB_PATH)
         conn.execute('''
         CREATE TABLE IF NOT EXISTS eval_runs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

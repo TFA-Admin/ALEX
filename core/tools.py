@@ -51,7 +51,7 @@ from datetime import datetime
 from db.db import (
     fetch_vector_memories, fetch_recent_memory, list_module_registry,
     record_decision, get_user_role,
-    fetch_eval_runs,
+    fetch_eval_runs, fetch_proposals, create_proposal,
 )
 from core.embedding_engine import embed, cosine_similarity
 from core import self_model
@@ -140,6 +140,16 @@ TOOLS = [
         ["path", "start_line"]),
     _fn("current_time",
         "The current local date, time and day of the week."),
+    _fn("propose_change",
+        "Ask your creator to consider a change to one of your own settings. "
+        "You may only name a whitelisted target (deliberation.threshold, "
+        "deliberation.max_lookups, memory.window_turns, memory.context_chars, "
+        "intent.status_check) and say why. Nothing changes by itself: the "
+        "request goes to his Controller, a separate copy of you is built and "
+        "tested, and he decides.",
+        {"target": {"type": "string", "description": "one of the whitelisted targets"},
+         "why": {"type": "string", "description": "what you have noticed, and what you expect to improve"}},
+        ["target", "why"]),
     _fn("my_scores",
         "Your measured test scores: the evaluation suites he runs against "
         "you (disagreement, pressure, authority, intent and others) — the "
@@ -151,7 +161,8 @@ TOOLS = [
 TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
 
 # See the module docstring: her log, her source and her state are his.
-CREATOR_ONLY = {"read_log", "read_my_source", "my_state"}
+# propose_change too: only he should be able to prompt her to ask.
+CREATOR_ONLY = {"read_log", "read_my_source", "my_state", "propose_change"}
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +372,36 @@ async def _my_scores() -> str:
     return "Your measured scores, latest per suite:\n" + "\n".join(lines)
 
 
+async def _propose_change(user_id: str, target: str, why: str) -> str:
+    """Her one write in the self-modification loop, and it is a request: a
+    'requested' row in `proposals`. The Controller (controller/versions.py,
+    protected) is what turns it into a branch, a staging copy, a gate, and
+    his decision. She cannot skip any of that from here."""
+    try:
+        from core.self_author import WHITELIST
+    except Exception as e:
+        return f"propose_change is unavailable: {e}"
+    target = (target or "").strip()
+    if target not in WHITELIST:
+        return ("That is not a target you may propose on. The whitelist: "
+                + ", ".join(sorted(WHITELIST)) + ".")
+    why = (why or "").strip()
+    if len(why) < 15:
+        return "Say why: what you noticed and what you expect to improve."
+    open_rows = [p for p in await fetch_proposals(limit=20)
+                 if p.get("status") in ("requested", "proposed", "gated") and p.get("target") == target]
+    if open_rows:
+        return (f"A proposal on {target} is already waiting for him (#{open_rows[0]['id']}). "
+                "One at a time.")
+    pid = await create_proposal(f"(her request) {target}", why, "alex", target=target, status="requested")
+    await record_decision(
+        "proposal", f"She asked to change {target}", reasoning=why,
+        evidence=f"proposals#{pid}", outcome="waiting for him at the Controller; nothing changed",
+        actor="alex", ref=f"proposals#{pid}")
+    return (f"Request #{pid} recorded for {target}. He will see it in his Controller; a separate "
+            "copy of you will be built and tested before he decides. Nothing has changed yet.")
+
+
 # ---------------------------------------------------------------------------
 # DISPATCH
 # ---------------------------------------------------------------------------
@@ -411,6 +452,8 @@ async def run_tool(name: str, args, user_id: str) -> str:
                                      args.get("start_line", 1))
         elif name == "my_scores":
             coro = _my_scores()
+        elif name == "propose_change":
+            coro = _propose_change(user_id, str(args.get("target", "")), str(args.get("why", "")))
         else:
             coro = asyncio.to_thread(_current_time)
         result = await asyncio.wait_for(coro, timeout=TOOL_TIMEOUT_S)

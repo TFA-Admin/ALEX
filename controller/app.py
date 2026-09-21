@@ -64,6 +64,9 @@ class AlexController(QWidget):
 
         self.inbox.changed = self._inbox_changed
         self.her.changed = self._inbox_changed
+        # Versions (item 6): launching a staging copy needs her model; approve restarts her.
+        self.inbox.selected_model = self.run.selected_model
+        self.inbox.restart_her = self.run._restart_alex
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self.run, "Run")

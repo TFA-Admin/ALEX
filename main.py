@@ -1,4 +1,5 @@
 import asyncio
+import os
 import threading
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -202,4 +203,4 @@ async def commands_page():
 # START LOG
 # -------------------------
 LAN_IP = get_lan_ip()
-logger.info(f"🌐 A.L.E.X running on {LAN_IP}:5000")
+logger.info(f"🌐 A.L.E.X running on {LAN_IP}:{os.getenv('ALEX_PORT', '5000')}")

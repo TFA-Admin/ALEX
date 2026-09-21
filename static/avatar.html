@@ -552,7 +552,8 @@ if(window.ort){
     ort.env.wasm.wasmPaths = "/static/vad/";
 }
 
-const ws = new WebSocket(`wss://${location.hostname}:5000/ws`);
+// 2026-09-21: the page's own port, so a staging copy of her on another port talks to itself
+const ws = new WebSocket(`wss://${location.hostname}:${location.port || 5000}/ws`);
 ws.binaryType = "arraybuffer";
 
 const latest = document.getElementById("latest");
