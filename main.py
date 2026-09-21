@@ -191,12 +191,46 @@ async def avatar_page():
 # controller." COMMANDS.md, drawn by core/markdown_lite.py, at /commands;
 # the avatar page's rail has a button to it. One source, no cache, so an
 # edit to the file is what you see on the next open.
+# 2026-09-21 (Craig: "Is this customized for me or does a normal user get
+# to see creator commands? If so can we change that?"). The page passes
+# the browser's saved name as ?user=; anyone who is not the creator gets
+# the reference without the creator section and without rows marked
+# creator-only. Presentation only — every one of those commands is gated
+# in code regardless of who reads about it (systems/controller/_role_gates.py).
+_CREATOR_MARKS = ("creator only", "creator-only", "**code**", "creator or admin",
+                  "creator or super user", "his call")
+
+
+def _commands_for(text: str, creator: bool) -> str:
+    if creator:
+        return text
+    out, skipping = [], False
+    for line in text.splitlines():
+        if line.startswith("## "):
+            skipping = "creator commands" in line.lower()
+        if skipping:
+            continue
+        low = line.lower()
+        if (line.startswith("|") or line.lstrip().startswith("- ")) and any(m in low for m in _CREATOR_MARKS):
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
 @app.get("/commands", include_in_schema=False)
-async def commands_page():
+async def commands_page(user: str = ""):
     from fastapi.responses import HTMLResponse
     from core.markdown_lite import render_page
+    from db.db import get_user_role
     with open("COMMANDS.md", encoding="utf-8") as fh:
         text = fh.read()
+    creator = False
+    if user:
+        try:
+            creator = (await get_user_role(user.strip().lower())) == "creator"
+        except Exception:
+            creator = False
+    text = _commands_for(text, creator)
     return HTMLResponse(render_page(text, title="What you can say to her"), headers={
         "Cache-Control": "no-store, no-cache, must-revalidate",
         "Pragma": "no-cache",

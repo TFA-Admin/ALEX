@@ -482,7 +482,7 @@ body.chat-collapsed .panel-toggle-right{ transform: rotate(180deg); }
       <button class="rail-btn" id="autoBtn" onclick="toggleAutoListen()">Auto Listen: Off</button>
       <button class="rail-btn" onclick="logoff()">Log Off</button>
       <!-- 2026-09-21: the command reference, served from COMMANDS.md -->
-      <button class="rail-btn" onclick="window.open('/commands', '_blank')">What can I say?</button>
+      <button class="rail-btn" onclick="window.open('/commands?user=' + encodeURIComponent(localStorage.getItem('alex_user') || ''), '_blank')">What can I say?</button>
     </div>
 
     <details class="rail-debug">
