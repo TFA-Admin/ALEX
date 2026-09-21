@@ -131,25 +131,64 @@ class OllamaManager:
                 pass
         self._client = None
 
-    async def init(self):
+    async def init(self, timeout: float = None) -> bool:
+        """Waits for Ollama. Returns True once it answers.
+
+        `timeout=None` waits forever, which is right at startup — main.py
+        blocks on this before serving, and there is nothing useful to do
+        until the model is up.
+
+        **A number bounds the wait, and every generate_* path passes one.**
+        2026-09-20: this was an unbounded `while True` on every path,
+        including mid-conversation. If Ollama went away — crashed,
+        restarting, being swapped — the next generation call blocked
+        forever with no error, no timeout and no log beyond "Waiting for
+        Ollama" every two seconds. From outside, she simply stopped
+        answering.
+
+        Craig hit exactly that ("she's seemingly stopped responding") on
+        the same day get_phrase() started composing every scripted line
+        through generate_json, which put this landmine in front of the
+        connect handshake rather than only in front of a chat reply. The
+        bug was older than that change; the change is what made it easy to
+        stand on. tools/memory_hygiene.py had already had to work around
+        it locally an hour earlier — which should have been the signal to
+        fix it here instead."""
+        deadline = None if timeout is None else (
+            asyncio.get_event_loop().time() + timeout)
+
         while True:
             try:
                 r = await self._get_client().get(self.host, timeout=2.0)
                 if r.status_code == 200:
                     self.ready = True
                     print("✅ Ollama ready")
-                    return
-            except:
+                    return True
+            except Exception:
                 pass
+
+            if deadline is not None and asyncio.get_event_loop().time() >= deadline:
+                print(f"⚠️ Ollama unreachable after {timeout:.0f}s — giving up on this call")
+                return False
 
             print("⏳ Waiting for Ollama...")
             await asyncio.sleep(2)
 
+    # How long a single generation call will wait for a missing Ollama
+    # before failing instead of hanging. Short on purpose: if it is not
+    # there within this, it is not coming back inside the life of one
+    # request, and every caller has a fallback for None.
+    READY_WAIT_S = 5.0
+
     async def generate_stream(self, prompt: str, model: str = DEFAULT_MODEL,
                                model_override: str = None, raw_mode: bool = False):
 
-        if not self.ready:
-            await self.init()
+        if not self.ready and not await self.init(timeout=self.READY_WAIT_S):
+            # Fails as a normal failure rather than hanging. Streaming
+            # raises (its consumer already handles a dead generation);
+            # the single-shot paths fall through to their own
+            # try/except and return None, which every caller expects.
+            raise RuntimeError("Ollama is not reachable")
 
         active_model = model_override or model
 
@@ -276,8 +315,12 @@ class OllamaManager:
         this is an interpretation aid, not a source of truth, and the
         actual security-relevant decisions must never depend solely on it.
         """
-        if not self.ready:
-            await self.init()
+        if not self.ready and not await self.init(timeout=self.READY_WAIT_S):
+            # Fails as a normal failure rather than hanging. Streaming
+            # raises (its consumer already handles a dead generation);
+            # the single-shot paths fall through to their own
+            # try/except and return None, which every caller expects.
+            raise RuntimeError("Ollama is not reachable")
 
         options = {
             "num_ctx": SHARED_NUM_CTX,
@@ -323,8 +366,12 @@ class OllamaManager:
         Returns the plain response string, or None on any failure —
         same "caller must have a safe fallback" contract as generate_json.
         """
-        if not self.ready:
-            await self.init()
+        if not self.ready and not await self.init(timeout=self.READY_WAIT_S):
+            # Fails as a normal failure rather than hanging. Streaming
+            # raises (its consumer already handles a dead generation);
+            # the single-shot paths fall through to their own
+            # try/except and return None, which every caller expects.
+            raise RuntimeError("Ollama is not reachable")
 
         options = {
             "num_ctx": SHARED_NUM_CTX,

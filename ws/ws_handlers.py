@@ -60,6 +60,16 @@ async def push_to_creator(text: str, speak: bool = True) -> bool:
     from core.alex_core import alex_core
     from speech.tts_engine import synthesize_speech
 
+
+    # Serialised against real turns. generation_lock is what stops two
+    # responses overlapping everywhere else, and an unprompted one is not
+    # an exception to that — socially either: people do not talk over
+    # someone mid-sentence to change the subject.
+    async with generation_lock:
+        return await _push_now(text, speak, alex_core, synthesize_speech)
+
+
+async def _push_now(text, speak, alex_core, synthesize_speech) -> bool:
     delivered = False
 
     for session_id, conn in list(_active_connections.items()):

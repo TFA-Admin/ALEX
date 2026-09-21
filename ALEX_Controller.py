@@ -46,7 +46,7 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton,
     QTextEdit, QLabel, QHBoxLayout, QTabWidget,
     QTableWidget, QTableWidgetItem, QMessageBox, QComboBox,
-    QAbstractItemView, QLineEdit, QDialog
+    QAbstractItemView, QLineEdit, QDialog, QHeaderView
 )
 from PySide6.QtCore import QThread, Signal, QTimer, Qt
 from PySide6.QtGui import QGuiApplication, QTextCursor
@@ -95,6 +95,40 @@ OLLAMA_EXE_PATH = os.getenv("ALEX_OLLAMA_EXE", "D:/project_ALEX/Ollama/ollama.ex
 # both ALEX (new timestamped file per run — pattern is a glob) and Ollama
 # (one stable file — pattern is just its literal name).
 # -----------------------------
+def _make_readable(table, wrap_column: int):
+    """Long values in these tables were unreadable — every column sized
+    itself equally and Qt elided the rest.
+
+    2026-09-20 (Craig, on the Notifications tab): "I can't actually read
+    all these." The personality-change rows are the worst case: the whole
+    point of the row is the new personality text and the reason it changed,
+    and both came out as "Be more concise, direct, and to the point. Use
+    humor sparingly, only when contextually fitting and ..." next to
+    "Reduced ...".
+
+    Three changes, together: the content column takes the leftover width
+    while the short ones size to their contents, rows grow to fit wrapped
+    text, and every cell carries its full value as a tooltip so nothing is
+    lost even when a row is still too narrow."""
+    header = table.horizontalHeader()
+    for col in range(table.columnCount()):
+        header.setSectionResizeMode(
+            col, QHeaderView.Stretch if col == wrap_column
+            else QHeaderView.ResizeToContents)
+    table.setWordWrap(True)
+    table.verticalHeader().setVisible(False)
+
+
+def _fill_row(table, row, values):
+    """Sets a row and gives every cell the full text as a tooltip."""
+    for col, value in enumerate(values):
+        text = "" if value is None else str(value)
+        item = QTableWidgetItem(text)
+        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+        item.setToolTip(text)
+        table.setItem(row, col, item)
+
+
 class LogFileTailer(QThread):
     log_signal = Signal(str)
 
@@ -747,6 +781,7 @@ class AlexController(QWidget):
         )
         self.security_events_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.security_events_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        _make_readable(self.security_events_table, wrap_column=2)
         notifications_layout.addWidget(self.security_events_table)
 
         security_events_btns = QHBoxLayout()
@@ -764,6 +799,7 @@ class AlexController(QWidget):
         )
         self.personality_changes_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.personality_changes_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        _make_readable(self.personality_changes_table, wrap_column=1)
         notifications_layout.addWidget(self.personality_changes_table)
 
         personality_changes_btns = QHBoxLayout()
@@ -1881,10 +1917,7 @@ class AlexController(QWidget):
         self.security_events_table.setRowCount(len(events))
         for row, ev in enumerate(events):
             values = [ev["user"], ev["event_type"], ev["detail"], ev["created_at"]]
-            for col, value in enumerate(values):
-                item = QTableWidgetItem(str(value))
-                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                self.security_events_table.setItem(row, col, item)
+            _fill_row(self.security_events_table, row, values)
 
         try:
             changes = asyncio.run(fetch_unacknowledged_personality_changes())
@@ -1895,10 +1928,10 @@ class AlexController(QWidget):
         self.personality_changes_table.setRowCount(len(changes))
         for row, c in enumerate(changes):
             values = [c["kind"], c["new_value"], c["reason"], c["created_at"]]
-            for col, value in enumerate(values):
-                item = QTableWidgetItem(str(value))
-                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                self.personality_changes_table.setItem(row, col, item)
+            _fill_row(self.personality_changes_table, row, values)
+
+        self.security_events_table.resizeRowsToContents()
+        self.personality_changes_table.resizeRowsToContents()
 
     def acknowledge_security_notifications(self):
         try:
