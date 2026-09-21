@@ -65,6 +65,88 @@ def is_correction(text: str) -> bool:
     return bool(text) and bool(_CORRECTION_RE.search(text))
 
 
+# What he actually said to stop saying, when he said it.
+#
+# 2026-09-20, and this is the important one. The first live correction
+# recorded "craig" — but Craig had NAMED the thing he wanted stopped, in
+# the same sentence. His words: "I did say what I wanted her to stop
+# saying. And that's the problem. I pointed her at it and she still got it
+# wrong."
+#
+# He was right, and the mistake was structural rather than a bad
+# threshold: find_repeated() reads HER output and never once looked at
+# HIS. The "work it out from duplication" half was built because he asked
+# for it, and then used even when there was nothing to work out. Guessing
+# is the fallback, not the method.
+#
+# Ordered longest-first so "stop saying my name" is tried before the
+# generic "stop saying <rest of sentence>".
+_NAMED_TARGET_PATTERNS = (
+    r"stop calling me (?P<t>.+)",
+    r"stop referring to me as (?P<t>.+)",
+    r"stop saying my (?P<t>name)",
+    r"stop using my (?P<t>name)",
+    r"stop (?:saying|using|repeating|referencing|mentioning|bringing up) (?P<t>.+)",
+    r"(?:don'?t|do not|never) (?:say|use|repeat) (?P<t>.+)",
+    r"quit (?:saying|using|repeating|referencing|mentioning|bringing up) (?P<t>.+)",
+    r"(?:don'?t|do not|never) (?:reference|mention|bring up) (?P<t>.+)",
+    r"stop with (?:the |that )?(?P<t>.+)",
+    r"enough (?:of|with) (?:the |that )?(?P<t>.+)",
+    r"no more (?P<t>.+)",
+    r"you keep saying (?P<t>.+)",
+)
+
+# Trailing scaffolding people add after naming the thing.
+_TARGET_TRAILERS = (
+    r"\s+(?:so much|so often|all the time|every|each|constantly|again|"
+    r"anymore|any more|please|ok|okay|alright|will you|would you|sentence)\b.*$",
+)
+
+
+def named_target(text: str, speaker_name: str = None) -> str:
+    """What he explicitly told her to stop saying, or "".
+
+    Quoted text wins outright — "stop saying 'deal with it'" is as
+    unambiguous as it gets. Otherwise the phrase after the instruction,
+    trimmed of the qualifiers people tack on ("so much", "all the time").
+
+    `speaker_name` resolves "stop saying my name", which is a real
+    instruction and must work even though names are excluded from
+    automatic detection. Him naming it is the whole point — the exclusion
+    exists to stop her GUESSING at his name, not to overrule him.
+    """
+    if not text:
+        return ""
+
+    lowered = " ".join(text.lower().split())
+
+    quoted = re.search(r"""['"\u2018\u201c]([^'"\u2019\u201d]{2,60})['"\u2019\u201d]""", text)
+    if quoted:
+        return " ".join(quoted.group(1).lower().split())
+
+    for pattern in _NAMED_TARGET_PATTERNS:
+        m = re.search(pattern, lowered)
+        if not m:
+            continue
+
+        target = m.group("t").strip(" .!?,;:")
+        for trailer in _TARGET_TRAILERS:
+            target = re.sub(trailer, "", target).strip(" .!?,;:")
+
+        if target in ("name", "my name") and speaker_name:
+            return speaker_name.lower()
+
+        # "stop saying that" names nothing — fall through to working it out.
+        if target in ("that", "it", "this", "those", "these", "stuff",
+                      "things", "thing", "", "so much", "shit"):
+            return ""
+
+        if 2 <= len(target) <= 60:
+            return target
+
+    return ""
+
+
 # Words that repeat in ordinary English regardless of any verbal tic, so a
 # phrase made only of these is not evidence of anything.
 _FUNCTION_ONLY = {

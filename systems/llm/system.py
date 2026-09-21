@@ -309,8 +309,19 @@ class System(BaseSystem):
             except Exception:
                 known = []
 
-            phrase = corr.find_repeated(
-                [r["response"] for r in recent], never=known + [user_id])
+            # What he SAID first. Only work it out from her own repetition
+            # when he did not name it — guessing is the fallback, not the
+            # method. Craig, on the first live correction getting this
+            # backwards: "I did say what I wanted her to stop saying. And
+            # that's the problem. I pointed her at it and she still got it
+            # wrong."
+            phrase = corr.named_target(user_input, speaker_name=user_id)
+            how = "he named it"
+
+            if not phrase:
+                phrase = corr.find_repeated(
+                    [r["response"] for r in recent], never=known + [user_id])
+                how = "worked out from what she had been repeating"
 
             if phrase:
                 # His corrections bind. Anyone else's are hers to weigh —
@@ -329,10 +340,9 @@ class System(BaseSystem):
                 await record_decision(
                     "correction",
                     f'Told to stop saying "{phrase}"',
-                    reasoning=("The rule decided this, not her: she was told "
-                               "to stop, and a word count over her own recent "
-                               "replies found what she had been repeating."),
-                    evidence=f"said in {corr.MIN_OCCURRENCES}+ of her last 5 replies",
+                    reasoning=f"The rule decided this, not her — {how}.",
+                    evidence=(f"his words: {user_input!r}" if how == "he named it"
+                              else f"said in {corr.MIN_OCCURRENCES}+ of her last 5 replies"),
                     outcome=(f"strength {strength} ({corr.consequence(strength)})"
                              + ("" if is_creator else " — not the creator, so hers to weigh")),
                     actor=user_id)
