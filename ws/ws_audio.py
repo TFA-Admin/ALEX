@@ -2,6 +2,9 @@ import asyncio
 import re
 
 from speech.stt_engine import transcribe_audio
+from speech.voice_id_engine import is_foreign_speaker
+from db.db import fetch_voice_samples
+from config.logger_config import logger
 from speech.tts_engine import synthesize_speech
 from core.text_utils import first_word
 
@@ -93,7 +96,8 @@ class AudioProcessor:
             await websocket.send_bytes(pcm)
             await websocket.send_text("__END__")
 
-    async def process_end(self, audio_bytes: bytes, websocket, send_debug):
+    async def process_end(self, audio_bytes: bytes, websocket, send_debug,
+                          user_id: str = None):
         now = asyncio.get_event_loop().time()
 
         # debounce
@@ -112,6 +116,40 @@ class AudioProcessor:
             return None
 
         await send_debug(websocket, f"🎙️ Captured {len(audio_bytes)} bytes, transcribing...")
+
+        # -------------------------
+        # IS THIS EVEN HIM? (2026-09-20)
+        # -------------------------
+        # Craig: "I'm guessing she is picking up on voice activity happening
+        # in the background. Can we make her able to distinguish between me
+        # talking and background noise?"
+        #
+        # Until now she verified the speaker ONCE at connect and then
+        # transcribed whatever the microphone heard for the rest of the
+        # session — a television, someone else in the room, all of it
+        # arriving as if he had said it. The roadmap already had this as a
+        # known gap ("needs per-utterance speaker re-verification, not just
+        # the connect-time-only check").
+        #
+        # Checked BEFORE transcription so a foreign voice costs one
+        # embedding rather than a Whisper pass plus a whole turn. Fails open
+        # at every step — see is_foreign_speaker().
+        if user_id:
+            try:
+                enrolled = await fetch_voice_samples(user_id)
+                foreign, score = is_foreign_speaker(audio_bytes, enrolled)
+            except Exception as e:
+                foreign, score = False, 0.0
+                logger.warning(f"⚠️ speaker check failed, treating as his: {e}")
+
+            if foreign:
+                await send_debug(
+                    websocket,
+                    f"🙉 Not your voice (score {score:.2f}) — ignoring.")
+                logger.info(
+                    f"[ACTION] Dropped an utterance that did not match "
+                    f"{user_id} (score {score:.2f})")
+                return None
 
         text, confidence = transcribe_audio(audio_bytes)
 

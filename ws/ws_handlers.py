@@ -513,7 +513,8 @@ async def process_message(websocket, msg, user_id, session_id, audio, audio_byte
         # AUDIO FINALIZATION
         # -------------------------
         if msg == "__END_AUDIO__":
-            prompt_text = await audio.process_end(audio_bytes, websocket, send_debug)
+            prompt_text = await audio.process_end(
+                audio_bytes, websocket, send_debug, user_id=user_id)
             if not prompt_text:
                 return
 
