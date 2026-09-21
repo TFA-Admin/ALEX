@@ -266,3 +266,27 @@ YES_WORDS = {"yes", "y", "yeah", "yep", "yup", "confirm", "confirmed", "sure",
              "affirmative", "correct", "right", "fact", "definitely", "absolutely"}
 NO_WORDS = {"no", "n", "nope", "nah", "don't", "dont", "skip", "forget",
             "delete", "drop", "never", "trash", "bin", "discard", "negative"}
+
+
+# Moved from systems/llm/system.py on 2026-09-21; see the comment there.
+_FUNCTION_WORDS = {
+    "a", "an", "the", "this", "that", "these", "those",
+    "i", "me", "my", "mine", "you", "your", "yours", "we", "us", "our", "ours",
+    "he", "him", "his", "she", "her", "hers", "it", "its", "they", "them", "their", "theirs",
+    "am", "is", "are", "was", "were", "be", "been", "being",
+    "do", "does", "did", "done",
+    "have", "has", "had",
+    "will", "would", "shall", "should", "can", "could", "may", "might", "must",
+    "to", "of", "in", "on", "at", "for", "with", "about", "from", "as", "by", "up", "down", "over",
+    "and", "or", "but", "so", "if", "than", "then", "because",
+    "what", "when", "where", "who", "whom", "which", "why", "how",
+    "not", "no", "yes", "yeah", "yep", "nope", "nah", "okay", "ok",
+    "just", "really", "very", "now", "well", "please", "sure", "maybe", "kind", "of",
+}
+
+
+def has_content_words(text: str) -> bool:
+    words = re.findall(r"[a-z']+", text.lower())
+    return any(w not in _FUNCTION_WORDS for w in words)
+
+

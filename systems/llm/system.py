@@ -144,25 +144,10 @@ def _is_bare_acknowledgment(text: str) -> bool:
 # utterance skips the storage shortcut either way now). Deliberately a
 # broad, hand-curated set rather than a claim of real POS-tagging —
 # starting point, not linguistically exhaustive.
-_FUNCTION_WORDS = {
-    "a", "an", "the", "this", "that", "these", "those",
-    "i", "me", "my", "mine", "you", "your", "yours", "we", "us", "our", "ours",
-    "he", "him", "his", "she", "her", "hers", "it", "its", "they", "them", "their", "theirs",
-    "am", "is", "are", "was", "were", "be", "been", "being",
-    "do", "does", "did", "done",
-    "have", "has", "had",
-    "will", "would", "shall", "should", "can", "could", "may", "might", "must",
-    "to", "of", "in", "on", "at", "for", "with", "about", "from", "as", "by", "up", "down", "over",
-    "and", "or", "but", "so", "if", "than", "then", "because",
-    "what", "when", "where", "who", "whom", "which", "why", "how",
-    "not", "no", "yes", "yeah", "yep", "nope", "nah", "okay", "ok",
-    "just", "really", "very", "now", "well", "please", "sure", "maybe", "kind", "of",
-}
-
-
-def _has_content_words(text: str) -> bool:
-    words = re.findall(r"[a-z']+", text.lower())
-    return any(w not in _FUNCTION_WORDS for w in words)
+# 2026-09-21: has_content_words() and its word set moved to core/text_utils
+# so systems/intent/system.py can use the same test to decide whether the
+# merged classification should also ask for deliberation needs.
+from core.text_utils import has_content_words as _has_content_words
 
 
 # Confident-match thresholds, split by Craig's explicit split
@@ -547,12 +532,23 @@ class System(BaseSystem):
         # is nothing to look up for them, and the pass costs ~2s.
         if has_content:
             try:
-                recent_lines = [
-                    f'He: "{(r["prompt"] or "")[:120]}" / You: "{(r["response"] or "")[:120]}"'
-                    for r in await fetch_recent_memory(user_id, limit=3)
-                    if not (r["prompt"] or "").startswith("(unprompted")]
+                # Scores usually arrive from systems/intent/system.py on the
+                # same call as the intent (session["needs"]); only when they
+                # did not does this assess on its own.
+                needs = session.pop("needs", None)
+                if isinstance(needs, dict) and session.get("diagnostic_context"):
+                    # the diagnostics system already measured this turn —
+                    # do not run it twice
+                    needs["diagnostics"] = 0
+                recent_lines = None
+                if not isinstance(needs, dict):
+                    recent_lines = [
+                        f'He: "{(r["prompt"] or "")[:120]}" / You: "{(r["response"] or "")[:120]}"'
+                        for r in await fetch_recent_memory(user_id, limit=3)
+                        if not (r["prompt"] or "").startswith("(unprompted")]
                 looked = await deliberation.look_before_answering(
-                    user_input, user_id, recent_lines)
+                    user_input, user_id, recent_lines,
+                    scores=needs if isinstance(needs, dict) else None)
             except Exception as e:
                 logger.warning(f"⚠️ deliberation failed, answering without it: {e}")
                 looked = ""

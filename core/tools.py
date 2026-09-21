@@ -33,6 +33,13 @@ and it is what roadmap item 1 ("she sees herself entirely") means.
   so the Controller's Reasoning tab shows what she looked at and why.
 * **Flat schemas.** One object, no nesting, no opt-out fields: the
   project's measured lesson about JSON shapes under this model class.
+* **Her insides are the creator's to see.** 2026-09-21, live: asked
+  "anything in your log?", a throwaway user was read the log — which
+  carries every user's turns — and told about "the time I said you liked
+  green", another user's conversation narrated as his. Component 12 rule
+  3. read_log, read_my_source and my_state answer only the creator;
+  memory tools are per-user already; modules, diagnostics and the clock
+  are fine for anyone.
 """
 import asyncio
 import glob
@@ -43,7 +50,7 @@ from datetime import datetime
 
 from db.db import (
     fetch_vector_memories, fetch_recent_memory, list_module_registry,
-    record_decision,
+    record_decision, get_user_role,
 )
 from core.embedding_engine import embed, cosine_similarity
 from core import self_model
@@ -135,6 +142,9 @@ TOOLS = [
 ]
 
 TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
+
+# See the module docstring: her log, her source and her state are his.
+CREATOR_ONLY = {"read_log", "read_my_source", "my_state"}
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +320,15 @@ async def run_tool(name: str, args, user_id: str) -> str:
 
     if name not in TOOL_NAMES:
         return f"There is no tool called {name!r}."
+
+    if name in CREATOR_ONLY:
+        try:
+            role = await get_user_role(user_id)
+        except Exception:
+            role = None
+        if role != "creator":
+            return ("That is for my creator to see, not for anyone who asks. "
+                    "I can tell you what modules I have or run a diagnostic.")
 
     t0 = time.time()
     try:

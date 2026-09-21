@@ -113,16 +113,24 @@ def lookups_for(scores: dict, text: str) -> list:
     return picked
 
 
-async def look_before_answering(text: str, user_id: str, recent_lines=None) -> str:
+async def look_before_answering(text: str, user_id: str, recent_lines=None,
+                                scores: dict = None) -> str:
     """The whole pass: assess, decide, run, and return a context block for
-    her prompt, or "" when nothing needed looking at."""
-    scores = await assess(text, recent_lines)
+    her prompt, or "" when nothing needed looking at.
+
+    `scores` may be handed in already — systems/intent/system.py gets them
+    on the same call as the intent classification (with_needs=True), which
+    is the whole latency saving. Absent, this assesses on its own."""
+    if scores is None:
+        scores = await assess(text, recent_lines)
     if not scores:
         return ""
     picked = lookups_for(scores, text)
     summary = " ".join(f"{r}={scores[r]}" for r in RESOURCES)
-    logger.info(f"[DELIBERATE] {summary} ({scores.get('_seconds')}s) -> "
-                f"{[name for name, _ in picked] or 'nothing'}")
+    took = scores.get("_seconds")
+    logger.info(f"[DELIBERATE] {summary}"
+                + (f" ({took}s)" if took is not None else " (on the intent call)")
+                + f" -> {[name for name, _ in picked] or 'nothing'}")
     if not picked:
         return ""
     parts = []

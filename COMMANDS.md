@@ -42,12 +42,12 @@ Ask naturally. She chooses to look before answering; these are her tools
 |---|---|---|
 | search what was said between you | `search_memory` | "Did I ever mention NASCAR?" |
 | list your recent exchanges | `recent_turns` | "What were we talking about ten minutes ago?" |
-| read her own state: modules, what is off, response times, your standing instructions | `my_state` | "What's switched off on you?" / "How fast have you been answering?" |
+| read her own state: modules, what is off, response times, your standing instructions — **creator only** | `my_state` | "What's switched off on you?" / "How fast have you been answering?" |
 | list her modules and what each does | `list_modules` | "What modules do you have?" |
 | run one of her modules | `run_module` | "Use recall to check for anything about YouTube." |
 | run her diagnostics and report them in her own words | `run_diagnostics` | "Run a diagnostic." |
-| read her own log | `read_log` | "Anything in your log I should know about?" |
-| read her own source, a page at a time | `read_my_source` | "Read me the top of core/self_model.py." |
+| read her own log — **creator only**; it carries every user's turns | `read_log` | "Anything in your log I should know about?" |
+| read her own source, a page at a time — **creator only** | `read_my_source` | "Read me the top of core/self_model.py." |
 | the clock | `current_time`, and always in her context | never something she guesses |
 | her module names | always in her context | never something she guesses |
 

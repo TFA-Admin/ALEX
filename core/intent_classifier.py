@@ -69,7 +69,27 @@ Respond with ONLY a JSON object, matching the category exactly:
 - none: {{"intent": "none"}}"""
 
 
-async def classify_intent(text: str) -> dict:
+# 2026-09-21: the deliberation pass (core/deliberation.py) rides on this
+# same call when with_needs=True, so a turn pays one classification round
+# trip instead of two (~0.7s + ~2.2s measured on the 9b). The needs are
+# extra keys on the same object, never a new category — adding categories
+# to this prompt collapsed the 7b twice, and this was measured against real
+# utterances before being wired (roadmap item 4).
+NEEDS_RESOURCES = ("memory", "modules", "state", "log", "code", "diagnostics")
+
+NEEDS_SUFFIX = """
+
+Separately, before A.L.E.X. answers, decide what she needs to look at to answer this well.{recent} Rate each from 0 (not at all) to 10 (she cannot answer honestly without it):
+  memory — what was said between them before (anything he refers to as said, asked, promised or claimed earlier, or asks whether it was discussed)
+  modules — the modules built into her and what they do
+  state — her own current state: what is switched off, how fast she answers, his standing instructions
+  log — her own recent log: actions, warnings, errors
+  code — a file of her own source code or documentation
+  diagnostics — a fresh check of whether her systems are working
+Add these keys to the SAME JSON object as the category above: "memory", "modules", "state", "log", "code", "diagnostics" (each an integer 0-10), "search" (a few words to search his memory for), "path" (the file path if code is needed, else "")."""
+
+
+async def classify_intent(text: str, with_needs: bool = False, recent_lines=None) -> dict:
     """
     Returns a dict with at least {"intent": "fact"|"permission_command"|"status_check"|"none"},
     plus extracted fields for "fact"/"permission_command". Falls back to
@@ -77,23 +97,49 @@ async def classify_intent(text: str) -> dict:
     is indistinguishable from a genuine negative classification, so callers
     that need robustness against the LLM being briefly down should keep
     their own cheap deterministic fallback, not treat "none" as certain.
+
+    with_needs=True adds a "needs" dict (see NEEDS_RESOURCES, plus "search"
+    and "path") for core/deliberation.py, or "needs": None if the model did
+    not supply them — the caller then assesses separately.
     """
     prompt = INTENT_PROMPT_TEMPLATE.format(text=text)
+    if with_needs:
+        recent = ""
+        if recent_lines:
+            recent = " The last things said, oldest first:\n" + "\n".join(
+                f"  {ln}" for ln in recent_lines[-4:]) + "\n"
+        prompt += NEEDS_SUFFIX.format(recent=recent)
 
     result = await ollama_manager.generate_json(prompt, timeout=20.0, temperature=0)
 
     if not result or "intent" not in result:
-        return {"intent": "none"}
+        return {"intent": "none", "needs": None} if with_needs else {"intent": "none"}
+
+    needs = None
+    if with_needs and any(r in result for r in NEEDS_RESOURCES):
+        needs = {}
+        for r in NEEDS_RESOURCES:
+            try:
+                needs[r] = max(0, min(10, int(result.get(r, 0))))
+            except (TypeError, ValueError):
+                needs[r] = 0
+        needs["search"] = str(result.get("search") or "").strip()[:200]
+        needs["path"] = str(result.get("path") or "").strip()[:200]
 
     raw_intent = result.get("intent")
 
     # normalize the flat fact-key shape back into the public contract
     if raw_intent in ALLOWED_FACT_KEYS:
         result = {"intent": "fact", "key": raw_intent, "value": result.get("value")}
+    else:
+        result = {k: v for k, v in result.items()
+                  if k not in NEEDS_RESOURCES and k not in ("search", "path")}
 
     if result.get("intent") == "fact" and _is_hypothetical(text):
-        return {"intent": "none"}
+        result = {"intent": "none"}
 
+    if with_needs:
+        result["needs"] = needs
     return result
 
 

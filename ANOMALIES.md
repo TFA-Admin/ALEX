@@ -36,6 +36,21 @@ likely to say again.
 
 ## Closed
 
+### Her log read to a stranger as his own history
+**Seen** 2026-09-21 12:28, tool probe on the 9b. A throwaway user asked
+"anything in your own log?"; she read the log and answered "One of those
+times, I lied and told you you liked green" — a different test user's
+conversation, narrated to this one as his.
+
+**Cause** the `read_log` tool returned the log to any user, and the log
+carries every user's turns ([ACTION] lines include the message text).
+Component 12 rule 3. The same applied to `read_my_source` and to
+`my_state`, which carries Craig's standing instructions.
+
+**Fixed** those three tools answer only the creator; memory tools were
+per-user already; modules, diagnostics and the clock stay open. Needs a
+restart (core/tools.py). The gateway design (item 12) inherits this.
+
 ### "What do you remember about NASCAR?" answered with the recall module's description
 **Seen** 2026-09-21 05:25 and 05:29, first live use of the 9b. "The recall
 (v3) module is built, but it refuses to introduce itself."
