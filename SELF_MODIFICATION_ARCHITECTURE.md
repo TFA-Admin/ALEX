@@ -97,6 +97,19 @@ items when they land.
 first.** It corrects two claims made in the small hours of 2026-09-21 and
 records a loop that was closed and reopened the same day.
 
+**Where the 2026-09-21 session stopped (12:55 EDT):** program items 1
+(tools, first slice), 2, 3 (9b chosen), 4 (deliberation, merged with the
+intent call) and 13 (Controller pass — `controller/` package, People by
+name via the new `sessions` table) are landed; see "## Program approved
+2026-09-21" for each item's measurements. **Owed: one restart of her**
+(creator gate in `core/tools.py`, memory-line reword in
+`core/intent_classifier.py`, and the session rows in `ws/ws_handlers.py`
++ `main.py`) **and a relaunch of the Controller** (it is a new package;
+the running one is the old file). Commits since the last push are
+unpushed — push only when asked. Next in order: 5 (harness as spine,
+scores exposed to her), 6 (self-modification container), then 7's
+decision, 9, 10, 11. Personality "voice" arm undecided.
+
 **Current objective: give her the capacity to disagree, and stop the
 reflection loop from sanding it off.** (Design Principle 12.) Chosen
 because what Craig most wants — "I want to hear I'm correct when I'm
@@ -964,6 +977,45 @@ The items, in build order:
     into modules. **Sequence it right after item 1**: items 5, 6, 12 and
     the proposals inbox all add Controller surface, and building them
     into the current file and then cleaning is double work.
+
+    **LANDED 2026-09-21 (12:55).** Craig approved six views ("sounds good
+    to me"); Bridges was dropped from the proposal since nothing yet
+    exists to switch (gateway unapproved, robot on the backlog, camera
+    unbuilt) — it gets added when the first of those does. Built as the
+    `controller/` package, `ALEX_Controller.py` reduced to a launcher:
+
+    | file | holds |
+    |---|---|
+    | `controller/__init__.py` | the layout, and the sklearn preload that must run before PySide6 is imported (moved here so any entry point gets the ordering) |
+    | `controller/common.py` | paths, settings file, `make_readable`/`fill_row`, `LogFileTailer`, port and orphan finders, UTC→local helpers (`to_local`, `ago`) |
+    | `controller/procs.py` | `ProcessManager`: start/stop/restart her and Ollama, orphan sweeps, the kill path — bodies and rationale comments unchanged |
+    | `controller/actions.py` | every DB-writing thing he does from the window, one function each, shared by Inbox and Her |
+    | `controller/views/run.py` | buttons, model selector, three consoles (A.L.E.X./Ollama/System) with cap and copy/clear |
+    | `controller/views/inbox.py` | **one table of open items** with buttons that change to what the selected item can have done to it, plus History (builds and searches, any status) |
+    | `controller/views/her.py` | inner tabs Personality (text shown, not logged; standing rules; override; recent changes), Beliefs, Decisions, Curiosity (new), Modules (status, versions, rollback), Health (fault check) |
+    | `controller/views/people.py` | live sessions **by name** and everyone she knows |
+    | `controller/views/data.py`, `commands.py` | unchanged in function |
+    | `controller/app.py` | the window: status strip, six tabs, timers (1s metrics, 5s Inbox+People, 60s orphan sweep), log router |
+
+    **People by name** was his one addition ("I think right now it just
+    shows the connection id" — it did: the old Users tab parsed
+    `WS connected: <uuid>` out of her log). New `sessions` table in
+    `db/db.py`; `ws/ws_handlers.py` writes a row when a connection
+    resolves to a person, updates it when the voice check passes and on
+    every turn, closes it on disconnect; `main.py` closes every leftover
+    row at her start (`closed_by='her restart'`). The Controller reads the
+    table and never depends on her answering (Design Principle 10). A
+    stale row can be closed by hand from People (`closed_by='controller
+    (stale)'`). **Rows appear only once she runs with this build** — one
+    more reason for the restart already owed.
+
+    Verified offscreen (`QT_QPA_PLATFORM=offscreen`): window builds in
+    0.97 s; every refresh path populated from the live DB (1 open Inbox
+    item — build #22 `calendar_module`, approved and never built; 56
+    decisions; 9 curiosity rows; 4 profiles with roles); log routing and
+    noise filters unchanged; every old method has a named equivalent
+    (69 old defs → 98 new, none lost). Not yet opened on screen by Craig.
+    The running Controller is the old one until he relaunches it.
 
 ## Landed 2026-09-21 — the belief loop, and two corrections to the night before
 

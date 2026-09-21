@@ -235,6 +235,28 @@ async def init_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''')
 
+        # 👥 SESSIONS (2026-09-21). Who is connected to her, by name.
+        # Craig: "Would that People include the names of who she's talking
+        # to? I think right now it just shows the connection id" — it did:
+        # the Controller only ever saw "WS connected: <uuid>" in the log.
+        # She writes a row when a session resolves to a person, updates it
+        # when the voice check passes and on every turn, and closes it on
+        # disconnect; the Controller reads it like everything else, so it
+        # never depends on her answering (Design Principle 10). A crash
+        # leaves rows open; sessions_reset_on_boot() closes them at her
+        # next start with the reason recorded.
+        await db.execute('''
+        CREATE TABLE IF NOT EXISTS sessions (
+            session_id TEXT PRIMARY KEY,
+            user TEXT,
+            role TEXT,
+            verified INTEGER DEFAULT 0,
+            connected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_heard_at TIMESTAMP,
+            disconnected_at TIMESTAMP,
+            closed_by TEXT
+        )''')
+
         # 🧩 MODULE STATE (per-user state blob for generated modules)
         await db.execute('''
         CREATE TABLE IF NOT EXISTS module_state (
@@ -502,6 +524,84 @@ async def add_memory(user, prompt, response, category="conversation", embedding=
             (user, prompt, response, category, emb_blob)
         )
         await db.commit()
+
+
+# -------------------------
+# SESSIONS (2026-09-21) — see the table comment in init_db()
+# -------------------------
+async def session_opened(session_id: str, user: str, role: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO sessions(session_id, user, role, verified, "
+            "connected_at, last_heard_at, disconnected_at, closed_by) "
+            "VALUES(?,?,?,0,CURRENT_TIMESTAMP,NULL,NULL,NULL)",
+            (session_id, user, role))
+        await db.commit()
+
+
+async def session_verified(session_id: str, ok: bool):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE sessions SET verified=? WHERE session_id=?",
+                         (1 if ok else 0, session_id))
+        await db.commit()
+
+
+async def session_heard(session_id: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE sessions SET last_heard_at=CURRENT_TIMESTAMP WHERE session_id=?",
+                         (session_id,))
+        await db.commit()
+
+
+async def session_closed(session_id: str, closed_by: str = "disconnect"):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE sessions SET disconnected_at=CURRENT_TIMESTAMP, closed_by=? "
+            "WHERE session_id=? AND disconnected_at IS NULL",
+            (closed_by, session_id))
+        await db.commit()
+
+
+async def sessions_reset_on_boot():
+    """Every row still open belongs to a process that no longer exists."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE sessions SET disconnected_at=CURRENT_TIMESTAMP, closed_by='her restart' "
+            "WHERE disconnected_at IS NULL")
+        await db.commit()
+        return cursor.rowcount
+
+
+async def fetch_sessions(live_only: bool = True, limit: int = 50):
+    sql = ("SELECT session_id, user, role, verified, connected_at, last_heard_at, "
+           "disconnected_at, closed_by FROM sessions")
+    if live_only:
+        sql += " WHERE disconnected_at IS NULL"
+    sql += " ORDER BY connected_at DESC LIMIT ?"
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(sql, (limit,))
+        rows = await cursor.fetchall()
+    keys = ["session_id", "user", "role", "verified", "connected_at",
+            "last_heard_at", "disconnected_at", "closed_by"]
+    return [dict(zip(keys, r)) for r in rows]
+
+
+async def fetch_profiles_overview():
+    """Profiles with role, voice-sample count and last time heard — the
+    People view's second table."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT username, created_at, verified FROM profiles ORDER BY username")
+        profiles = await cursor.fetchall()
+        cursor = await db.execute("SELECT user, value FROM facts WHERE key='role'")
+        roles = {r[0]: r[1] for r in await cursor.fetchall()}
+        cursor = await db.execute("SELECT user, COUNT(*) FROM voice_profiles GROUP BY user")
+        voices = {r[0]: r[1] for r in await cursor.fetchall()}
+        cursor = await db.execute(
+            "SELECT user, MAX(created_at) FROM memory WHERE prompt NOT LIKE '(unprompted%' GROUP BY user")
+        heard = {r[0]: r[1] for r in await cursor.fetchall()}
+    return [{"user": p[0], "created_at": p[1], "verified": p[2],
+             "role": roles.get(p[0], "user"), "voice_samples": voices.get(p[0], 0),
+             "last_heard_at": heard.get(p[0])} for p in profiles]
 
 
 async def fetch_profile_names() -> list:
@@ -1193,6 +1293,19 @@ async def fetch_answered_curiosity(limit: int = 20):
     return [dict(zip(keys, r)) for r in rows]
 
 
+async def fetch_curiosity_queue(limit: int = 50):
+    """Every question she has wanted to ask, newest first, for the
+    Controller's Her view: open, asked-and-unanswered, answered."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT id, topic, question, created_at, delivered, last_asked_at, answer, answered_at "
+            "FROM curiosity_queue ORDER BY id DESC LIMIT ?", (limit,))
+        rows = await cursor.fetchall()
+    keys = ["id", "topic", "question", "created_at", "delivered", "last_asked_at",
+            "answer", "answered_at"]
+    return [dict(zip(keys, r)) for r in rows]
+
+
 async def fetch_undelivered_curiosity_questions():
     """Questions she still wants answered: never asked, or asked once long
     enough ago to be worth raising again. See
@@ -1830,7 +1943,7 @@ async def get_module_version_code(name, version):
 DB_READ_EXCLUDE = {"voice_profiles", "security_events"}
 DB_WRITE_ALLOWLIST = {"module_state"}
 
-# Mirrors ALEX_Controller.py's own DB_BLOB_COLUMNS — kept as a separate
+# Mirrors controller/common.py's own DB_BLOB_COLUMNS — kept as a separate
 # definition rather than a shared import since the Controller is a
 # distinct process/UI with its own editing surface; duplicated on purpose
 # to avoid coupling the two, not an oversight.

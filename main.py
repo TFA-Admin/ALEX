@@ -7,7 +7,7 @@ import sys
 from api.routes import router as api_router
 from ws.ws_handlers import register_ws
 from utils.utils import get_lan_ip
-from db.db import init_db, decay_memory
+from db.db import init_db, decay_memory, sessions_reset_on_boot
 from llm.ollama_client import ollama_manager
 from speech.tts_engine import shutdown_tts
 from core.self_reflection import run_self_reflection
@@ -101,6 +101,12 @@ async def lifespan(app: FastAPI):
     # -------------------------
     await init_db()
     logger.info("✅ Database ready")
+    try:
+        stale = await sessions_reset_on_boot()
+        if stale:
+            logger.info(f"👥 Closed {stale} session row(s) left open by the previous process")
+    except Exception as e:
+        logger.warning(f"⚠️ could not reset session rows: {e}")
 
     # -------------------------
     # START OLLAMA (THREAD)

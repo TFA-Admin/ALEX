@@ -14,7 +14,7 @@ from llm.ollama_client import locked_fields
 from identity.identity_manager import identity_manager
 from core import readiness
 from core.voice import say
-from db.db import remember_own_utterance
+from db.db import remember_own_utterance, session_opened, session_verified, session_heard, session_closed
 from config.logger_config import logger
 from core.alex_core import alex_core
 from db.db import (
@@ -340,6 +340,16 @@ async def ws_text(websocket: WebSocket):
         _active_connections[session_id] = {
             "websocket": websocket, "role": role, "user_id": user_id}
 
+        # 2026-09-21: who this is, by name, for the Controller's People
+        # view (db.sessions). Fails soft: a bookkeeping row must never cost
+        # a connection.
+        try:
+            await session_opened(session_id, user_id, role)
+            if session.get("creator_verified"):
+                await session_verified(session_id, True)
+        except Exception as e:
+            logger.warning(f"⚠️ could not record session: {e}")
+
         if role in ("creator", "super_user") and not session.get("creator_verified"):
             # not already verified above (voice-first recognition during
             # resolution/onboarding already counts — no need to ask twice)
@@ -357,6 +367,10 @@ async def ws_text(websocket: WebSocket):
             else:
                 matched, score, heard_text = await identity_manager.verify_voice(websocket, user_id)
                 session["creator_verified"] = matched
+                try:
+                    await session_verified(session_id, matched)
+                except Exception:
+                    pass
 
                 if matched:
                     await send_debug(websocket, f"✅ Voice verified (score={score:.2f})")
@@ -532,6 +546,10 @@ async def ws_text(websocket: WebSocket):
         # ever removed. See alex_core.end_session() for the measurement and
         # for why the race with a still-streaming response is fine.
         alex_core.end_session(session_id)
+        try:
+            await session_closed(session_id)
+        except Exception:
+            pass
 
 
 # -------------------------
@@ -635,6 +653,10 @@ async def process_message(websocket, msg, user_id, session_id, audio, audio_byte
         # -------------------------
         # CORE PIPELINE
         # -------------------------
+        try:
+            await session_heard(session_id)
+        except Exception:
+            pass
         await handle_chat(websocket, msg, user_id, session_id)
 
         print("🔥 HANDLE_CHAT RETURNED")
