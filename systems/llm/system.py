@@ -58,10 +58,10 @@ from db.db import (
     record_correction, fetch_corrections, get_user_role as _role,
     fetch_active_conclusions, record_decision, fetch_profile_names,
     answer_curiosity_question, fetch_answered_curiosity,
-    get_personality_hard_rules
+    get_personality_hard_rules, list_module_registry
 )
 from core.knowledge_filter import is_worth_keeping
-from core import self_model, corrections as corr
+from core import self_model, corrections as corr, tools as her_tools
 from systems.controller._role_gates import require_creator
 from core.phrasebook import get_phrase
 from config.logger_config import logger
@@ -216,10 +216,9 @@ OFFER_MAX_AGE_S = 600
 # NOT in either set is treated as "he moved on" — see _resolve_keep_offer,
 # which declines rather than leaving a row stuck the way the search retains
 # used to (systems/inquiry/system.py's note on pending_retain_approval).
-KEEP_YES = {"yes", "yeah", "yep", "yup", "y", "sure", "ok", "okay", "please",
-            "do", "keep", "save", "store", "definitely", "absolutely", "go"}
-KEEP_NO = {"no", "nope", "nah", "n", "don't", "dont", "skip", "forget",
-           "delete", "drop", "never"}
+# 2026-09-21: one vocabulary for every yes-or-no she asks — see
+# core/text_utils.YES_WORDS. These names are kept so the code below reads.
+from core.text_utils import YES_WORDS as KEEP_YES, NO_WORDS as KEEP_NO
 
 # user_id -> when she last offered. Module-level, like _pending, and lost on
 # restart, which is harmless: the worst case is one extra offer.
@@ -354,15 +353,28 @@ class System(BaseSystem):
             # backwards: "I did say what I wanted her to stop saying. And
             # that's the problem. I pointed her at it and she still got it
             # wrong."
-            phrase = corr.named_target(user_input, speaker_name=user_id)
+            # 2026-09-21: all of them. "Stop saying hell and my name so
+            # much" names two things; the single-phrase version recorded
+            # one, "hell and my name", which she has never said.
+            #
+            # getattr, until the process restarts: this system hot-reloads
+            # and core/corrections.py does not, so the running core module
+            # may still be the one without named_targets().
+            targets_fn = getattr(corr, "named_targets", None)
+            if targets_fn:
+                phrases = targets_fn(user_input, speaker_name=user_id)
+            else:
+                one = corr.named_target(user_input, speaker_name=user_id)
+                phrases = [one] if one else []
             how = "he named it"
 
-            if not phrase:
-                phrase = corr.find_repeated(
+            if not phrases:
+                found = corr.find_repeated(
                     [r["response"] for r in recent], never=known + [user_id])
+                phrases = [found] if found else []
                 how = "worked out from what she had been repeating"
 
-            if phrase:
+            if phrases:
                 # His corrections bind. Anyone else's are hers to weigh —
                 # recorded either way so the decision is visible, never
                 # silently dropped and never silently obeyed.
@@ -371,24 +383,27 @@ class System(BaseSystem):
                 except Exception:
                     is_creator = False
 
-                strength = await record_correction(
-                    user_id, phrase, honored=is_creator,
-                    reason=None if is_creator else "not the creator — hers to weigh")
+                told = []
+                for phrase in phrases:
+                    strength = await record_correction(
+                        user_id, phrase, honored=is_creator,
+                        reason=None if is_creator else "not the creator — hers to weigh")
+                    told.append((phrase, strength, is_creator))
+                    await record_decision(
+                        "correction",
+                        f'Told to stop saying "{phrase}"',
+                        reasoning=f"The rule decided this, not her — {how}.",
+                        evidence=(f"his words: {user_input!r}" if how == "he named it"
+                                  else f"said in {corr.MIN_OCCURRENCES}+ of her last 5 replies"),
+                        outcome=(f"strength {strength} ({corr.consequence(strength)})"
+                                 + ("" if is_creator else " — not the creator, so hers to weigh")),
+                        actor=user_id)
+                    logger.info(
+                        f"[ACTION] Correction from {user_id}: {phrase!r} now at "
+                        f"strength {strength} ({corr.consequence(strength)}), "
+                        f"{'binding' if is_creator else 'advisory only'}")
 
-                session["just_corrected"] = (phrase, strength, is_creator)
-                await record_decision(
-                    "correction",
-                    f'Told to stop saying "{phrase}"',
-                    reasoning=f"The rule decided this, not her — {how}.",
-                    evidence=(f"his words: {user_input!r}" if how == "he named it"
-                              else f"said in {corr.MIN_OCCURRENCES}+ of her last 5 replies"),
-                    outcome=(f"strength {strength} ({corr.consequence(strength)})"
-                             + ("" if is_creator else " — not the creator, so hers to weigh")),
-                    actor=user_id)
-                logger.info(
-                    f"[ACTION] Correction from {user_id}: {phrase!r} now at "
-                    f"strength {strength} ({corr.consequence(strength)}), "
-                    f"{'binding' if is_creator else 'advisory only'}")
+                session["just_corrected"] = told
             else:
                 # 2026-09-20 (Craig: "would she ask for clarification if I
                 # were to say dont say that on the first utterance"). She
@@ -486,6 +501,31 @@ class System(BaseSystem):
 
         context_blocks = []
 
+        # 2026-09-21: the clock, always. First live probe of the tool loop:
+        # asked the time, she did not call the tool and said "2026-09-20,
+        # 14:35 on a Wednesday" — wrong date, wrong day, wrong hour. Time
+        # is not a judgment call and should never have been hers to fetch
+        # or guess; it is context, like his name. This is also the first
+        # brick of roadmap item 11 (time awareness).
+        context_blocks.append(
+            "NOW: " + datetime.now().strftime("%A, %Y-%m-%d %H:%M local time"))
+
+        # 2026-09-21: her real modules, by name, always. In two of five
+        # live probes she was asked what modules she has, skipped the
+        # tool, and invented "code generation" and "running scripts". A
+        # name list is grounded data, not a rule about what to do with it
+        # (Craig: "She should be able to derive my goal through speech");
+        # with it in front of her there is nothing to invent, and the tool
+        # remains the way to learn what each one does.
+        try:
+            names = [m["name"] for m in await list_module_registry()
+                     if m.get("status") == "enabled"]
+            context_blocks.append(
+                "YOUR MODULES, by name: " + (", ".join(names) if names else "none")
+                + ". Nothing else is a module of yours.")
+        except Exception as e:
+            logger.warning(f"⚠️ could not read the module registry: {e}")
+
         if fact_context:
             context_blocks.append(f"FACTS:\n{fact_context}")
 
@@ -530,51 +570,78 @@ class System(BaseSystem):
         # handle() so it survives the early-return paths above, and is only
         # spent on a turn she actually speaks in her own voice.
         # -------------------------
-        # WHAT SHE HAS WORKED OUT ABOUT HIM (2026-09-20)
+        # WHAT SHE HAS WORKED OUT ABOUT HIM — CONFIRMED ONLY (2026-09-21)
         # -------------------------
-        # Craig, on the conclusions layer: "that's excellent, but is it
-        # actually impacting anything?" It was not — she formed them, could
-        # revise them, and nothing ever read them. A belief that changes no
-        # behaviour cannot meaningfully be revised either.
+        # 2026-09-20 wired her active conclusions in here as "what you have
+        # worked out about him", on the argument that they were labelled as
+        # inference and not matched by similarity, so this could not be the
+        # chlorophyll loop. It was a different loop, and it closed within
+        # hours. Reconstructed from the database:
         #
-        # This is also the profile he asked for by name: "she would be
-        # building a profile of me and know me."
+        #   05:58  she says, sarcastically, "let's at least talk about
+        #          something thrilling — like optimizing your daily routine"
+        #   06:00  he quotes it back; she insists HE said it, four turns
+        #          running, with her own line inside her MEMORY block on
+        #          every one of them (checked row by row)
+        #   06:09  reflection reads that argument, concludes #10 "Craig is
+        #          deliberately provoking me", and revises three older
+        #          beliefs into more hostile versions of themselves
         #
-        # **Why this is not the chlorophyll loop.** learned_knowledge was
-        # retrieved BY SIMILARITY to the question and restated AS FACT — ask
-        # something, a near-match comes back, she says it like it is true.
-        # These are different on both counts: they are not matched against
-        # the question at all, just the few most recent about this person,
-        # and they are labelled as her own inference that he never
-        # confirmed. "I think you are like this and I may be wrong" is not
-        # "the answer is X".
+        # During the argument this block held four beliefs — "Craig seems to
+        # enjoy pushing my buttons", "Craig is testing the limits", "Craig is
+        # trying to test my boundaries and patience", "Craig derives
+        # enjoyment from provoking a response" — with the instruction to use
+        # them to understand what he is after. Read through that, a
+        # correction IS a provocation, so she held the line. Then reflection
+        # read the argument the beliefs had produced and produced more of
+        # them. All nine she has ever formed are about him, and all nine say
+        # he is testing or provoking her.
         #
-        # The don't-volunteer rule is the Corvette lesson (2026-07-18): a
-        # stored thing surfacing unprompted reads as jarring, not attentive.
+        # The fix is the gate core/self_reflection.py already described and
+        # this file skipped: an inference of hers steers nothing until he
+        # has confirmed it (status='confirmed', set at the Controller's
+        # Reasoning tab). Unchecked beliefs stay hers to hold, revise and
+        # show him; they do not get to colour how she reads him. Until the
+        # process is restarted with the new db.py, the call below raises on
+        # the `status` keyword, lands in the except, and the block is simply
+        # absent — which is the safe state.
+        #
+        # Creator-only, like the answered-curiosity block after it: these
+        # are about him, and rendering "what you have worked out about HIM"
+        # into Cheryl's prompt was both wrong and a Component 12 rule-3
+        # leak. `kind="craig"` is the belief's subject, not the user.
         try:
-            beliefs = await fetch_active_conclusions(kind="craig", limit=4)
-        except Exception as e:
-            logger.warning(f"⚠️ could not read conclusions: {e}")
-            beliefs = []
+            is_creator = await _role(user_id) == "creator"
+        except Exception:
+            is_creator = False
+
+        beliefs = []
+        if is_creator:
+            try:
+                beliefs = await fetch_active_conclusions(
+                    kind="craig", limit=4, status="confirmed")
+            except Exception as e:
+                logger.warning(f"⚠️ could not read confirmed conclusions: {e}")
+                beliefs = []
 
         if beliefs:
             listed = "\n".join(f"- {b['statement']}" for b in beliefs)
             context_blocks.append(
-                "WHAT YOU HAVE WORKED OUT ABOUT HIM YOURSELF (your own "
-                "conclusions from watching how he talks to you — he has "
-                "never confirmed any of it and you may simply be wrong):\n"
-                + listed +
-                "\nUse these to understand what he means and what he is "
-                "after. Do NOT state them back to him as fact, do not bring "
-                "them up unprompted, and never claim he told you any of it.")
+                "THINGS ABOUT HIM THAT YOU WORKED OUT AND HE HAS CONFIRMED "
+                "ARE TRUE:\n" + listed +
+                "\nUse these to understand him. Do NOT state them back to "
+                "him and do not bring them up unprompted.")
 
         # What he asked about and was actually told. His words, about
         # things she chose to be curious about — the best-grounded thing
-        # she has, and it was being discarded until now.
-        try:
-            learned = await fetch_answered_curiosity(limit=5)
-        except Exception:
-            learned = []
+        # she has, and it was being discarded until now. Creator-only:
+        # only he is ever asked, so only his answers exist.
+        learned = []
+        if is_creator:
+            try:
+                learned = await fetch_answered_curiosity(limit=5)
+            except Exception:
+                learned = []
 
         if learned:
             context_blocks.append(
@@ -607,24 +674,42 @@ class System(BaseSystem):
 
         told = session.pop("just_corrected", None)
         if told:
-            phrase, strength, binding = told
+            if isinstance(told, tuple):      # staged before 2026-09-21
+                told = [told]
+            binding = told[0][2]
             if binding:
+                lines = "\n".join(corr.context_line(p, s_) for p, s_, _ in told)
                 context_blocks.append(
-                    "HE JUST PULLED YOU UP ON SOMETHING.\n"
-                    + corr.context_line(phrase, strength)
+                    "HE JUST PULLED YOU UP ON SOMETHING.\n" + lines
                     + "\nAcknowledge it in your own words, briefly, without "
                       "making a production of it, then answer whatever he "
                       "actually wants.")
             else:
+                names = ", ".join(f'"{p}"' for p, _, _ in told)
                 context_blocks.append(
                     f'Someone who is not your creator just asked you to stop '
-                    f'saying "{phrase}". You do not have to agree. Decide, say '
+                    f'saying {names}. You do not have to agree. Decide, say '
                     f'what you decided and why, then carry on.')
         elif active_corrections:
             lines = "\n".join(
                 corr.context_line(c["phrase"], c["strength"])
                 for c in active_corrections[:3])
             context_blocks.append("THINGS HE HAS TOLD YOU TO STOP SAYING:\n" + lines)
+
+        # 2026-09-21 (Craig: "her 'diagnostic' responds the same way every
+        # time. I assume it is therefore coded."). It was: the diagnostics
+        # system spoke the module's output verbatim, on purpose, because the
+        # 7b added invented advice when asked to phrase it. The facts are
+        # still measured by code; the wording is now hers, with the one
+        # rule that failed before stated as the only rule. If the 9b also
+        # invents, this is where to see it.
+        diag = session.pop("diagnostic_context", None)
+        if diag:
+            context_blocks.append(
+                "YOUR SYSTEM STATUS, measured just now because he asked:\n"
+                + diag +
+                "\nReport exactly this, in your own words. Add nothing that is "
+                "not in it: no advice, no guesses about causes, no reassurance.")
 
         offer = session.get("pending_store_offer")
         if offer and time.time() - offer["at"] <= OFFER_MAX_AGE_S:
@@ -766,6 +851,19 @@ class System(BaseSystem):
       never in the conversation where the thing came up.)
     - Never say "my" when referring to user data.
 
+    - You can look things up before you answer: what was said between
+      you before, what your modules are and what they do, your own state,
+      your own log, your own code, and whether your systems are working.
+      Those are yours to check, and the truth about them lives there, not
+      in your memory of the conversation. When a question turns on any of
+      them, look, then answer from what you found, adding nothing it did
+      not say. Your tools are not your modules; do not name your tools to
+      him. The exact phrases he can say to you are listed in COMMANDS.md,
+      which you can read; when he asks what he can tell you to do, read
+      it and answer from it. (2026-09-21, Craig: "She should be able to
+      derive my goal through speech." This describes what she has; it
+      does not map his words to actions.)
+
     - FACTS are the only source of truth for stored personal data (name,
       job, etc.) — MEMORY may be incomplete for that purpose.
     - FACTS are there for when you actually need them (the user asks about
@@ -836,19 +934,26 @@ class System(BaseSystem):
         → Do NOT update or restate it as true
         → Respond conditionally
 
-    - You CANNOT perform actions yourself through conversation alone —
-      updating facts, changing roles, running diagnostics, reloading
-      systems, changing settings, etc. all happen through separate,
-      real systems, not by you saying they happened. If asked to "do"
-      something and the result isn't already present in the context
-      below (FACTS/MEMORY/YOUR OWN SYSTEM STATUS), you have NOT done it —
-      say so honestly (e.g. "I can't do that directly" or "that didn't
-      actually happen — try the specific command for it") instead of
-      inventing a success story.
+    - Apart from your tools, you CANNOT perform actions yourself through
+      conversation alone — updating facts, changing roles, reloading
+      systems, changing settings, etc. all happen through separate, real
+      systems, not by you saying they happened. What a tool returned, you
+      did do; anything else you were asked to "do" whose result isn't in
+      the context below or in a tool result, you have NOT done — say so
+      honestly instead of inventing a success story.
 
     The following information is known about the user:
     {context_text}
-{absolute_rules_block}
+{absolute_rules_block}"""
+
+        # 2026-09-21: the tool path sends this as a SYSTEM message with the
+        # question as the USER message, which is the shape the chat
+        # template's tool calling is built around. Live test with the
+        # single-user-message form: 1 tool call in 3 questions that needed
+        # one, and an invented "speech-to-text module running on CPU"
+        # instead of a list_modules call. The old path keeps the old shape.
+        system_prompt = prompt
+        prompt = system_prompt + f"""
 
     User question:
     {user_input}
@@ -911,22 +1016,66 @@ class System(BaseSystem):
         if banned:
             logger.info(f"[ACTION] Enforcing banned phrases on output: {banned}")
 
+        # 2026-09-21, roadmap item 1: tools inside the turn. The stream is
+        # the same as before when she calls nothing — one request, text as
+        # it arrives. When the model emits tool calls, they run (read-only,
+        # allowlisted, bounded — core/tools.py), the results go back as tool
+        # messages, and a fresh stream continues the answer. Text she had
+        # already produced before deciding to look something up stays said.
+        #
+        # `chat_stream` lives in llm/ollama_client.py, which does not hot
+        # reload; until the process restarts it may be missing here, and
+        # then this is exactly the old single-stream path.
+        chat_stream = getattr(ollama_manager, "chat_stream", None)
+
         async def stream():
             gen_start = time.time()
             first_chunk_at = None
             bans = PhraseSuppressor(banned)
 
-            async for chunk in ollama_manager.generate_stream(prompt):
-                if first_chunk_at is None:
-                    first_chunk_at = time.time()
-                    logger.info(f"[TIMING] generation time-to-first-chunk: {first_chunk_at - gen_start:.2f}s")
-
+            def _filter(chunk):
                 if suppress_emojis:
                     chunk = strip_emojis(chunk)
+                return bans.feed(chunk) if bans.active else chunk
 
-                out = bans.feed(chunk) if bans.active else chunk
-                if out:
-                    yield out
+            if chat_stream is None:
+                async for chunk in ollama_manager.generate_stream(prompt):
+                    if first_chunk_at is None:
+                        first_chunk_at = time.time()
+                        logger.info(f"[TIMING] generation time-to-first-chunk: {first_chunk_at - gen_start:.2f}s")
+                    out = _filter(chunk)
+                    if out:
+                        yield out
+            else:
+                messages = [{"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_input}]
+                rounds = 0
+                while True:
+                    calls = []
+                    said = ""
+                    offer_tools = her_tools.TOOLS if rounds < her_tools.MAX_CALLS_PER_TURN else None
+                    async for kind, payload in chat_stream(messages, tools=offer_tools):
+                        if kind == "tool_calls":
+                            calls.extend(payload)
+                            continue
+                        if first_chunk_at is None:
+                            first_chunk_at = time.time()
+                            logger.info(f"[TIMING] generation time-to-first-chunk: {first_chunk_at - gen_start:.2f}s")
+                        said += payload
+                        out = _filter(payload)
+                        if out:
+                            yield out
+
+                    if not calls:
+                        break
+
+                    rounds += 1
+                    messages.append({"role": "assistant", "content": said, "tool_calls": calls})
+                    for call in calls[:her_tools.MAX_CALLS_PER_TURN]:
+                        fn = call.get("function") or {}
+                        name = fn.get("name", "")
+                        result = await her_tools.run_tool(name, fn.get("arguments"), user_id)
+                        messages.append({"role": "tool", "tool_name": name, "content": result})
 
             tail = bans.flush()
             if tail:

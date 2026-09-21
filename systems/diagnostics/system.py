@@ -113,10 +113,16 @@ class System(BaseSystem):
 
         status = await self._gather(user_id)
 
-        return {
-            "type": "response",
-            "content": status
-        }
+        # 2026-09-21 (Craig: "her 'diagnostic' responds the same way every
+        # time"). The measurement stays exactly this, deterministic; the
+        # wording is now hers. Staged for systems/llm/system.py, which
+        # renders it with the one rule that matters — report it, add
+        # nothing — and falls through so she speaks it. The July reason
+        # for speaking it verbatim (the 7b inventing advice) is recorded
+        # in this file's docstring; if the 9b does the same, this is the
+        # place to come back to.
+        session["diagnostic_context"] = status
+        return None
 
     async def _gather(self, user_id: str) -> str:
         registry_entry = await get_module_registry_entry("diagnostic_tool")

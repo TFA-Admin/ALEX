@@ -1,82 +1,195 @@
-# A.L.E.X. — Command Reference
+# A.L.E.X. — What you can say to her
 
-Every way a message gets routed to something other than plain conversation
-(the LLM fallback, `systems/llm/system.py`, priority 100). Built 2026-07-17
-because these are scattered across ~10 files with no single list — this is
-that list. Update it whenever a trigger phrase changes or a new
-creator-gated command is added; it will drift otherwise, same as
-`SELF_MODIFICATION_ARCHITECTURE.md`'s "Current State" section did.
+The one list of every fixed phrase she listens for, who may say it, and
+what gate applies. Rewritten 2026-09-21 from the code as it stands; the
+July 2026 version had drifted (it still said answers were auto-stored).
 
-Routing order matters — `core/alex_core.py`'s `init_systems()` call
-sequence is the real authority on priority, not the `priority` class
-attribute (decorative only, kept in sync by convention).
+**How this stays true.** `python -X utf8 tools/commands_drift.py` reads
+the trigger lists and `startswith("...")` literals out of the code and
+fails if any of them is missing from this file. Run it after adding or
+changing a trigger. She can read this file herself: ask her what you can
+tell her to do and she reads it (her `read_my_source` tool).
 
-## Creator/role-gated commands (`systems/controller/*`)
+**Where this is going.** Craig, 2026-09-21: "She should be able to derive
+my goal through speech." Everything in section 2 already works that way,
+and the keyword paths in sections 6 and 7 are to be retired as the tool
+path proves reliable (roadmap item 1). Sections 3, 4, 8 and 9 are
+security-relevant and stay deterministic on purpose: a misheard "delete
+database row" is worse than a rephrase.
 
-All of these require `require_creator()`/`require_privileged()` — creator
-role + live voice verification this session, **or**, as of 2026-07-17,
-stating the creator's actual override code anywhere in the same message
-(works regardless of the current session's voice-verification state —
-see `core/override_code.py`'s `is_creator_override_code()`).
+---
 
-| Command | File | Notes |
+## 1. Getting her attention, by voice
+
+| To | Say | Notes |
 |---|---|---|
-| `"set your personality to <description>"` / `"override your personality to <description>"` | `_personality.py` | Exact phrase, requires override code stated in the same message |
-| *(open-ended, e.g. "be snarkier")* | `_personality.py` | Falls back to a dedicated classifier (`classify_personality_set()`) only for creator messages that don't match the exact phrase above |
-| `"reset your personality"` / `"go back to your default personality"` / `"go back to default"` / `"default personality"` | `_personality.py` | Deterministic phrase list (`PERSONALITY_RESET_TRIGGERS`), not a classifier — false positives here are dangerous, not just annoying |
-| `"what is your personality"` / `"what's your personality"` | `_personality.py` | Read-only, still creator-gated |
-| `"reset your phrases"` / `"reset how you talk"` | `_personality.py` | Resets all scripted phrase re-voicings to default |
-| `"grant super user to <name> with override code <code>"` / `"revoke super user from <name> with override code <code>"` | `_personality.py` | Refuses to ever touch anyone whose current role is `creator` |
-| `"disable system <name>"` / `"enable system <name>"` | `_system_toggle.py` | `require_privileged` (creator or super_user) |
-| `"list systems"` | `_system_toggle.py` | `require_privileged` |
-| `"reload system <name>"` | `_system_toggle.py` | `require_creator` — manual hot-reload trigger (systems-layer also auto-reloads on file change regardless) |
-| `"list database tables"` | `_database.py` | `require_creator` |
-| `"show database table <name>"` | `_database.py` | `require_creator` |
-| `"edit database row <id> in <table> set <field> to <value>"` | `_database.py` | Regex-shaped on purpose, not a classifier — a DB write misread is worse than a rephrase |
-| `"delete database row <id> in <table>"` | `_database.py` | Same reasoning |
-| `"disable module <name>"` / `"enable module <name>"` | `_module_admin.py` | `require_privileged` |
-| `"list modules"` | `_module_admin.py` | `require_privileged` |
-| `"list access requests"` / `"list pending access"` | `_module_admin.py` | `require_privileged` |
-| `"approve request <N>"` / `"...request <N> approved"` | `_module_admin.py` | Propose-then-confirm — reads back the specific elevated access being granted, only commits on an explicit "yes"; matched via `ACCESS_APPROVAL_TRIGGER_RE`, not an exact phrase |
+| Address her | her name, **"Alex"**, anywhere in the sentence | Whole word; "Alexander" does not count. |
+| Keep talking without her name | nothing extra, within **45 seconds** of her finishing a reply | The window restarts every time she finishes speaking. Past it, the page shows the dropped sentence as "not addressed" and you say her name again. |
+| Answer "Did you say ...?" | **yes / yeah / yep / yup / y / correct / right / affirmative / okay / ok / mhm** to confirm, or just repeat or correct it | Either counts as addressed, wake word or not. Your correction is never itself re-asked. |
+| Pass her voice check at connect | anything, in your own words | She compares the speaker, not the words. She will never give you a phrase to repeat; if she does, that is a bug. |
+| End the conversation | **"stop listening"** / **"quit listening"** (anywhere in the sentence) | Closes the window at once, no reply. |
+| End it politely | **"that's all / that's it / that's enough / that'll be all / we're done / I'm done / never mind / goodbye / good night / talk (to you) later / catch you later"**, near the end of the sentence | She replies once, then the window closes. |
+| Interrupt her | start talking | Barge-in: she stops. A word said over her long reply may be lost to the recorder; say it again after she stops. |
 
-## Deterministic, non-classifier triggers (everyone, not creator-only)
+## 2. What she now decides for herself — no phrase needed
 
-| Command | File | Notes |
+Ask naturally. She chooses to look before answering; these are her tools
+(`core/tools.py`), all read-only, all logged to the Reasoning tab:
+
+| She can | Tool | Example |
 |---|---|---|
-| `"set/change/update (my/the) edit code <digits>"` | `systems/command/system.py` | `SET_EDIT_CODE_TRIGGERS` — deterministic phrase list, kept deterministic on purpose (2026-07-17): same reasoning as `PERSONALITY_RESET_TRIGGERS` below, a classifier false-positive here is a real security cost |
-| `"set/change/update (the) override code <code>"` | `systems/command/system.py` | admin/creator role only; `SET_OVERRIDE_CODE_TRIGGERS`, same reasoning |
-| `"unlock"` / `"enable edit(ing)"` (+ code) | `systems/command/system.py` | Broad substring match, unchanged |
-| `"lock/re-lock/relock (my/the) profile"` / `"secure my profile"` | `systems/command/system.py` | `LOCK_PROFILE_TRIGGERS` |
-| yes/no after a pending fact change | `systems/command/system.py` | Generic confirm/decline, `CONFIRM_TIMEOUT=30s` |
-| `"look up <query>"` / `"search for <query>"` / `"search the web for <query>"` / `"google <query>"` | `systems/inquiry/system.py` | Two-stage: search approval, then a separate retain approval before it's kept as `learned_knowledge` |
-| yes/no on a pending search/retain | `systems/inquiry/system.py` | `PENDING_TIMEOUT=60s`; a stale one now falls through to be re-evaluated fresh rather than eating the next message (fixed 2026-07-17) |
-| `"remember"` / `"recall"` / `"your memories"` / `"memories"` | `systems/modules/system.py` | `KNOWN_MODULE_TRIGGERS` — resolves and runs the `recall` module directly. As of 2026-07-17 this system no longer detects implicit build requests at all (`classify_module_gap()` removed) or proposes builds; `diagnostic_tool`/`inquiry` already have their own dedicated trigger systems ahead of this one, so this dict only still matters for `recall` |
-| `"are you okay"` / `"check your systems"` / `"is everything working"` / `"run/perform/do a diagnostic"` / etc. | `systems/diagnostics/system.py` | Not a fixed phrase list — routed via `classify_intent()`'s `status_check` category (deliberately broad, catches casual phrasing) |
-| bare acknowledgment ("thanks", "okay", "cool"...) right after her own closing-type statement | `systems/llm/system.py` | Suppresses a redundant reply — `ACKNOWLEDGMENT_PHRASES` + `CLOSING_MARKERS`, both deterministic |
+| search what was said between you | `search_memory` | "Did I ever mention NASCAR?" |
+| list your recent exchanges | `recent_turns` | "What were we talking about ten minutes ago?" |
+| read her own state: modules, what is off, response times, your standing instructions | `my_state` | "What's switched off on you?" / "How fast have you been answering?" |
+| list her modules and what each does | `list_modules` | "What modules do you have?" |
+| run one of her modules | `run_module` | "Use recall to check for anything about YouTube." |
+| run her diagnostics and report them in her own words | `run_diagnostics` | "Run a diagnostic." |
+| read her own log | `read_log` | "Anything in your log I should know about?" |
+| read her own source, a page at a time | `read_my_source` | "Read me the top of core/self_model.py." |
+| the clock | `current_time`, and always in her context | never something she guesses |
+| her module names | always in her context | never something she guesses |
 
-## Classifier-routed (`core/intent_classifier.py`'s `classify_intent()`)
+Not a tool, by design: web search (section 5) — it goes online, so it
+needs your approval every time.
 
-One shared call, `session["intent"]`, consumed by whichever system needs
-it. Four categories — **do not add a 5th** without re-reading this
-project's own history first: adding categories to this shared classifier
-has caused real accuracy regressions more than once.
+## 3. Correcting her ("stop saying that")
 
-| Category | Consumed by | What it catches |
-|---|---|---|
-| `fact` | `systems/facts/system.py` | Statements like "my name is X" / "call me X" — value is always re-derived from a real trigger phrase in the user's own text, never trusted from the classifier's own extraction |
-| `permission_command` | `systems/permissions/system.py` | Attempts to change a field, checked against `LOCKED_KEYS = ["edit_code", "override_code", "role"]` |
-| `status_check` | `systems/diagnostics/system.py` | See table above |
-| `none` | — | Falls through to the LLM system (priority 100) |
+Yours bind. Anyone else's are hers to weigh, and her decision is recorded.
 
-Hypothetical-language detection ("what if my job was X") is deliberately
-**not** classifier-trusted — a fixed deterministic check applied to the
-classifier's output, since a wrong call here means storing a false fact
-as if confirmed.
+| Say | She does |
+|---|---|
+| **"stop saying X"**, **"don't say X"**, **"quit saying X"**, **"never say X"**, **"do not say X"**, **"stop with X"**, **"stop repeating X"**, **"you keep saying X"**, **"no more X"**, **"enough of X"**, **"stop referencing / mentioning / bringing up X"**, **"stop calling me X"**, **"stop referring to me as X"**, **"stop saying my name"** | records a correction against X. "X and Y" records two. A phrase in quotes wins outright. |
+| **"stop saying that"** / **"stop that"** / **"drop that"** / **"stop it"** | she works out which phrase she has been repeating; if nothing repeats, she asks which you meant. |
+| "say X again and there will be **repercussions / consequences / trouble**" / "if you say X again" | same as a correction. |
 
-## Everything else
+Escalation: first time, a nudge she can still override; second, a standing
+rule about you; third and after, the phrase is removed from her output
+automatically. A correction is not a personality change and needs no
+code. Saying it **with** the override code makes it a standing
+personality rule instead (section 9).
 
-Any message not claimed by anything above reaches `systems/llm/system.py`
-(priority 100, the real fallback) — either answered from `learned_knowledge`
-if a confident match exists (personality-reworded, not verbatim, as of
-2026-07-17), or generated fresh and auto-stored/conflict-flagged
-afterward.
+Not a correction: quoting her back ("that's where you said that") — she
+knows the difference now.
+
+## 4. Yes-or-no questions she asks you
+
+One vocabulary everywhere (`core/text_utils.py`), first word of your
+reply:
+
+- **Yes**: yes, y, yeah, yep, yup, confirm, confirmed, sure, ok, okay, keep, save, store, please, do, go, affirmative, correct, right, fact, definitely, absolutely
+- **No**: no, n, nope, nah, don't, dont, skip, forget, delete, drop, never, trash, bin, discard, negative
+- Anything else means "moved on": the question is dropped, not left hanging, and a dropped retain shows up in the Controller's Activity tab.
+
+| She asks | When |
+|---|---|
+| whether to search the web | after "look up X" (section 5) |
+| whether to keep what she found | after a search |
+| whether to keep an answer she thinks was worth it | occasionally, after a factual answer of hers; at most once per two minutes |
+| to confirm a fact change | "yes / y / confirm" or "no / n", within 30 seconds |
+| to confirm an elevated-access grant | after "approve request N" (section 9) |
+
+## 5. Looking things up online (everyone; the only path to the internet)
+
+**"look up X"**, **"search for X"**, **"search the web for X"**, **"google X"**
+→ she asks your approval → yes → she searches, reports the findings
+verbatim, and asks whether to keep them (section 4). Kept findings never
+expire. Pending approvals time out after 60 seconds.
+
+## 6. Her memory, by keyword (to be retired as section 2 takes over)
+
+**"remember"**, **"recall"**, **"your memories"**, **"memories"** route to the
+recall module directly:
+
+- with **about / on / regarding / concerning / of** a topic → what she has stored about it ("what do you remember about NASCAR?")
+- otherwise → your last ten exchanges
+- a question that names the module ("what does the recall module do?") gets its description instead.
+
+## 7. Her health, by classifier (to be retired the same way)
+
+Any phrasing that asks her to check herself — "are you okay", "run a
+diagnostic", "check your systems", "is everything working" — is classified
+as a status check. She measures, then reports in her own words, adding
+nothing. Known over-trigger: "things are working but not behaving as I
+expect" gets a status report; that is on the list.
+
+**"can you hear me"**, **"are you listening"**, **"are you there"** → a short
+presence reply, not a report.
+
+## 8. Facts about you (everyone)
+
+| Say | Effect |
+|---|---|
+| **"my name is X"**, **"call me X"**, **"you can call me X"**, **"I go by X"** | stores your name/alias |
+| **"my favorite color is X"** | stores it |
+| **"my job is X"**, **"I work as X"** | stores it |
+| **"forget / remove / clear / delete my name / nickname / alias / favorite color / job"** | deletes that fact |
+| **"set my edit code 1234"**, **"change my edit code 1234"**, **"update my edit code 1234"** (or "set the edit code", "change the edit code", "update the edit code") | sets your edit code; digits |
+| **"unlock"** / **"enable edit"** / **"enable editing"** + your code | unlocks your profile for edits |
+| **"lock profile"**, **"lock my profile"**, **"lock the profile"**, **"re-lock profile"**, **"relock profile"**, **"secure my profile"** | locks it again |
+| **"set override code X"**, **"change override code X"**, **"update override code X"** (or "set the override code", "change the override code", "update the override code") | creator or admin only |
+
+Hypotheticals ("what if my job was X", "suppose", "imagine") are never
+stored. The keys `edit_code`, `override_code` and `role` cannot be changed
+through the ordinary "my X is Y" path.
+
+## 9. Creator commands
+
+All of these need a voice-verified creator session, **or** the override
+code said in the same sentence, which works from any session. Some need
+the code regardless, marked **code**.
+
+**Personality**
+
+| Say | Gate |
+|---|---|
+| **"set your personality to ..."** / **"override your personality to ..."** | **code** |
+| any open-ended change ("be snarkier", "stop using emojis", "be more direct") — classified, not a fixed phrase | **code** |
+| **"reset your personality"** / **"go back to your default personality"** / **"go back to default"** / **"default personality"** | **code**; also clears your standing rules |
+| **"what is your personality"** / **"what's your personality"** | verified |
+| **"reset your phrases"** / **"reset how you talk"** | **code** |
+
+Standing rules (the verbatim instructions she keeps) and her beliefs about
+you are viewed, removed, confirmed or retracted only at the Controller
+(Personality on the A.L.E.X. tab; Beliefs on the Reasoning tab). There is
+no voice command for either, on purpose.
+
+**Roles**
+
+- **"grant super user to NAME with override code CODE"**
+- **"revoke super user from NAME with override code CODE"**
+- She refuses to change anyone whose role is creator.
+
+**Systems** (creator or super user unless noted)
+
+- **"disable system NAME"** / **"enable system NAME"** / **"list systems"**
+- **"reload system NAME"** — creator only. Her systems also reload themselves when their files change.
+
+**Modules** (creator or super user)
+
+- **"disable module NAME"** / **"enable module NAME"** / **"list modules"**
+- **"list access requests"** / **"list pending access"**
+- **"approve request N"** (or "request N approved") → she reads back exactly what access is being granted → **"yes"**
+
+**Database** (creator)
+
+- **"list database tables"**
+- **"show database table NAME"**
+- **"edit database row ID in TABLE set FIELD to VALUE"** — exact shape
+- **"delete database row ID in TABLE"** — exact shape
+
+## 10. Things she may say to you first
+
+| She says | What to do |
+|---|---|
+| a question of her own, about something you mentioned or about herself | answer in a full sentence and she keeps it, and will not ask again; two words is not an answer |
+| "Still there? Just checking in." | after 15 minutes of silence in an open session; anything you say counts |
+| a question about something of hers that has been switched off | your reply is taken as the reason; she stops asking about that one |
+| "want me to keep that?" | section 4 |
+
+## 11. Not commands, and why
+
+- **"It's me"** is nothing; she verifies by voice, not by being told.
+- **"stop"** alone is not "stop listening".
+- **"you said that"** is quoting, not correcting (fixed 2026-09-21).
+- **"keep it"** said while she is still talking may never reach her; wait for her to finish.
+- **"Override [1]"** and any bracketed command syntax she may have offered you does not exist and never did.
