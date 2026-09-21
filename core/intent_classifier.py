@@ -80,7 +80,7 @@ NEEDS_RESOURCES = ("memory", "modules", "state", "log", "code", "diagnostics")
 NEEDS_SUFFIX = """
 
 Separately, before A.L.E.X. answers, decide what she needs to look at to answer this well.{recent} Rate each from 0 (not at all) to 10 (she cannot answer honestly without it):
-  memory — what was said between them before (anything he refers to as said, asked, promised or claimed earlier, or asks whether it was discussed)
+  memory — her stored record of what was said between them before: anything he refers to as said, asked, promised or claimed earlier, asks whether it was discussed, or asks what she remembers or recalls about any topic or moment (that is always a memory question, never general knowledge)
   modules — the modules built into her and what they do
   state — her own current state: what is switched off, how fast she answers, his standing instructions
   log — her own recent log: actions, warnings, errors

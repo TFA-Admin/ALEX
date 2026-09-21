@@ -97,7 +97,7 @@ reply:
 verbatim, and asks whether to keep them (section 4). Kept findings never
 expire. Pending approvals time out after 60 seconds.
 
-## 6. Her memory, by keyword (to be retired as section 2 takes over)
+## 6. Her memory, by keyword (stays for now: measured 2026-09-21, the 9b reads "what do you remember about X" as a topic question, so this phrasing needs the keyword)
 
 **"remember"**, **"recall"**, **"your memories"**, **"memories"** route to the
 recall module directly:

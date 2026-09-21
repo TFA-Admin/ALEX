@@ -834,7 +834,18 @@ The items, in build order:
    real timings, the file summarised); the time and the memory question
    answered correctly from context without a call. Found by it: the log
    tool narrated another user's turns to a stranger — read_log,
-   read_my_source and my_state are creator-only now (ANOMALIES). A
+   read_my_source and my_state are creator-only now (ANOMALIES).
+
+   **Retiring the "remember" keyword path — measured, deferred (13:00).**
+   Twelve recall-style and control phrasings through the merged
+   classifier: after one reword of the memory line, 6 of 8 memory
+   phrasings score 10 and trigger the lookup, and all four
+   general-knowledge controls score 0. The two holdouts, 0 in both prompt
+   versions: "what do you remember about NASCAR?" and "...about Warhammer
+   40k?" — Craig's own phrasing, read by the 9b as a topic question.
+   `KNOWN_MODULE_TRIGGERS` stays; COMMANDS.md section 6 says so. Do not
+   iterate the prompt further for this; it is a model-judgment limit
+   that a model comparison should settle. A
    correction, a
    contradiction, a factual claim, anything touching her constraints: one
    extra call to check the draft against tool results before speaking.
