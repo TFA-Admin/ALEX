@@ -270,6 +270,7 @@ class InboxView(QWidget):
             self.note(f"⚠️ Failed to load personality changes: {e}")
 
         try:
+            versions.build_authored(self.note)
             for p in versions.list_proposals(limit=30):
                 if p["status"] == "requested":
                     acts, detail = ["author_version", "reject_version", "open_versions"], \

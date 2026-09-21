@@ -97,20 +97,20 @@ items when they land.
 first.** It corrects two claims made in the small hours of 2026-09-21 and
 records a loop that was closed and reopened the same day.
 
-**Where the 2026-09-21 session stopped (14:35 EDT):** program items 1
+**Where the 2026-09-21 session stopped (15:05 EDT):** program items 1
 (tools, first slice), 2, 3 (9b chosen), 4 (deliberation, merged with the
 intent call), 13 (Controller pass), 5 (intent suite, `eval_runs`,
-`my_scores`, Scores tab) and 6 (self-modification container, first
-slice — `controller/versions.py`, `core/self_author.py`, Inbox →
-Versions, `tools/propose.py`) are landed; see "## Program approved
-2026-09-21" for each item's measurements. **Proposal #1 (hers,
-`deliberation.threshold` 7 → 8, rationale backwards) is gated and
-waiting in his Inbox.** **Owed: one restart of her** (`core/tools.py`
-propose_change + my_scores, `core/intent_classifier.py` clause) and a
-Controller relaunch (Scores, Versions). Commits since the last push are
-unpushed — push only when asked. Next in order: item 6's second slice
-(overnight author schedule, author model), then 7's decision, 9, 10,
-11. Personality "voice" arm undecided. Other-user access put off.
+`my_scores`, Scores tab) and 6 (container; second slice: direction
+check + idle author on her own model thinking) are landed; see
+"## Program approved 2026-09-21" for each item's measurements.
+**Proposal #1 (hers, `deliberation.threshold` 7 → 8, rationale
+backwards — it predates the direction check) is gated and waiting in
+his Inbox.** **Owed: one restart of her** (idle author, tools, client)
+and a Controller relaunch (Versions, idle switch). Commits since the
+last push are unpushed — push only when asked. Next: a pulled larger
+author model if Craig wants one (his call, needs a download), then 7's
+decision, 9, 10, 11. Personality "voice" arm undecided. Other-user
+access put off.
 
 **Current objective: give her the capacity to disagree, and stop the
 reflection loop from sanding it off.** (Design Principle 12.) Chosen
@@ -962,13 +962,58 @@ The items, in build order:
      the worktree's before every run. Bogus rows #4/#5/#8 deleted; live
      authority with the 9b judge is 2/2 (#6).
 
-   **Not built yet, in this order:** the overnight schedule for her
-   author (a Controller toggle + a target rotation); a larger offloaded
-   author model (`ALEX_AUTHOR_MODEL` is honoured, none chosen — needs a
-   pull, which needs Craig); the judged suites beyond `authority` in the
-   gate (`GATE_SUITES`, one line); widening the whitelist "only when the
-   numbers say so". Needs her restart (`core/tools.py`) and a Controller
-   relaunch (Versions tab).
+   **Second slice, 2026-09-21 (15:05).** Craig, on proposal #1: "why did
+   she propose it wrong? Can she not see it or does she not understand
+   it?" She saw it — the direction was in the prompt in plain words —
+   and did not understand it. Two responses, both built:
+
+   1. **A deterministic direction check** (`core/self_author.py`
+      `check_direction`). Each numeric target now carries its effect in
+      her terms (`up`/`down`, e.g. "she looks things up less often" /
+      "more often"); she must state which she expects, in exactly those
+      words, and code compares it with the direction of her number. A
+      self-contradictory proposal is refused before a row exists.
+      Measured, thinking off, same question as #1, 3 asks: she now
+      proposes 8 with the CONSISTENT effect ("less often") and a
+      rationale to match — or no change. So the check removed the
+      contradiction; it cannot make her address the stated concern
+      (which asked for more lookups). That part is his judgement, and
+      the model's.
+   2. **Her author runs while she is idle** (`core/idle_author.py`,
+      Craig: "give her access to the larger model whenever she is not
+      being used directly but still active"). In her process, after 15
+      min with nobody speaking (`ALEX_IDLE_AUTHOR_AFTER_S`) and nothing
+      generating, one target per pass (least recently proposed, 7-day
+      cooldown per target, one open proposal at a time), writing ONE
+      `authored` row with target/value/rationale; the Controller's slow
+      refresh turns it into a branch (`versions.build_authored`).
+      `note_activity()` from `ws/ws_handlers.py` on connect and on every
+      turn cancels a proposal in progress. Switch: "Let her author
+      proposals while idle" on the Run view (`idle_author` in
+      controller_settings.json, read every minute — no restart).
+
+   **The larger model is, for now, her own model thinking.**
+   `ALEX_AUTHOR_MODEL` is honoured when set (none pulled yet — needs
+   Craig); unset, the idle author uses her 9b with `think=True`
+   (`generate_json` gained `think`/`num_predict`). Measured on the same
+   question: thinking ON proposed **6, "she looks things up more often"**,
+   i.e. the right direction for the stated concern, in **69 s**;
+   thinking OFF proposed 8 or nothing in 2-10 s. The 20-30 s/turn that
+   ruled thinking out for conversation is nothing when nobody is
+   waiting. **Cost of interruption, measured:** a thinking proposal
+   cancelled after 8 s, and a small call right after answered in
+   **0.5 s** — Ollama drops the generation with the connection. With the
+   same model there is no reload at all; a different author model would
+   add the 9b's reload (~5-10 s) to the first reply after idle.
+
+   Also: `my_scores` now leaves gate runs out of "her" latest score —
+   her author had read a proposal's 83/84 as her own and argued from it.
+
+   **Still not built:** a pulled larger author model (candidates
+   qwen3:14b ~9 GB q4, needs CPU offload beside Whisper; his call);
+   `GATE_SUITES` beyond intent+authority; widening the whitelist. Needs
+   her restart (`core/idle_author.py`, `main.py`, `ws/ws_handlers.py`,
+   `core/tools.py`, `llm/ollama_client.py`) and a Controller relaunch.
 7. **The personality tax.** Craig: "Do it." `tests/personality_ab.py` now
    has a `voice` arm (concise, dry, dark; no dismissive/rude/psychosis) and
    swaps the HARD RULES with the prose — the 09-20 A/B did not, and its

@@ -4,7 +4,7 @@ consoles. The buttons act through ProcessManager; the consoles are fed by
 the app's log router (AlexController.log)."""
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget,
-    QTextEdit, QComboBox,
+    QTextEdit, QComboBox, QCheckBox,
 )
 from PySide6.QtGui import QGuiApplication, QTextCursor
 
@@ -83,6 +83,19 @@ class RunView(QWidget):
         self.model_selector.currentTextChanged.connect(self._model_choice_changed)
         model_row.addWidget(self.model_selector)
         model_row.addStretch(1)
+        # 2026-09-21 (Craig: "give her access to the larger model whenever
+        # she is not being used directly but still active"): her author
+        # runs in her process when nobody has spoken to her for a while
+        # (core/idle_author.py). She reads this switch every minute, so
+        # it applies without a restart. The model it uses is
+        # ALEX_AUTHOR_MODEL if set, else her own with thinking on.
+        self.idle_author_box = QCheckBox("Let her author proposals while idle")
+        self.idle_author_box.setChecked(bool(load_controller_settings().get("idle_author", True)))
+        self.idle_author_box.setToolTip(
+            "After 15 minutes with nobody talking to her, she looks at one whitelisted setting "
+            "and may propose a change. It lands in the Inbox as a version for you to test and decide.")
+        self.idle_author_box.stateChanged.connect(self._idle_author_changed)
+        model_row.addWidget(self.idle_author_box)
         layout.addLayout(model_row)
 
         # ---------------- CONSOLES ----------------
@@ -139,6 +152,13 @@ class RunView(QWidget):
     def selected_model(self) -> str:
         text = self.model_selector.currentText().strip()
         return text or load_controller_settings().get("alex_llm_model", DEFAULT_ALEX_MODEL)
+
+    def _idle_author_changed(self, _state):
+        settings = load_controller_settings()
+        settings["idle_author"] = bool(self.idle_author_box.isChecked())
+        save_controller_settings(settings)
+        self.log("[SYSTEM] Her idle author is " + ("ON" if settings["idle_author"] else "OFF")
+                 + " — she reads this within a minute")
 
     def _model_choice_changed(self, text: str):
         text = (text or "").strip()

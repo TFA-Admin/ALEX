@@ -221,9 +221,17 @@ async def init_db():
             gate TEXT,
             reason TEXT,
             staging_pid INTEGER,
+            value TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''')
+        # `value` (2026-09-21, core/idle_author.py): the proposed value when
+        # she authored it in her own process; the Controller renders the
+        # file from it. Added after the table existed on this machine.
+        try:
+            await db.execute("ALTER TABLE proposals ADD COLUMN value TEXT")
+        except Exception:
+            pass
 
         # ✋ CORRECTIONS (2026-09-20) — "stop saying that", remembered and
         # escalating. Craig: "It's a simple disciplinary correction, but
@@ -667,9 +675,9 @@ async def fetch_profile_names() -> list:
 # PROPOSALS (2026-09-21) — see the table comment in init_db()
 # -------------------------
 _PROPOSAL_KEYS = ["id", "title", "rationale", "author", "target", "branch", "worktree",
-                  "status", "gate", "reason", "staging_pid", "created_at", "updated_at"]
+                  "status", "gate", "reason", "staging_pid", "value", "created_at", "updated_at"]
 _PROPOSAL_WRITABLE = {"title", "rationale", "author", "target", "branch", "worktree",
-                      "status", "gate", "reason", "staging_pid"}
+                      "status", "gate", "reason", "staging_pid", "value"}
 
 
 async def create_proposal(title: str, rationale: str, author: str, target: str = None,

@@ -432,7 +432,7 @@ class OllamaManager:
                 await self.aclose()
 
     async def generate_json(self, prompt: str, model: str = DEFAULT_MODEL, timeout: float = 15.0,
-                             temperature: float = None):
+                             temperature: float = None, think: bool = None, num_predict: int = 200):
         """
         Single-shot (non-streaming) call for short structured-extraction
         tasks (name parsing, fact extraction, command parameters) — these
@@ -460,11 +460,21 @@ class OllamaManager:
         options = {
             "num_ctx": SHARED_NUM_CTX,
             "num_batch": SHARED_NUM_BATCH,
-            "num_predict": 200
+            "num_predict": num_predict
         }
 
         if temperature is not None:
             options["temperature"] = temperature
+
+        # 2026-09-21: think=None keeps the model's default as this file
+        # sets it (_THINK_KW: off for qwen3, because thinking costs 20-30s
+        # a turn and is unusable for conversation). think=True is for work
+        # nobody is waiting on — core/idle_author.py — and needs the
+        # budget that comes with it (num_predict), since the thinking
+        # tokens are counted against the same limit.
+        think_kw = dict(_THINK_KW)
+        if think is not None and model.lower().startswith("qwen3"):
+            think_kw = {"think": bool(think)}
 
         try:
             r = await self._get_client().post(
@@ -475,7 +485,7 @@ class OllamaManager:
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
                     "keep_alive": KEEP_ALIVE,
-                    **_THINK_KW,
+                    **think_kw,
                     "format": "json",
                     "options": options
                 }

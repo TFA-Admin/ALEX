@@ -139,6 +139,10 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(periodic_decay())
     asyncio.create_task(periodic_self_reflection())
     asyncio.create_task(periodic_proactive_check())
+    # 2026-09-21 (roadmap item 6): her author, when nobody is talking to
+    # her. Writes one 'authored' proposal row at a time; nothing more.
+    from core import idle_author
+    asyncio.create_task(idle_author.run())
 
     yield
 

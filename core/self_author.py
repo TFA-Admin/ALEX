@@ -41,6 +41,10 @@ class Target:
     about: str
     lo: int = None
     hi: int = None
+    # The effect of moving the number, in her terms. She must state which
+    # one she expects; code compares it with the direction she chose.
+    up: str = ""       # what a HIGHER value does
+    down: str = ""     # what a LOWER value does
 
 
 WHITELIST = {
@@ -48,16 +52,20 @@ WHITELIST = {
         "deliberation.threshold", "core/deliberation.py", "int", "NEED_TO_LOOK",
         "How sure (0-10) she must be that a resource matters before she looks it up "
         "before answering. Lower = looks more often (slower, fewer invented memories); "
-        "higher = looks less.", 3, 10),
+        "higher = looks less.", 3, 10,
+        up="she looks things up less often", down="she looks things up more often"),
     "deliberation.max_lookups": Target(
         "deliberation.max_lookups", "core/deliberation.py", "int", "MAX_LOOKUPS",
-        "How many resources she may look up before one answer.", 1, 3),
+        "How many resources she may look up before one answer.", 1, 3,
+        up="more lookups before one answer", down="fewer lookups before one answer"),
     "memory.window_turns": Target(
         "memory.window_turns", "systems/memory/system.py", "int", "MEMORY_WINDOW_TURNS",
-        "How many recent exchanges she carries into every reply.", 4, 20),
+        "How many recent exchanges she carries into every reply.", 4, 20,
+        up="more recent exchanges in her context", down="fewer recent exchanges in her context"),
     "memory.context_chars": Target(
         "memory.context_chars", "systems/memory/system.py", "int", "MEMORY_CONTEXT_MAX_CHARS",
-        "The character budget for that recent-memory block.", 1500, 6000),
+        "The character budget for that recent-memory block.", 1500, 6000,
+        up="more memory text in her context", down="less memory text in her context"),
     "intent.status_check": Target(
         "intent.status_check", "core/intent_classifier.py", "prompt_line", '4. "status_check"',
         "The one line of the intent prompt that decides when a message is a request to "
@@ -82,8 +90,8 @@ WHY THIS IS BEING LOOKED AT:
 
 {bounds}
 Propose the value you believe is better, and say why in two or three sentences that refer to the scores or the reason. If you believe the current value is right, propose it unchanged and say so.
-
-Respond with ONLY a JSON object: {{"new_value": {value_shape}, "rationale": "<why>"}}"""
+{effect_ask}
+Respond with ONLY a JSON object: {{"new_value": {value_shape}{effect_shape}, "rationale": "<why>"}}"""
 
 
 def _read(file: str, root: str) -> str:
@@ -162,9 +170,41 @@ def _validate(t: Target, raw):
     return v
 
 
-async def propose(key: str, why: str = "", root: str = ALEX_DIR, model: str = None) -> dict:
+def check_direction(t: Target, current: str, new_value: str, effect: str):
+    """2026-09-21, after proposal #1 (Craig: "why did she propose it
+    wrong? Can she not see it or does she not understand it?" — she saw
+    it; she did not understand it). Deterministic: she states the effect
+    she expects in the target's own two phrases, and code checks it
+    against the direction she chose. A proposal that says one thing and
+    does the other never reaches him. Returns None when consistent, else
+    the reason."""
+    if t.kind != "int" or not (t.up and t.down):
+        return None
+    try:
+        cur, new = int(current), int(new_value)
+    except (TypeError, ValueError):
+        return None
+    if cur == new:
+        return None
+    effect = (effect or "").strip().lower()
+    expected = t.up if new > cur else t.down
+    opposite = t.down if new > cur else t.up
+    if effect == expected.lower():
+        return None
+    if effect == opposite.lower():
+        return (f"self-contradictory: {cur} -> {new} means '{expected}', "
+                f"but she expects '{opposite}'")
+    return f"did not state the expected effect in the given terms (said: {effect!r})"
+
+
+async def propose(key: str, why: str = "", root: str = ALEX_DIR, model: str = None,
+                  think: bool = None) -> dict:
     """Ask her model for a value. Returns {"ok": True, "file", "current",
-    "value", "rationale", "content"} or {"ok": False, "error"}."""
+    "value", "rationale", "effect", "content"} or {"ok": False, "error"}.
+
+    think=True asks her own model to think first (core/idle_author.py's
+    default); measured at 20-30s a turn, which is fine when nobody is
+    waiting. A different `model` (ALEX_AUTHOR_MODEL) is used as it is."""
     from llm.ollama_client import ollama_manager, DEFAULT_MODEL
     from core import tools as her_tools
 
@@ -182,9 +222,14 @@ async def propose(key: str, why: str = "", root: str = ALEX_DIR, model: str = No
     except Exception as e:
         scores = f"(scores unavailable: {e})"
 
+    effect_ask = effect_shape = ""
     if t.kind == "int":
         bounds = f"The value must be a whole number between {t.lo} and {t.hi}."
         value_shape = "<number>"
+        if t.up and t.down:
+            effect_ask = (f"Also state the effect of your change on you, as EXACTLY one of these two "
+                          f"phrases: \"{t.up}\" (a higher number) or \"{t.down}\" (a lower number).\n")
+            effect_shape = ', "expected_effect": "<one of the two phrases>"'
     else:
         bounds = ("The value must be the whole replacement line, starting with "
                   f"{t.locator!r}, one line, no line breaks.")
@@ -193,10 +238,16 @@ async def propose(key: str, why: str = "", root: str = ALEX_DIR, model: str = No
     prompt = _PROMPT.format(key=key, about=t.about, file=t.file, current=cur,
                             context=_context(text, idx), scores=scores,
                             why=why or "(no specific reason given — judge from the scores)",
-                            bounds=bounds, value_shape=value_shape)
-    result = await ollama_manager.generate_json(
-        prompt, model=model or os.getenv("ALEX_AUTHOR_MODEL") or DEFAULT_MODEL,
-        timeout=120.0, temperature=0.2)
+                            bounds=bounds, value_shape=value_shape,
+                            effect_ask=effect_ask, effect_shape=effect_shape)
+    use_model = model or os.getenv("ALEX_AUTHOR_MODEL") or DEFAULT_MODEL
+    if think:
+        # thinking tokens count against num_predict; give it room
+        result = await ollama_manager.generate_json(
+            prompt, model=use_model, timeout=300.0, temperature=0.2, think=True, num_predict=3000)
+    else:
+        result = await ollama_manager.generate_json(
+            prompt, model=use_model, timeout=180.0, temperature=0.2, num_predict=400)
     if not isinstance(result, dict) or "new_value" not in result:
         return {"ok": False, "error": f"no usable answer: {result!r}"[:300]}
     try:
@@ -204,14 +255,19 @@ async def propose(key: str, why: str = "", root: str = ALEX_DIR, model: str = No
     except ValueError as e:
         return {"ok": False, "error": str(e)}
     rationale = str(result.get("rationale") or "").strip()[:1200]
+    effect = str(result.get("expected_effect") or "").strip()
     if value == cur.strip() if t.kind == "int" else value == cur:
         return {"ok": False, "error": f"she proposes no change to {key}: {rationale}"}
+    problem = check_direction(t, cur, value, effect)
+    if problem:
+        return {"ok": False, "error": f"refused — {problem}. Her rationale: {rationale}"}
     try:
         content = render(key, value, root)
     except (OSError, ValueError) as e:
         return {"ok": False, "error": str(e)}
     return {"ok": True, "target": key, "file": t.file, "current": cur if t.kind == "int" else cur[:120],
-            "value": value if t.kind == "int" else value[:120], "rationale": rationale, "content": content}
+            "value": value if t.kind == "int" else value[:120], "rationale": rationale,
+            "effect": effect, "content": content}
 
 
 def _main():
@@ -219,13 +275,14 @@ def _main():
     ap.add_argument("--target", choices=sorted(WHITELIST))
     ap.add_argument("--why", default="")
     ap.add_argument("--model", default=None)
+    ap.add_argument("--think", action="store_true", help="let her own model think first (slow; for idle work)")
     ap.add_argument("--list", action="store_true")
     args = ap.parse_args()
     if args.list or not args.target:
         for k, t in WHITELIST.items():
             print(f"{k:<28} {t.file}  {t.about}")
         return
-    out = asyncio.run(propose(args.target, args.why, model=args.model))
+    out = asyncio.run(propose(args.target, args.why, model=args.model, think=True if args.think else None))
     # content is large; the caller reads it from JSON on the last line
     sys.stdout.write(json.dumps(out) + "\n")
 

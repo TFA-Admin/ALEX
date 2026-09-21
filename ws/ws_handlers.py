@@ -15,6 +15,7 @@ from identity.identity_manager import identity_manager
 from core import readiness
 from core.voice import say
 from db.db import remember_own_utterance, session_opened, session_verified, session_heard, session_closed
+from core import idle_author
 from config.logger_config import logger
 from core.alex_core import alex_core
 from db.db import (
@@ -349,6 +350,7 @@ async def ws_text(websocket: WebSocket):
                 await session_verified(session_id, True)
         except Exception as e:
             logger.warning(f"⚠️ could not record session: {e}")
+        idle_author.note_activity()
 
         if role in ("creator", "super_user") and not session.get("creator_verified"):
             # not already verified above (voice-first recognition during
@@ -661,6 +663,7 @@ async def process_message(websocket, msg, user_id, session_id, audio, audio_byte
             await session_heard(session_id)
         except Exception:
             pass
+        idle_author.note_activity()
         await handle_chat(websocket, msg, user_id, session_id)
 
         print("🔥 HANDLE_CHAT RETURNED")

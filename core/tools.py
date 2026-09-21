@@ -330,6 +330,12 @@ async def _my_scores() -> str:
                 "tests/harness.py; each run is stored once it has run.")
     by_suite = {}
     for r in runs:
+        # a gate run measures a PROPOSED version of her in its worktree,
+        # not her; those rows stay in the Controller's Scores tab but are
+        # not "her" latest score (2026-09-21: her author read a gate's
+        # 83/84 as her own and argued from it)
+        if (r.get("note") or "").startswith("gate proposal"):
+            continue
         by_suite.setdefault(r["suite"], []).append(r)
 
     def _local(ts):

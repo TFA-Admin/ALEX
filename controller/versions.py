@@ -399,16 +399,28 @@ def author_from_request(p: dict, log=print) -> int:
     target = p.get("target")
     if not target:
         raise RuntimeError("no target on this request")
-    out = subprocess.run(
-        ["python", "-X", "utf8", "-m", "core.self_author", "--target", target,
-         "--why", p.get("rationale") or ""],
-        cwd=ALEX_DIR, capture_output=True, text=True, encoding="utf-8", errors="replace",
-        timeout=300, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    line = (out.stdout or "").strip().splitlines()
-    try:
-        data = json.loads(line[-1]) if line else {}
-    except ValueError:
-        data = {}
+    if p.get("value"):
+        # she authored this herself while idle (core/idle_author.py): the
+        # value is on the row; only the rendering and the branch are left
+        from core import self_author
+        try:
+            data = {"ok": True, "file": self_author.WHITELIST[target].file,
+                    "current": self_author.current_value(target),
+                    "value": p["value"], "rationale": p.get("rationale") or "",
+                    "content": self_author.render(target, p["value"])}
+        except Exception as e:
+            data = {"ok": False, "error": str(e)}
+    else:
+        out = subprocess.run(
+            ["python", "-X", "utf8", "-m", "core.self_author", "--target", target,
+             "--why", p.get("rationale") or ""],
+            cwd=ALEX_DIR, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=300, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        line = (out.stdout or "").strip().splitlines()
+        try:
+            data = json.loads(line[-1]) if line else {}
+        except ValueError:
+            data = {}
     if not data.get("ok"):
         reason = data.get("error") or (out.stderr or "")[-400:] or "author produced nothing"
         asyncio.run(update_proposal(p["id"], status="rejected", reason=reason))
@@ -447,6 +459,20 @@ def author_from_request(p: dict, log=print) -> int:
         actor="alex", ref=f"proposals#{pid}"))
     log(f"[VERSIONS] Her proposal #{pid}: {title}")
     return pid
+
+
+def build_authored(log=print) -> int:
+    """Rows she authored while idle become branches. Called from the
+    Controller's slow refresh; a no-op almost always."""
+    n = 0
+    for p in asyncio.run(fetch_proposals(status="authored", limit=10)):
+        try:
+            author_from_request(p, log)
+            n += 1
+        except Exception as e:
+            log(f"[VERSIONS] could not build her proposal #{p['id']}: {e}")
+            asyncio.run(update_proposal(p["id"], status="rejected", reason=str(e)[:300]))
+    return n
 
 
 def list_proposals(limit=50):
