@@ -152,7 +152,7 @@ the code regardless, marked **code**.
 
 Standing rules (the verbatim instructions she keeps) and her beliefs about
 you are viewed, removed, confirmed or retracted only at the Controller
-(Personality on the A.L.E.X. tab; Beliefs on the Reasoning tab). There is
+(both under the Her tab: Personality, and Beliefs). There is
 no voice command for either, on purpose.
 
 **Roles**
