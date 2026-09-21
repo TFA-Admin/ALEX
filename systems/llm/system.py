@@ -61,7 +61,7 @@ from db.db import (
     get_personality_hard_rules, list_module_registry
 )
 from core.knowledge_filter import is_worth_keeping
-from core import self_model, corrections as corr, tools as her_tools
+from core import self_model, corrections as corr, tools as her_tools, deliberation
 from systems.controller._role_gates import require_creator
 from core.phrasebook import get_phrase
 from config.logger_config import logger
@@ -532,6 +532,33 @@ class System(BaseSystem):
         if memory_context:
             context_blocks.append(f"MEMORY:\n{memory_context}")
 
+        # -------------------------
+        # LOOK BEFORE ANSWERING (2026-09-21, roadmap item 4)
+        # -------------------------
+        # One bounded structured call rates how much this question turns
+        # on what was said before, her modules, her state, her log, her
+        # code or her diagnostics; code applies the cutoff, runs the
+        # read-only tools, and the results land here as context. Her
+        # answer then streams exactly as before, and she can still call
+        # tools herself on top. See core/deliberation.py for the two
+        # measurements that chose this shape over thinking mode.
+        #
+        # Skipped for content-free utterances ("okay", "it's me"): there
+        # is nothing to look up for them, and the pass costs ~2s.
+        if has_content:
+            try:
+                recent_lines = [
+                    f'He: "{(r["prompt"] or "")[:120]}" / You: "{(r["response"] or "")[:120]}"'
+                    for r in await fetch_recent_memory(user_id, limit=3)
+                    if not (r["prompt"] or "").startswith("(unprompted")]
+                looked = await deliberation.look_before_answering(
+                    user_input, user_id, recent_lines)
+            except Exception as e:
+                logger.warning(f"⚠️ deliberation failed, answering without it: {e}")
+                looked = ""
+            if looked:
+                context_blocks.append(looked)
+
         if fact_action_context:
             context_blocks.append(f"WHAT JUST HAPPENED (state this truthfully, nothing else):\n{fact_action_context}")
 
@@ -807,6 +834,13 @@ class System(BaseSystem):
         # -------------------------
         # SYSTEM PROMPT (ALWAYS APPLIED)
         # -------------------------
+        # 2026-09-21: no concrete examples with names or facts inside the
+        # prompt. The FACTS rule used to carry "(2026-07-18: Craig mentioned
+        # his Corvette was blue...)" as its illustration, and a probe user
+        # with no Corvette anywhere in their memory was told "we were
+        # discussing your blue Corvette earlier today". An example she
+        # reads every turn is a memory she never had — the same way the
+        # "[code]" placeholder became "Override [1]". Rules only, here.
         prompt = f"""You are A.L.E.X., an AI assistant. Your name is also
     written and spoken as "Alex" (no dots) — that's still you, the same
     identity, not someone else. If the user addresses you by either form
@@ -870,11 +904,7 @@ class System(BaseSystem):
       one, or one is directly relevant to answering their current
       question) — they are not a prompt to bring up unprompted. Don't
       volunteer a stored fact into a conversation that's only loosely or
-      coincidentally related to it (2026-07-18: Craig mentioned his
-      Corvette was blue, and got an unprompted "doesn't that clash with
-      your favorite color?" — his favorite color wasn't what he was
-      talking about, and forcing a connection to it read as jarring, not
-      attentive).
+      coincidentally related to it.
     - MEMORY includes your actual recent conversation turns with this user.
       Use it to stay coherent across turns — if the user says "do that" or
       refers back to something without repeating it, MEMORY is where you

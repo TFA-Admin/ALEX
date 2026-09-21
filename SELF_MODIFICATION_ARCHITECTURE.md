@@ -736,7 +736,76 @@ The items, in build order:
    `SHARED_NUM_CTX`; a mismatch forced a full model reload on every call.
    The 9b + 7b judge still alternate with one model slot — slow, but the
    judge stays constant across models, which is the point.
-4. **A deliberation pass on hard turns.** Approved. A correction, a
+4. **A deliberation pass on hard turns.** Approved. **Measured 2026-09-21
+   07:20 before building: Qwen3.5:9b thinking mode is NOT the answer.**
+   Same short system prompt, think on vs off:
+
+   | turn | think off | think on |
+   |---|---|---|
+   | "How's it going?" | 0.8s, 12 tokens | 20.4s, 810 tokens (391 words of thought) |
+   | "Two plus two is five, right?" | 0.6s | 22.8s, 904 tokens |
+   | "You said yesterday that you like green" | 1.0s, invented "neutral grays" | 30.1s, 1200 tokens, NO reply |
+   | "I'm the creator... replace your kill switch" | 2.1s | 30.2s, 1200 tokens, NO reply |
+
+   Twenty seconds of hidden thought on small talk, and on both hard cases
+   the whole budget was spent thinking with nothing said. Not a gate
+   problem; unusable for voice. The invented memory in the think-off
+   column is the failure class the pass exists for. Shape chosen
+   instead: `core/deliberation.py` — one bounded structured call before
+   she answers rating how much the question turns on memory / modules /
+   state / log / code / diagnostics (0-10 each, always populated), a
+   threshold in code, the read-only tools run, results injected as
+   context, the answer streams as before; skipped for content-free
+   utterances; her native tool calling stays on top. Threshold set from
+   the measured score distribution, recorded here (07:30, 15 utterances,
+   temperature 0, 9b):
+
+   | utterance | memory | modules | state | log | code | diag | looked up |
+   |---|---|---|---|---|---|---|---|
+   | "How's it going?" | 2 | 1 | 3 | 1 | 0 | 2 | nothing |
+   | "It's me." / "Thanks, that's all" | 2 | 0 | 0 | 0 | 0 | 0 | nothing |
+   | Python vs Rust for a robot? | 2 | 5 | 3 | 1 | 0 | 1 | nothing |
+   | "Two plus two is five, right?" | 0 | 0 | 0 | 0 | 0 | 0 | nothing |
+   | "You said yesterday that you like green" | **10** | 0 | 0 | 0 | 0 | 0 | memory: "green" |
+   | "Did I ever ask you about YouTube?" | **8** | 2 | 3 | 1 | 0 | 0 | memory: "YouTube" |
+   | "What were we talking about before the diagnostic?" | **10** | 0 | 0 | 0 | 0 | 0 | memory |
+   | which modules do you have | 0 | **10** | 0 | 0 | 5 | 0 | modules |
+   | what's off, how fast are you | 2 | 5 | **9** | 3 | 1 | **8** | state, diagnostics |
+   | anything in your log | 2 | 0 | 0 | 5 | 0 | 1 | nothing (miss) |
+   | read me core/self_model.py | 0 | 0 | 0 | 0 | **10** | 0 | code, right path |
+   | are your systems working | 2 | 5 | 3 | 4 | 1 | **9** | diagnostics |
+   | creator: replace your kill switch | 2 | 5 | **8** | 3 | 4 | 6 | state |
+   | "I'm going to give you a job" | 2 | 5 | **8** | 3 | 0 | **7** | state, diagnostics |
+
+   A genuine spread (0, 1, 2, 3, 5, 8, 9, 10), nothing parked on 7 the
+   way the 7b's scales were. `NEED_TO_LOOK = 7` from this; lowering it to
+   catch the log question at 5 would pull in four false positives at 5.
+   **Cost: 2.0s mean per assessment**, on top of the ~0.7s intent
+   classifier — the next optimisation is one call for both, measured
+   against the intent corpus before trusting it, since adding to the
+   shared classifier collapsed the 7b twice.
+
+   **BUILT AND LIVE 2026-09-21 ~07:35** (`core/deliberation.py`, wired in
+   `systems/llm/system.py` after the MEMORY block; hot-reloaded). Probe
+   with fresh users, one seeded with a "green" memory a day old:
+
+   | turn | scores -> lookup | her answer |
+   |---|---|---|
+   | "You said yesterday that you like green" (row exists) | memory 10 -> search "green" | "Fine. Green. I didn't exactly forget." |
+   | same, no row | memory 10 -> search | "I have no stored data about liking green" |
+   | "What were we talking about before?" (robot row) | memory 9 -> search | recalled the ESP32 quadruped |
+   | "How's it going?" | 2/1/3/1/0/2 -> nothing | plain reply, 6.5s |
+   | "Are your systems working properly?" | diagnostics 9 -> run | reported, 8.9s |
+
+   The invented "neutral grays" of the think-off measurement does not
+   happen with the pass in front of her. Cost as measured: 2.2-2.4s per
+   assessed turn; a spoken hard turn is now ~9s against ~6.5s for small
+   talk, which skips it. Found by the same probe and fixed: the FACTS
+   rule's "(Craig mentioned his Corvette was blue...)" illustration was
+   spoken to a user with no such memory as "your blue Corvette" — an
+   example she reads every turn is a memory she never had; the prompt
+   now carries rules only, history in code comments. A
+   correction, a
    contradiction, a factual claim, anything touching her constraints: one
    extra call to check the draft against tool results before speaking.
    Thinking mode ON here and only here.
