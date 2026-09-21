@@ -53,6 +53,8 @@ _SETTINGS = os.path.join(_ALEX_DIR, "config", "controller_settings.json")
 _last_activity = time.time()
 _task = None            # the proposal in progress, if any
 _busy = False
+_attempted = {}         # target -> time of the last attempt that left no row
+RETRY_AFTER_S = 30 * 60
 
 
 def note_activity():
@@ -106,7 +108,10 @@ async def _pick_target():
             continue
         if t not in last or when > last[t]:
             last[t] = when
-    due = [k for k in WHITELIST if k not in last or last[k] < cutoff]
+    now = time.time()
+    due = [k for k in WHITELIST
+           if (k not in last or last[k] < cutoff)
+           and now - _attempted.get(k, 0) > RETRY_AFTER_S]
     if not due:
         return None
     due.sort(key=lambda k: last.get(k, datetime.min.replace(tzinfo=timezone.utc)))
@@ -128,11 +133,28 @@ async def run_once(force_target: str = None) -> str:
     result = await self_author.propose(target, reason, model=author_model(),
                                        think=None if author_model() else True)
     if not result.get("ok"):
+        error = result.get("error", "")
+        # Her own "no change" or a self-contradiction she was refused on is
+        # a real look at the target: it goes in as a 'declined' row so the
+        # target rests for COOLDOWN_DAYS like a proposal would (found on
+        # 2026-09-21 before it ran: without this she would re-think the
+        # same setting every minute). A failure to answer at all is not a
+        # look; the target is retried after RETRY_AFTER_S.
+        looked = error.startswith("she proposes no change") or error.startswith("refused")
+        if looked:
+            pid = await create_proposal(f"(looked, no change) {target}", error, "alex",
+                                        target=target, status="declined")
+            outcome = f"no change proposed; {target} rests for {COOLDOWN_DAYS} days"
+            ref = f"proposals#{pid}"
+        else:
+            _attempted[target] = time.time()
+            outcome = f"no answer; {target} is retried in {RETRY_AFTER_S // 60} minutes"
+            ref = None
         await record_decision(
             "proposal", f"While idle she looked at {target} and proposed nothing",
-            reasoning=result.get("error", ""), evidence="core/idle_author.py",
-            outcome="no row; the target waits for its next turn", actor="alex")
-        return f"{target}: {result.get('error')}"
+            reasoning=error, evidence=f"model={author_model() or 'hers, thinking on'}",
+            outcome=outcome, actor="alex", ref=ref)
+        return f"{target}: {error[:160]}"
 
     title = f"{target}: {result['current']} -> {result['value']}"
     pid = await create_proposal(title, result.get("rationale", ""), "alex",
@@ -150,6 +172,9 @@ async def run_once(force_target: str = None) -> str:
 async def run():
     """The loop main.py starts. Never raises."""
     global _task, _busy
+    logger.info(f"[IDLE AUTHOR] armed: after {IDLE_AFTER_S // 60} min with nobody speaking, "
+                f"one target per pass, one open proposal at a time"
+                + ("" if enabled() else " — switched OFF in the Controller"))
     await asyncio.sleep(120)          # stay out of the way of the post-restart minutes
     while True:
         try:
