@@ -123,7 +123,15 @@ PHRASE_REGISTRY = {
         "Tell the person the override code they gave is wrong."
     ),
     "personality_override_code_required": (
-        "Changing my personality that way now requires your override code — say something like 'override code [code] reset your personality'.",
+        # 2026-09-20: no square brackets. This default was the SEED of a real
+        # loop — she said it to Craig three times, it entered memory, the
+        # recency window fed it back, and she generalised the shape into
+        # ordinary replies: "Override [1] for a more entertaining response."
+        # Reflection was blamed first and was not the cause; it only added
+        # "clear as urine" on top. A bracketed token reads as a command
+        # language she then invents more of, so the instruction is now
+        # phrased as speech.
+        "Changing my personality that way needs your override code — say it along with what you want changed.",
         "Tell the creator this specific personality action (set/reset personality, or reset phrases) now requires stating the override code in the same request, and give a short example of the phrasing."
     ),
     "cannot_change_creator_role": (

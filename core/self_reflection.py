@@ -84,6 +84,30 @@ or
     return new_desc, str(result.get("reason", ""))[:200]
 
 
+# Bracketed tokens that are not real placeholders. 2026-09-20, found by
+# watching a live conversation: `personality_override_code_required` had
+# been re-voiced into
+#
+#   "Fine, but remember, sass is for losers. Drop the code in your next
+#    msg: 'override [code] to get snarky, clear as urine?"
+#
+# — an invented command syntax and an unclosed quote. She said it to him
+# three times, it entered `memory`, the four-turn window fed it back, and
+# she generalised the pattern into ordinary replies: "Override [1] for a
+# more entertaining response." The same self-reinforcing shape as the
+# emerald loop, seeded by a bad re-wording rather than a hallucination.
+#
+# The existing structural check guards {curly} placeholders, because that
+# is what .format() breaks on. Nothing guarded [square] ones, which do not
+# break anything mechanically and instead teach her a command language
+# that does not exist.
+_FAKE_TEMPLATE_RE = re.compile(r"\[[^\]]{1,30}\]")
+
+
+def _invents_syntax(text: str) -> bool:
+    return bool(_FAKE_TEMPLATE_RE.search(text or ""))
+
+
 async def _reflect_on_phrase(key, personality):
     """
     2026-07-16: the placeholder-preservation instruction used to say
@@ -170,6 +194,12 @@ or
     # this phrase actually needs — either dropped one (breaks the
     # phrase's real function) or hallucinated an extra one (exactly
     # today's bug, now caught even if the prompt fix above ever slips).
+    if _invents_syntax(new_text):
+        logger.info(
+            f"[PERSONALITY] Rejected a re-wording of '{key}' — it invents a "
+            f"command syntax: {new_text!r}")
+        return None
+
     if set(_PLACEHOLDER_RE.findall(new_text)) != required_placeholders:
         logger.warning(
             f"⚠️ Rejected reword for '{key}': placeholder mismatch "
