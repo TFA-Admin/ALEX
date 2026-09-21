@@ -2,9 +2,9 @@ import asyncio
 import re
 
 from speech.stt_engine import transcribe_audio
-from speech.voice_id_engine import is_foreign_speaker
+from speech.voice_id_engine import is_foreign_speaker, FOREIGN_SPEAKER_THRESHOLD
 from core.voice import say
-from db.db import fetch_voice_samples
+from db.db import fetch_voice_samples, record_decision
 from config.logger_config import logger
 from speech.tts_engine import synthesize_speech
 from core.text_utils import first_word
@@ -142,6 +142,18 @@ class AudioProcessor:
                 logger.info(
                     f"[ACTION] Dropped an utterance that did not match "
                     f"{user_id} (score {score:.2f})")
+                try:
+                    await record_decision(
+                        "speaker",
+                        "Ignored something it heard",
+                        reasoning="The voice did not match the person she is "
+                                  "talking to — this is a measured comparison, "
+                                  "not a judgement of hers.",
+                        evidence=f"similarity {score:.2f}, below {FOREIGN_SPEAKER_THRESHOLD}",
+                        outcome="not transcribed, not answered",
+                        actor=user_id)
+                except Exception:
+                    pass
                 return None
 
         text, confidence = transcribe_audio(audio_bytes)

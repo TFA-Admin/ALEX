@@ -56,6 +56,7 @@ from db.db import (
     log_personality_change, reset_all_phrases, add_personality_hard_rule,
     resolve_module_build_request,
     fetch_recent_module_build_requests, approve_elevated_access,
+    fetch_decisions,
     list_module_registry, fetch_recent_query_reports,
     fetch_unacknowledged_security_events, acknowledge_security_events,
     fetch_unacknowledged_personality_changes, acknowledge_personality_changes,
@@ -839,10 +840,47 @@ class AlexController(QWidget):
 
         self.notifications_tab.setLayout(notifications_layout)
 
+        # -------------------------
+        # REASONING TAB (2026-09-20)
+        # -------------------------
+        # Craig, twice: "I'd like to see her thought process for everything
+        # she does." Every mechanism already recorded its own outcome in its
+        # own table, and the reasoning — where it existed — was an [ACTION]
+        # line in a log file. Reading what she decided and why meant six
+        # tabs and a text file, so in practice it was read by nobody.
+        #
+        # One list, newest first, with the reasoning as the wide column.
+        # The `Why` text is deliberately explicit about whose reasoning it
+        # is: some of these are hers, and some are a rule firing. Conflating
+        # the two would make her look like she is thinking when she is not.
+        self.reasoning_tab = QWidget()
+        reasoning_layout = QVBoxLayout()
+
+        reasoning_layout.addWidget(QLabel(
+            "What she decided, and why. Newest first."))
+
+        self.reasoning_table = QTableWidget()
+        self.reasoning_table.setColumnCount(6)
+        self.reasoning_table.setHorizontalHeaderLabels(
+            ["When", "Kind", "What she decided", "Why", "Based on", "Result"])
+        self.reasoning_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.reasoning_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        _make_readable(self.reasoning_table, wrap_column=3)
+        reasoning_layout.addWidget(self.reasoning_table)
+
+        reasoning_btns = QHBoxLayout()
+        self.reasoning_refresh_btn = QPushButton("🔄 Refresh")
+        self.reasoning_refresh_btn.clicked.connect(self.refresh_reasoning)
+        reasoning_btns.addWidget(self.reasoning_refresh_btn)
+        reasoning_layout.addLayout(reasoning_btns)
+
+        self.reasoning_tab.setLayout(reasoning_layout)
+
         self.tabs.addTab(self.alex_tab, "A.L.E.X.")
         self.tabs.addTab(self.requests_tab, "Modules")
         self.tabs.addTab(self.activity_tab, "Activity")
         self.tabs.addTab(self.notifications_tab, "Notifications")
+        self.tabs.addTab(self.reasoning_tab, "🧭 Reasoning")
         self.tabs.addTab(self.users_tab, "Users")
         self.tabs.addTab(self.ollama_tab, "Ollama")
         self.tabs.addTab(self.system_log, "System")
@@ -892,6 +930,7 @@ class AlexController(QWidget):
         self.load_db_tables()
         self.refresh_requests()
         self.refresh_notifications()
+        self.refresh_reasoning()
 
         # Silent unless it finds something — no need to nag on a clean start.
         self.check_for_orphans(prompt_if_none=False)
@@ -1916,6 +1955,26 @@ class AlexController(QWidget):
                 self.alex_log.append(f"⚠️ Failed to decline request #{report_id}: {e}")
 
         self.refresh_search_activity()
+
+    def refresh_reasoning(self):
+        """One list of what she decided and why, newest first."""
+        try:
+            rows = asyncio.run(fetch_decisions(limit=200))
+        except Exception as e:
+            self.alex_log.append(f"⚠️ Failed to load her reasoning: {e}")
+            rows = []
+
+        self.reasoning_table.setRowCount(len(rows))
+        for row, d in enumerate(rows):
+            _fill_row(self.reasoning_table, row, [
+                str(d["created_at"])[:19],
+                d["kind"],
+                d["summary"],
+                d["reasoning"] or "",
+                d["evidence"] or "",
+                d["outcome"] or "",
+            ])
+        self.reasoning_table.resizeRowsToContents()
 
     def refresh_notifications(self):
         """Populates the Notifications tab's two tables — the exact same

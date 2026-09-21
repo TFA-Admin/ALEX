@@ -150,6 +150,33 @@ async def init_db():
             delivered INTEGER DEFAULT 0
         )''')
 
+        # 🧭 DECISIONS (2026-09-20) — one place for why she did things.
+        #
+        # Craig: "I'd like to see her thought process for everything she
+        # does." Every mechanism built for her so far records its own
+        # outcome in its own table — conclusions, corrections, personality
+        # changes, build requests, query reports, security events — and the
+        # reasoning, where it exists at all, is a [ACTION] line in a log
+        # file. Reading what she decided and why means opening six tabs and
+        # a text file, so in practice nobody reads it.
+        #
+        # This is deliberately NOT another mechanism. Nothing decides
+        # anything here; it is the single narrative record of choices made
+        # elsewhere, so there is one place to look. The authoritative row
+        # stays in its own table — `ref` points back at it.
+        await db.execute('''
+        CREATE TABLE IF NOT EXISTS decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            reasoning TEXT,
+            evidence TEXT,
+            outcome TEXT,
+            actor TEXT,
+            ref TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+
         # ✋ CORRECTIONS (2026-09-20) — "stop saying that", remembered and
         # escalating. Craig: "It's a simple disciplinary correction, but
         # keep doing it and the impact is worse."
@@ -467,6 +494,57 @@ async def add_memory(user, prompt, response, category="conversation", embedding=
             (user, prompt, response, category, emb_blob)
         )
         await db.commit()
+
+
+async def record_decision(kind: str, summary: str, reasoning: str = None,
+                          evidence: str = None, outcome: str = None,
+                          actor: str = None, ref: str = None) -> int:
+    """One line in the record of why she did something.
+
+    Craig: "I'd like to see her thought process for everything she does."
+
+    Call this wherever a real choice is made. It is a narrative record,
+    not a mechanism — nothing reads it back to change behaviour, and
+    losing a row must never change what she did, so every call site treats
+    a failure here as unimportant.
+
+    kind      a short slug: 'conclusion', 'correction', 'revision',
+              'proposal', 'refusal', 'curiosity', 'speaker'
+    summary   what she decided, in one line
+    reasoning WHY — hers where she produced it, the rule's where the
+              decision was deterministic. The distinction matters and the
+              text should make it obvious which it was.
+    evidence  what it was based on
+    outcome   what actually happened as a result
+    actor     whose turn prompted it
+    ref       'conclusions#12' etc — the authoritative row elsewhere
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "INSERT INTO decisions (kind, summary, reasoning, evidence, "
+            "outcome, actor, ref) VALUES (?,?,?,?,?,?,?)",
+            (kind, summary, reasoning, evidence, outcome, actor, ref))
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def fetch_decisions(limit: int = 100, kind: str = None):
+    sql = ("SELECT id, kind, summary, reasoning, evidence, outcome, actor, "
+           "ref, created_at FROM decisions")
+    args = []
+    if kind:
+        sql += " WHERE kind=?"
+        args.append(kind)
+    sql += " ORDER BY id DESC LIMIT ?"
+    args.append(limit)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(sql, args)
+        rows = await cursor.fetchall()
+
+    keys = ["id", "kind", "summary", "reasoning", "evidence", "outcome",
+            "actor", "ref", "created_at"]
+    return [dict(zip(keys, r)) for r in rows]
 
 
 async def record_correction(user: str, phrase: str, honored: bool = True,

@@ -56,7 +56,7 @@ from db.db import (
     touch_learned_knowledge, get_user_role, resolve_retain_approval,
     create_query_report, attach_search_findings, fetch_recent_memory,
     record_correction, fetch_corrections, get_user_role as _role,
-    fetch_active_conclusions,
+    fetch_active_conclusions, record_decision,
     get_personality_hard_rules
 )
 from core.knowledge_filter import is_worth_keeping
@@ -317,6 +317,16 @@ class System(BaseSystem):
                     reason=None if is_creator else "not the creator — hers to weigh")
 
                 session["just_corrected"] = (phrase, strength, is_creator)
+                await record_decision(
+                    "correction",
+                    f'Told to stop saying "{phrase}"',
+                    reasoning=("The rule decided this, not her: she was told "
+                               "to stop, and a word count over her own recent "
+                               "replies found what she had been repeating."),
+                    evidence=f"said in {corr.MIN_OCCURRENCES}+ of her last 5 replies",
+                    outcome=(f"strength {strength} ({corr.consequence(strength)})"
+                             + ("" if is_creator else " — not the creator, so hers to weigh")),
+                    actor=user_id)
                 logger.info(
                     f"[ACTION] Correction from {user_id}: {phrase!r} now at "
                     f"strength {strength} ({corr.consequence(strength)}), "

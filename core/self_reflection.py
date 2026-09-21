@@ -19,6 +19,7 @@ from db.db import (
     queue_curiosity_question, get_personality_hard_rules,
     fetch_undelivered_curiosity_questions, curiosity_topic_seen,
     create_conclusion, fetch_active_conclusions, create_module_build_request,
+    record_decision,
     fetch_recent_module_build_requests, get_creator_identity,
     get_last_reflection_memory_id, set_last_reflection_memory_id,
     get_seconds_since_last_activity, get_seconds_since_last_personality_change,
@@ -739,6 +740,12 @@ async def run_self_reflection():
         if curiosity:
             topic, question = curiosity
             await queue_curiosity_question(topic, question)
+            await record_decision(
+                "curiosity",
+                f"Wants to know about {topic}",
+                reasoning="It came up and she had no real knowledge of it.",
+                evidence=question,
+                outcome="queued to ask him")
             outcome.append(f"queued a question about {topic!r}")
             logger.info(f"[ACTION] Queued curiosity question: {question}")
         else:
@@ -775,6 +782,13 @@ async def run_self_reflection():
                 f"revised from #{conclusion['id']} (doubt {doubt}/10): {reason}",
                 supersedes=conclusion["id"], reason=reason)
             revised += 1
+            await record_decision(
+                "revision",
+                f"Changed her mind: {conclusion['statement']}",
+                reasoning=reason,
+                evidence=f"doubt {doubt}/10 after re-reading recent conversation",
+                outcome=f"replaced with: {replacement}",
+                ref=f"conclusions#{new_id}")
             outcome.append(f"revised #{conclusion['id']} -> #{new_id}")
             logger.info(
                 f"[ACTION] Revised conclusion #{conclusion['id']} -> #{new_id} "
@@ -813,6 +827,14 @@ async def run_self_reflection():
                 cid = await create_conclusion(
                     conclusion["statement"], conclusion["kind"],
                     conclusion["evidence"])
+                await record_decision(
+                    "conclusion",
+                    f"Decided: {conclusion['statement']}",
+                    reasoning="Her own inference while reflecting on recent "
+                              "conversation and her own state.",
+                    evidence=conclusion["evidence"],
+                    outcome="recorded as an active belief",
+                    ref=f"conclusions#{cid}")
                 outcome.append(f"concluded #{cid}")
                 logger.info(
                     f"[ACTION] Concluded #{cid} ({conclusion['kind']}): "
@@ -849,6 +871,13 @@ async def run_self_reflection():
                 rid = await create_module_build_request(
                     await get_creator_name(), name, purpose,
                     status="pending", origin="self_reflection")
+                await record_decision(
+                    "proposal",
+                    f"Asked to build a module: {name}",
+                    reasoning=purpose,
+                    evidence="a capability she reached for and did not have",
+                    outcome="build request raised, waiting on his approval",
+                    ref=f"module_build_requests#{rid}")
                 outcome.append(f"proposed module {name!r} (request #{rid})")
                 logger.info(
                     f"[ACTION] Proposed a module she does not have: {name} "
@@ -893,6 +922,12 @@ async def run_self_reflection():
             current_desc, new_desc, reason, hard_rules=hard_rules)
 
         if not allowed:
+            await record_decision(
+                "refusal",
+                "Stopped herself changing her own personality",
+                reasoning=f"The skeptic refused it: {why}",
+                evidence=f"she proposed: {new_desc}",
+                outcome="personality left as it was")
             outcome.append(f"refused own personality change ({why})")
             logger.info(
                 f"[PERSONALITY] Refused her own change — {why}. "
