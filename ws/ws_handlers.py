@@ -302,6 +302,16 @@ async def ws_text(websocket: WebSocket):
         locked_fields[user_id] = {"all": True}
 
         if user_id.startswith("pending_user_"):
+            # 2026-09-21 (Craig: "she does ask but then nothing"): the page
+            # keeps its microphone locked until it hears her readiness, and
+            # that used to be sent only after __PROFILE__ — which comes
+            # AFTER onboarding. So she asked who he was and the page dropped
+            # his answer; her 25s wait timed out. Say the state now, before
+            # she asks anything.
+            try:
+                await websocket.send_text(readiness.signal_text())
+            except Exception:
+                pass
             user_id, onboard_heard_text = await identity_manager.onboard_new_user(
                 websocket,
                 user_id,

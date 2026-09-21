@@ -938,6 +938,17 @@ ws.onmessage = (e)=>{
         return;
     }
 
+    // 2026-09-21 (Craig: "she does ask but then nothing" / "seems like
+    // she's not actually hearing me"): during onboarding she asks who you
+    // are before any __PROFILE__, and the microphone gate below waited for
+    // a readiness signal that only came after the profile — so the answer
+    // was dropped on this side. If she is talking to us in words, she is
+    // ready; unlock. The server now also sends its state before asking.
+    if(typeof data === "string" && !data.startsWith("__") && !alexReady){
+        logDebug("She spoke before the profile — unlocking the microphone");
+        setReadiness("ready");
+    }
+
     if(typeof data === "string" && data.startsWith("__PROFILE__")){
         const json = JSON.parse(data.replace("__PROFILE__", ""));
         let html = "";
