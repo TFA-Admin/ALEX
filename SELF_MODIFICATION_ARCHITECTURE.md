@@ -97,18 +97,19 @@ items when they land.
 first.** It corrects two claims made in the small hours of 2026-09-21 and
 records a loop that was closed and reopened the same day.
 
-**Where the 2026-09-21 session stopped (12:55 EDT):** program items 1
+**Where the 2026-09-21 session stopped (14:10 EDT):** program items 1
 (tools, first slice), 2, 3 (9b chosen), 4 (deliberation, merged with the
-intent call) and 13 (Controller pass — `controller/` package, People by
-name via the new `sessions` table) are landed; see "## Program approved
-2026-09-21" for each item's measurements. **Owed: one restart of her**
-(creator gate in `core/tools.py`, memory-line reword in
-`core/intent_classifier.py`, and the session rows in `ws/ws_handlers.py`
-+ `main.py`) **and a relaunch of the Controller** (it is a new package;
-the running one is the old file). Commits since the last push are
-unpushed — push only when asked. Next in order: 5 (harness as spine,
-scores exposed to her), 6 (self-modification container), then 7's
-decision, 9, 10, 11. Personality "voice" arm undecided.
+intent call), 13 (Controller pass — `controller/` package, People by
+name via the new `sessions` table; Craig restarted her and relaunched it
+at 13:22) and 5 (intent suite, `eval_runs` recording, `my_scores`,
+Scores tab) are landed; see "## Program approved 2026-09-21" for each
+item's measurements. **Owed: one restart of her** for item 5's core
+changes (`core/intent_classifier.py` category-4 clause, `core/tools.py`
+my_scores) and a Controller relaunch for the Scores tab. Commits since
+the last push are unpushed — push only when asked. Next in order: 6
+(self-modification container — the harness gate now has `eval_runs` to
+read), then 7's decision, 9, 10, 11. Personality "voice" arm undecided.
+Other-user access: Craig put it off ("We still have a lot to do").
 
 **Current objective: give her the capacity to disagree, and stop the
 reflection loop from sanding it off.** (Design Principle 12.) Chosen
@@ -866,6 +867,51 @@ The items, in build order:
 5. **The harness as the spine.** Approved. Rebuild the intent suite (never
    committed), add the 15 real status-check misfires as cases, record
    before/after per change, expose scores to her (see above).
+
+   **LANDED 2026-09-21 (14:05).** Four pieces:
+
+   - `tests/suites/intent.py` — 84 cases, nearly all Craig's real
+     utterances from `memory` (2026-07-17 → 09-21), including every one
+     that produced the canned "All core systems online" reply: 15 real
+     requests (`status_true`) and 27 sentences that got the report and
+     should not have (`status_misfire`), plus alias / colour / job /
+     permission / hypothetical / conversation. **No judge**: the label is
+     the truth and the classifier's output must match it. Judgement
+     calls are written in the file's docstring ("how are you feeling?"
+     is `none`).
+   - `tests/harness.py` — a suite that defines `evaluate(case)` runs
+     deterministically (no throwaway users, no stance judge). **Every
+     run of any suite is recorded** in the new `eval_runs` table (suite,
+     kind, commit+dirty, her model, judge model, trials, score, per
+     category, failed case ids, `--note`); `--no-record` to skip. The
+     judge now defaults to HER model instead of a fixed 7b — with one
+     model slot, a different judge forced a reload on every call.
+   - `core/tools.py` `my_scores` — latest and previous run per suite,
+     weakest categories, in local time. Not creator-only: nothing in it
+     is about anyone but her. Listed in COMMANDS.md.
+   - Controller → Her → Scores: the same rows.
+
+   **Measured, 2 trials per case, qwen3.5:9b:**
+
+   | run | score | status_true | status_misfire | note |
+   |---|---|---|---|---|
+   | #1 baseline (87a36f1 wording) | 164/168 | 26/30 | **54/54** | |
+   | #2 category 4 + "disabled or off / status of a named part" | **166/168** | 28/30 | 54/54 | kept |
+
+   **The status-check anomaly is a 7b problem.** On the 9b, all 27 real
+   misfires classify as `none` on both trials; the 9b's error is the
+   opposite and smaller — two real requests it did not recognise
+   ("do you have any disabled system?", "tell me what the status of
+   ollama and only ollama is"). One added clause recovered the second
+   with no regression; the first still reads as `none` and stays a known
+   miss rather than the excuse for a third clause. ANOMALIES updated.
+
+   **Not done, deliberately:** `scores` as a deliberation resource
+   (`core/deliberation.py` RESOURCES). The 0-10 distribution was measured
+   for six resources; adding one changes the prompt and needs its own
+   measurement. She reaches her scores through in-turn tool calling.
+
+   Needs her restart (core/intent_classifier.py, core/tools.py).
 6. **The self-modification container.** Approved. Worktree per proposal,
    staging instance on another port launched and killed by the Controller
    with a DB snapshot, Versions tab (Launch / Talk / Approve=merge+restart /

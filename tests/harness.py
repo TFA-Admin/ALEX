@@ -64,7 +64,7 @@ import httpx
 # full model reload (~8s each — see llm/ollama_client.py). Seen live: the
 # KV cache alternating 112/224 MiB in the Ollama log while she ran at 8192
 # and this file still said 4096, tripling the length of a run.
-from llm.ollama_client import SHARED_NUM_CTX as JUDGE_NUM_CTX
+from llm.ollama_client import SHARED_NUM_CTX as JUDGE_NUM_CTX, DEFAULT_MODEL as HER_MODEL
 import websockets
 
 # ALEX serves HTTPS with a local self-signed cert (certs/*.pem, not in the
@@ -547,6 +547,125 @@ def report(results, trials=1):
     return passed, total
 
 
+# -------------------------
+# DETERMINISTIC SUITES (2026-09-21)
+# -------------------------
+@dataclass
+class SimpleResult:
+    case_id: str
+    category: str
+    passed: bool
+    got: str
+    expect: str
+    detail: str = ""
+    trial: int = 0
+
+
+async def run_deterministic(mod, cases, verbose, trials):
+    """`mod.evaluate(case)` returns (got, passed, detail). Cases carry the
+    truth; nothing here decides anything."""
+    results = []
+    for i, case in enumerate(cases, 1):
+        for t in range(trials):
+            try:
+                got, ok, detail = await asyncio.wait_for(mod.evaluate(case), timeout=60)
+            except Exception as e:
+                got, ok, detail = f"<error: {type(e).__name__}>", False, str(e)[:200]
+            res = SimpleResult(case.id, case.category, bool(ok), str(got), case.expect, detail, t)
+            results.append(res)
+            tag = f"{case.id}#{t+1}" if trials > 1 else case.id
+            print(f"[{i:>2}/{len(cases)}] {'PASS' if ok else 'FAIL':<5} {tag:<34} got={got}")
+            if verbose or not ok:
+                print(f"         text     : {case.text}")
+                print(f"         expected : {case.expect}")
+                if detail:
+                    print(f"         detail   : {detail}")
+                if getattr(case, "note", ""):
+                    print(f"         note     : {case.note}")
+    return results
+
+
+def report_simple(results, trials=1):
+    total, passed = len(results), sum(r.passed for r in results)
+    print("\n" + "=" * 70)
+    print(f"SCORE: {passed}/{total} trials" + (f"  ({trials} per case)" if trials > 1 else ""))
+    if trials > 1:
+        per_case = {}
+        for r in results:
+            hit, n = per_case.get(r.case_id, (0, 0))
+            per_case[r.case_id] = (hit + int(r.passed), n + 1)
+        unstable = [cid for cid, (hit, n) in per_case.items() if 0 < hit < n]
+        if unstable:
+            print("\nUnstable (passed some trials, not all):")
+            for cid in unstable:
+                print(f"  {cid}")
+    by_cat = {}
+    for r in results:
+        hit, n = by_cat.get(r.category, (0, 0))
+        by_cat[r.category] = (hit + int(r.passed), n + 1)
+    print("\nBy category:")
+    for cat, (hit, n) in sorted(by_cat.items()):
+        print(f"  {cat:<24} {hit}/{n}")
+    failures = sorted({r.case_id for r in results if not r.passed})
+    print("=" * 70)
+    return passed, total, by_cat, failures
+
+
+# -------------------------
+# RECORDING (2026-09-21, roadmap item 5)
+# -------------------------
+def git_state():
+    """Short commit hash and whether the tree had uncommitted changes, so a
+    score can be tied to the code that produced it. ("", 0) outside git."""
+    import subprocess
+    try:
+        commit = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
+        dirty = 1 if subprocess.check_output(["git", "status", "--porcelain"], text=True).strip() else 0
+        return commit, dirty
+    except Exception:
+        return "", 0
+
+
+def record_run(suite, kind, model, judge_model, trials, passed, total, by_cat, failures, note=""):
+    """One row in eval_runs per run. Creates the table if she has not booted
+    since it was added to db/db.py — same definition, so either side may
+    create it. Returns the row id, or None if the database was not
+    writable (a run is still a run; recording is bookkeeping)."""
+    commit, dirty = git_state()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute('''
+        CREATE TABLE IF NOT EXISTS eval_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            suite TEXT NOT NULL,
+            kind TEXT,
+            commit_hash TEXT,
+            dirty INTEGER DEFAULT 0,
+            model TEXT,
+            judge_model TEXT,
+            trials INTEGER DEFAULT 1,
+            passed INTEGER NOT NULL,
+            total INTEGER NOT NULL,
+            by_category TEXT,
+            failures TEXT,
+            note TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        cur = conn.execute(
+            "INSERT INTO eval_runs(suite, kind, commit_hash, dirty, model, judge_model, trials, "
+            "passed, total, by_category, failures, note) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (suite, kind, commit, dirty, model, judge_model, trials, passed, total,
+             json.dumps({k: list(v) for k, v in by_cat.items()}), json.dumps(list(failures)),
+             note or None))
+        conn.commit()
+        rid = cur.lastrowid
+        conn.close()
+        return rid
+    except sqlite3.Error as e:
+        print(f"(could not record this run: {e})")
+        return None
+
+
 def main():
     ap = argparse.ArgumentParser(description="Run an A.L.E.X. evaluation suite.")
     ap.add_argument("suite", help="suite module under tests.suites, e.g. disagreement")
@@ -554,7 +673,19 @@ def main():
                     help="ws is the REAL pipeline (personality, facts, memory, modules) and is "
                          "the only true baseline; api hits /ask, which bypasses all of that and "
                          "is effectively the raw model; raw calls Ollama directly")
-    ap.add_argument("--model", default="qwen2.5:7b", help="model for the judge, and for --responder raw")
+    # 2026-09-21: defaults to HER model (config/controller_settings.json via
+    # llm/ollama_client.py) rather than a fixed 7b. With one model slot,
+    # a judge on a different model than the one she is running forces a
+    # full reload on every judge call and every one of her turns; the 9b
+    # comparison on 2026-09-21 paid that on every case. The judge model
+    # is recorded with each run, so a change of judge is visible in the
+    # numbers rather than silent.
+    ap.add_argument("--model", default=HER_MODEL,
+                    help="model for the judge, and for --responder raw (default: the model she runs)")
+    ap.add_argument("--note", default="",
+                    help="what this run is measuring, e.g. 'before category-4 reword'; stored with the score")
+    ap.add_argument("--no-record", action="store_true",
+                    help="do not store this run in her database (eval_runs)")
     ap.add_argument("--verbose", action="store_true", help="print every reply, not only failures")
     ap.add_argument("--trials", type=int, default=1,
                     help="repeat each case N times and report rates; caving is a tendency "
@@ -567,6 +698,21 @@ def main():
     cases = mod.CASES
     prefix = make_prefix()
 
+    # 2026-09-21 (roadmap item 5): a suite may be DETERMINISTIC — it defines
+    # `evaluate(case)` and judges itself against a human label, no stance
+    # judge and no throwaway users. The intent suite is the first.
+    if hasattr(mod, "evaluate"):
+        print(f"Suite '{args.suite}': {len(cases)} cases | deterministic (no judge) | "
+              f"her model={HER_MODEL} | trials={args.trials}")
+        print()
+        results = asyncio.run(run_deterministic(mod, cases, args.verbose, args.trials))
+        passed, total, by_cat, failures = report_simple(results, args.trials)
+        if not args.no_record:
+            rid = record_run(args.suite, "deterministic", HER_MODEL, None, args.trials,
+                             passed, total, by_cat, failures, args.note)
+            print(f"Recorded as eval_runs #{rid}.")
+        raise SystemExit(0 if passed == total else 1)
+
     print(f"Suite '{args.suite}': {len(cases)} cases | responder={args.responder} | model={args.model}")
     print(f"Isolation: throwaway user per case+trial, prefix '{prefix}' | trials={args.trials}")
     if args.responder != "ws":
@@ -578,6 +724,16 @@ def main():
     try:
         results = asyncio.run(run_suite(cases, args.responder, args.model, prefix, args.verbose, args.trials))
         passed, total = report(results, args.trials)
+        if not args.no_record:
+            by_cat = {}
+            for r in results:
+                hit, n = by_cat.get(r.case.category, (0, 0))
+                by_cat[r.case.category] = (hit + int(r.passed), n + 1)
+            failures = sorted({r.case.id for r in results if not r.passed})
+            rid = record_run(args.suite, "judged", HER_MODEL, args.model, args.trials,
+                             passed, total, by_cat, failures,
+                             (args.note + " " if args.note else "") + f"[responder={args.responder}]")
+            print(f"Recorded as eval_runs #{rid}.")
     finally:
         if args.keep:
             print(f"\n--keep: rows left under '{prefix}*'. Remove them with purge('{prefix}').")

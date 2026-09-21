@@ -49,6 +49,7 @@ Ask naturally. She chooses to look before answering; these are her tools
 | read her own log — **creator only**; it carries every user's turns | `read_log` | "Anything in your log I should know about?" |
 | read her own source, a page at a time — **creator only** | `read_my_source` | "Read me the top of core/self_model.py." |
 | the clock | `current_time`, and always in her context | never something she guesses |
+| read her own test scores: latest and previous per suite, weakest categories | `my_scores` | "What are you bad at?" / "Did the last change help?" |
 | her module names | always in her context | never something she guesses |
 
 Not a tool, by design: web search (section 5) — it goes online, so it

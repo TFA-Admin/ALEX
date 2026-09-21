@@ -22,7 +22,7 @@ from db.db import (
     log_personality_change, reset_all_phrases, add_personality_hard_rule,
     get_personality_hard_rules, remove_personality_hard_rule,
     fetch_recent_personality_changes,
-    fetch_active_conclusions, fetch_decisions, fetch_curiosity_queue,
+    fetch_active_conclusions, fetch_decisions, fetch_curiosity_queue, fetch_eval_runs,
     list_module_registry, fetch_module_versions, get_module_version_code,
     get_module_registry_entry, register_module_version,
     persona_disabled, PERSONA_FLAG_PATH,
@@ -50,6 +50,7 @@ class HerView(QWidget):
         self.inner.addTab(self._build_curiosity(), "Curiosity")
         self.inner.addTab(self._build_modules(), "Modules")
         self.inner.addTab(self._build_health(), "Health")
+        self.inner.addTab(self._build_scores(), "Scores")
         layout.addWidget(self.inner)
         self.setLayout(layout)
 
@@ -681,9 +682,63 @@ class HerView(QWidget):
         self.fault_check_output.setPlainText(actions.run_fault_check())
 
     # =====================================================================
+    # SCORES (2026-09-21, roadmap item 5)
+    # =====================================================================
+    # Every harness run, newest first. The same rows she reads through
+    # my_scores, so what she says about herself and what this shows are
+    # one record. Item 6's approve/reject gate will read these too.
+    def _build_scores(self):
+        page = QWidget()
+        lay = QVBoxLayout()
+        lay.addWidget(QLabel(
+            "Her measured scores — every run of tests/harness.py, newest first. "
+            "Run one with:  python -X utf8 -m tests.harness <suite> --trials N --note \"what changed\""))
+        self.scores_table = QTableWidget()
+        self.scores_table.setColumnCount(8)
+        self.scores_table.setHorizontalHeaderLabels(
+            ["When", "Suite", "Score", "Trials", "Her model", "Judge", "Commit", "By category / note"])
+        self.scores_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.scores_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        make_readable(self.scores_table, wrap_column=7)
+        lay.addWidget(self.scores_table)
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        self.scores_refresh_btn = QPushButton("🔄 Refresh")
+        self.scores_refresh_btn.clicked.connect(self.refresh_scores)
+        btns.addWidget(self.scores_refresh_btn)
+        lay.addLayout(btns)
+        page.setLayout(lay)
+        return page
+
+    def refresh_scores(self):
+        try:
+            rows = asyncio.run(fetch_eval_runs(limit=100))
+        except Exception as e:
+            self.note(f"⚠️ Failed to load her scores: {e}")
+            rows = []
+
+        self.scores_table.setRowCount(len(rows))
+        for row, r in enumerate(rows):
+            cats = r.get("by_category") or {}
+            detail = ", ".join(f"{k} {v[0]}/{v[1]}" for k, v in cats.items()
+                               if isinstance(v, (list, tuple)) and len(v) == 2)
+            if r.get("failures"):
+                detail += (" — failed: " if detail else "failed: ") + ", ".join(map(str, r["failures"][:12]))
+                if len(r["failures"]) > 12:
+                    detail += f" (+{len(r['failures']) - 12})"
+            if r.get("note"):
+                detail = f"{r['note']} | {detail}" if detail else r["note"]
+            commit = (r.get("commit_hash") or "") + ("+dirty" if r.get("dirty") else "")
+            fill_row(self.scores_table, row, [
+                to_local(r.get("created_at")), r["suite"], f"{r['passed']}/{r['total']}",
+                r.get("trials") or 1, r.get("model") or "", r.get("judge_model") or "",
+                commit, detail])
+        self.scores_table.resizeRowsToContents()
+
     def refresh_all(self):
         self.refresh_personality()
         self.refresh_beliefs()
         self.refresh_decisions()
         self.refresh_curiosity()
         self.refresh_module_status()
+        self.refresh_scores()

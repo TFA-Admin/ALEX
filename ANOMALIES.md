@@ -372,9 +372,18 @@ the way that i would expect".
 ANY phrasing, including short/casual ones", and it does. Each hit replaces
 her voice with a report.
 
-**Not fixed yet.** Changing that prompt has regressed the classifier twice
-before; the 15 real triggers above are the start of the eval set it needs
-first.
+**Measured 2026-09-21 (14:00), qwen3.5:9b, `tests/suites/intent.py`, 2
+trials per case.** All 27 real sentences that got the report under the
+7b classify as `none` on the 9b, both trials (54/54). **This was a 7b
+problem and the model change closed it.** The 9b's own error is the
+reverse and smaller: two real requests read as `none` ("do you have any
+disabled system?", "tell me what the status of ollama and only ollama
+is"). One clause added to category 4 ("asking whether any of her systems
+or modules are disabled or off, or the status of one named part of her")
+recovered the second with no regression anywhere (164/168 → 166/168).
+The first still misses and is left as a known miss; `eval_runs` #1 and
+#2 hold the before and after. Re-run the suite before any further change
+to that prompt.
 
 ### Curiosity: asked twice, answered once, kept nothing
 **Seen** 2026-09-21. Six questions on file, none with a recorded answer,

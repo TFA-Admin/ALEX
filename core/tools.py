@@ -51,6 +51,7 @@ from datetime import datetime
 from db.db import (
     fetch_vector_memories, fetch_recent_memory, list_module_registry,
     record_decision, get_user_role,
+    fetch_eval_runs,
 )
 from core.embedding_engine import embed, cosine_similarity
 from core import self_model
@@ -139,6 +140,12 @@ TOOLS = [
         ["path", "start_line"]),
     _fn("current_time",
         "The current local date, time and day of the week."),
+    _fn("my_scores",
+        "Your measured test scores: the evaluation suites he runs against "
+        "you (disagreement, pressure, authority, intent and others) — the "
+        "latest result of each, the one before it, and where you failed. "
+        "Use it when he asks how you are doing, what you are bad at, or "
+        "whether a change helped."),
 ]
 
 TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
@@ -301,6 +308,59 @@ def _current_time() -> str:
     return now.strftime("%A, %Y-%m-%d %H:%M local time")
 
 
+async def _my_scores() -> str:
+    """Her numbers, as she may read them (roadmap item 5: "expose scores
+    to her"). Latest run per suite with the previous one for the trend,
+    and the weakest categories of the latest — enough to answer "what am
+    I bad at" from measurement rather than self-report."""
+    runs = await fetch_eval_runs(limit=60)
+    if not runs:
+        return ("No test scores are recorded yet. He measures you with "
+                "tests/harness.py; each run is stored once it has run.")
+    by_suite = {}
+    for r in runs:
+        by_suite.setdefault(r["suite"], []).append(r)
+
+    def _local(ts):
+        # rows are stamped in UTC by sqlite; she thinks in local time
+        try:
+            from datetime import timezone
+            dt = datetime.strptime(str(ts)[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            return dt.astimezone().strftime("%Y-%m-%d %H:%M")
+        except (TypeError, ValueError):
+            return str(ts or "")[:16]
+
+    lines = []
+    for suite, hist in by_suite.items():
+        latest = hist[0]
+        when = _local(latest.get("created_at"))
+        line = (f"{suite}: {latest['passed']}/{latest['total']} "
+                f"({when}, on {latest.get('model') or '?'}")
+        if latest.get("trials", 1) and latest["trials"] > 1:
+            line += f", {latest['trials']} trials per case"
+        line += ")"
+        if len(hist) > 1:
+            prev = hist[1]
+            line += (f"; before that {prev['passed']}/{prev['total']} "
+                     f"({_local(prev.get('created_at'))[:10]}, {prev.get('model') or '?'})")
+        cats = latest.get("by_category") or {}
+        weak = []
+        for cat, v in cats.items():
+            try:
+                hit, n = int(v[0]), int(v[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if n and hit < n:
+                weak.append((hit / n, f"{cat} {hit}/{n}"))
+        if weak:
+            weak.sort()
+            line += ". Weakest: " + ", ".join(w for _, w in weak[:3])
+        if latest.get("note"):
+            line += f". Note: {latest['note']}"
+        lines.append(line)
+    return "Your measured scores, latest per suite:\n" + "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # DISPATCH
 # ---------------------------------------------------------------------------
@@ -349,6 +409,8 @@ async def run_tool(name: str, args, user_id: str) -> str:
         elif name == "read_my_source":
             coro = asyncio.to_thread(_read_my_source, str(args.get("path", "")),
                                      args.get("start_line", 1))
+        elif name == "my_scores":
+            coro = _my_scores()
         else:
             coro = asyncio.to_thread(_current_time)
         result = await asyncio.wait_for(coro, timeout=TOOL_TIMEOUT_S)

@@ -177,6 +177,31 @@ async def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''')
 
+        # 📊 EVAL RUNS (2026-09-21, roadmap item 5: the harness as the
+        # spine). Every run of tests/harness.py records its score here, so
+        # a change to a prompt or a threshold has a before and an after
+        # that outlive the terminal, and so she can read her own numbers
+        # (core/tools.py my_scores). The harness writes with plain sqlite3
+        # and creates the table itself if she has not booted since this
+        # was added; this definition is the one her readers rely on.
+        await db.execute('''
+        CREATE TABLE IF NOT EXISTS eval_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            suite TEXT NOT NULL,
+            kind TEXT,
+            commit_hash TEXT,
+            dirty INTEGER DEFAULT 0,
+            model TEXT,
+            judge_model TEXT,
+            trials INTEGER DEFAULT 1,
+            passed INTEGER NOT NULL,
+            total INTEGER NOT NULL,
+            by_category TEXT,
+            failures TEXT,
+            note TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+
         # ✋ CORRECTIONS (2026-09-20) — "stop saying that", remembered and
         # escalating. Craig: "It's a simple disciplinary correction, but
         # keep doing it and the impact is worse."
@@ -613,6 +638,39 @@ async def fetch_profile_names() -> list:
         cursor = await db.execute("SELECT username FROM profiles")
         rows = await cursor.fetchall()
     return [r[0] for r in rows if r[0]]
+
+
+# -------------------------
+# EVAL RUNS (2026-09-21) — see the table comment in init_db()
+# -------------------------
+async def fetch_eval_runs(suite: str = None, limit: int = 40):
+    """Newest first. by_category and failures come back decoded."""
+    sql = ("SELECT id, suite, kind, commit_hash, dirty, model, judge_model, trials, passed, total, "
+           "by_category, failures, note, created_at FROM eval_runs")
+    params = []
+    if suite:
+        sql += " WHERE suite=?"
+        params.append(suite)
+    sql += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+    async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            cursor = await db.execute(sql, params)
+            rows = await cursor.fetchall()
+        except Exception:
+            return []
+    keys = ["id", "suite", "kind", "commit_hash", "dirty", "model", "judge_model", "trials",
+            "passed", "total", "by_category", "failures", "note", "created_at"]
+    out = []
+    for r in rows:
+        d = dict(zip(keys, r))
+        for k in ("by_category", "failures"):
+            try:
+                d[k] = json.loads(d[k]) if d[k] else ({} if k == "by_category" else [])
+            except (TypeError, ValueError):
+                d[k] = {} if k == "by_category" else []
+        out.append(d)
+    return out
 
 
 async def record_decision(kind: str, summary: str, reasoning: str = None,
