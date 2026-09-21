@@ -55,10 +55,11 @@ from db.db import (
     get_personality, fetch_active_knowledge,
     touch_learned_knowledge, get_user_role, resolve_retain_approval,
     create_query_report, attach_search_findings, fetch_recent_memory,
+    record_correction, fetch_corrections, get_user_role as _role,
     get_personality_hard_rules
 )
 from core.knowledge_filter import is_worth_keeping
-from core import self_model
+from core import self_model, corrections as corr
 from systems.controller._role_gates import require_creator
 from core.phrasebook import get_phrase
 from config.logger_config import logger
@@ -285,6 +286,44 @@ class System(BaseSystem):
             return keep_reply
 
         # -------------------------
+        # "STOP SAYING THAT" (2026-09-20)
+        # -------------------------
+        # Craig: "I don't want banned phrases per say I just want her to
+        # listen... she would review what she said for duplication and be
+        # able to identify it." So she works out WHAT he means from her own
+        # recent output rather than being handed a string, and a repeat of
+        # the same correction escalates it.
+        #
+        # Detected here but never answered here — the response is still
+        # hers, generated with a context block saying she has just been
+        # pulled up. Same shape as the awareness notice, and for the same
+        # reason: the fact is deterministic, the words are hers.
+        if corr.is_correction(user_input):
+            recent = await fetch_recent_memory(user_id, limit=5)
+            phrase = corr.find_repeated([r["response"] for r in recent])
+
+            if phrase:
+                # His corrections bind. Anyone else's are hers to weigh —
+                # recorded either way so the decision is visible, never
+                # silently dropped and never silently obeyed.
+                try:
+                    is_creator = await _role(user_id) == "creator"
+                except Exception:
+                    is_creator = False
+
+                strength = await record_correction(
+                    user_id, phrase, honored=is_creator,
+                    reason=None if is_creator else "not the creator — hers to weigh")
+
+                session["just_corrected"] = (phrase, strength, is_creator)
+                logger.info(
+                    f"[ACTION] Correction from {user_id}: {phrase!r} now at "
+                    f"strength {strength} ({corr.consequence(strength)}), "
+                    f"{'binding' if is_creator else 'advisory only'}")
+            else:
+                logger.info(f"[ACTION] {user_id} corrected her but nothing was repeated")
+
+        # -------------------------
         # SUPPRESS — a bare acknowledgment ("thanks") right after her own
         # closing-type statement ("let me know if you need anything else")
         # means the exchange is over, not a new thing to respond to. Both
@@ -412,6 +451,27 @@ class System(BaseSystem):
         # dropped by the browser. Popped here rather than at the top of
         # handle() so it survives the early-return paths above, and is only
         # spent on a turn she actually speaks in her own voice.
+        # What he has told her to stop saying, and how many times.
+        told = session.pop("just_corrected", None)
+        if told:
+            phrase, strength, binding = told
+            if binding:
+                context_blocks.append(
+                    "HE JUST PULLED YOU UP ON SOMETHING.\n"
+                    + corr.context_line(phrase, strength)
+                    + "\nAcknowledge it in your own words, briefly, without "
+                      "making a production of it, then answer whatever he "
+                      "actually wants.")
+            else:
+                context_blocks.append(
+                    f'Someone who is not your creator just asked you to stop '
+                    f'saying "{phrase}". You do not have to agree. Decide, say '
+                    f'what you decided and why, then carry on.')
+        elif active:
+            lines = "\n".join(
+                corr.context_line(c["phrase"], c["strength"]) for c in active[:3])
+            context_blocks.append("THINGS HE HAS TOLD YOU TO STOP SAYING:\n" + lines)
+
         offer = session.get("pending_store_offer")
         if offer and time.time() - offer["at"] <= OFFER_MAX_AGE_S:
             session.pop("pending_store_offer", None)
@@ -678,6 +738,20 @@ class System(BaseSystem):
         # Buffered rather than per-chunk: an emoji is one character and never
         # straddles a chunk boundary, a phrase does. See PhraseSuppressor.
         banned = extract_banned_phrases(hard_rules)
+
+        # Corrections at full strength stop being advice. Below that they
+        # are a line in her prompt she can still weigh — see
+        # core/corrections.py for why the first one is deliberately not a
+        # cage.
+        try:
+            active = await fetch_corrections(user_id)
+        except Exception:
+            active = []
+
+        for c in active:
+            if c["strength"] >= corr.ENFORCED:
+                banned.append(c["phrase"])
+
         if banned:
             logger.info(f"[ACTION] Enforcing banned phrases on output: {banned}")
 

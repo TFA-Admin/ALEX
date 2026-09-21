@@ -150,6 +150,27 @@ async def init_db():
             delivered INTEGER DEFAULT 0
         )''')
 
+        # ✋ CORRECTIONS (2026-09-20) — "stop saying that", remembered and
+        # escalating. Craig: "It's a simple disciplinary correction, but
+        # keep doing it and the impact is worse."
+        #
+        # Scoped per user on purpose: "the permanent changes should be
+        # unique to me. if talking to someone else she can choose to listen
+        # to them or not." `honored` records that choice for non-creators,
+        # so what she decided about whom is visible rather than silent.
+        await db.execute('''
+        CREATE TABLE IF NOT EXISTS corrections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user TEXT NOT NULL,
+            phrase TEXT NOT NULL,
+            strength INTEGER DEFAULT 1,
+            honored INTEGER DEFAULT 1,
+            reason TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user, phrase)
+        )''')
+
         # 🧠 CONCLUSIONS (2026-09-20) — what she has worked out for
         # herself, as distinct from what she has been told or looked up.
         #
@@ -443,6 +464,46 @@ async def add_memory(user, prompt, response, category="conversation", embedding=
             (user, prompt, response, category, emb_blob)
         )
         await db.commit()
+
+
+async def record_correction(user: str, phrase: str, honored: bool = True,
+                            reason: str = None) -> int:
+    """Logs a correction, raising its strength if it is the same one again.
+
+    Returns the new strength. A repeat is what escalates — the phrase is
+    unique per user, so saying "stop that" about the same tic a second time
+    is a second strike rather than a second row."""
+    phrase = " ".join((phrase or "").lower().split())
+    if not phrase:
+        return 0
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT INTO corrections(user, phrase, honored, reason)
+            VALUES(?,?,?,?)
+            ON CONFLICT(user, phrase) DO UPDATE SET
+                strength = strength + 1,
+                honored = excluded.honored,
+                reason = excluded.reason,
+                last_at = CURRENT_TIMESTAMP
+        """, (user, phrase, 1 if honored else 0, reason))
+        await db.commit()
+        cursor = await db.execute(
+            "SELECT strength FROM corrections WHERE user=? AND phrase=?",
+            (user, phrase))
+        row = await cursor.fetchone()
+    return row[0] if row else 1
+
+
+async def fetch_corrections(user: str):
+    """Active corrections for this person, strongest first."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT phrase, strength, honored FROM corrections "
+            "WHERE user=? AND honored=1 ORDER BY strength DESC, last_at DESC",
+            (user,))
+        rows = await cursor.fetchall()
+    return [{"phrase": r[0], "strength": r[1], "honored": bool(r[2])} for r in rows]
 
 
 async def remember_own_utterance(user: str, text: str):
