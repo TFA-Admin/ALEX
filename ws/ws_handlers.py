@@ -554,6 +554,14 @@ async def ws_text(websocket: WebSocket):
     except WebSocketDisconnect:
         logger.info(f"🔴 WS disconnected: {session_id}")
 
+    except Exception:
+        # 2026-09-21: found live — an exception anywhere in the handshake
+        # or onboarding closed the socket with nothing in her log at all
+        # (uvicorn wrote the traceback to a stderr nobody keeps). Craig saw
+        # "connect, it dropped immediately and she never says anything";
+        # the log said "Resolved ... (onboarding)" and stopped.
+        logger.exception(f"💥 WS handler crashed for {session_id}")
+
     finally:
         # Safe no-op if this session never got far enough to register
         # (e.g. disconnected mid-handshake).

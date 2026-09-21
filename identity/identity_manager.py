@@ -627,7 +627,14 @@ Respond with ONLY a JSON object, nothing else:
             # ---------------- GREETING ----------------
             msg = await get_phrase("greeting_new_session")
             await websocket.send_text(msg)
-            await _speak(websocket, msg, user_id=user_id)
+            # 2026-09-21: found live — every _speak() in this function passed a
+            # `user_id` that does not exist here (the parameter is temp_user_id),
+            # so the first greeting raised NameError and the socket closed with
+            # nothing in her log. Unhit since the 09-20 rewrite because a browser
+            # with a saved name never onboards. Identity-setup lines are not
+            # remembered (no user yet); the welcome and the closing lines are,
+            # under the name they belong to.
+            await _speak(websocket, msg)
 
             raw_response, raw_audio = await self.receive_greeting_response(websocket)
 
@@ -644,7 +651,7 @@ Respond with ONLY a JSON object, nothing else:
 
                     welcome = await get_phrase("greeting_returning_user", name=recognized_owner)
                     await websocket.send_text(welcome)
-                    await _speak(websocket, welcome, user_id=user_id)
+                    await _speak(websocket, welcome, user_id=recognized_owner)
 
                     return recognized_owner, raw_response
 
@@ -653,7 +660,7 @@ Respond with ONLY a JSON object, nothing else:
             # ---------------- CONFIRM ----------------
             confirm_msg = await get_phrase("onboard_confirm_name", name=name)
             await websocket.send_text(confirm_msg)
-            await _speak(websocket, confirm_msg, user_id=user_id)
+            await _speak(websocket, confirm_msg)
 
             raw_confirm = await self.receive_input(websocket)
             confirm = self.clean_text(raw_confirm)
@@ -666,7 +673,7 @@ Respond with ONLY a JSON object, nothing else:
 
             retry_msg = await get_phrase("onboard_confirm_retry")
             await websocket.send_text(retry_msg)
-            await _speak(websocket, retry_msg, user_id=user_id)
+            await _speak(websocket, retry_msg)
             # loop back and ask for the name again
 
         # ---------------- MIGRATION ----------------
@@ -684,12 +691,12 @@ Respond with ONLY a JSON object, nothing else:
         if collected > 0:
             learned_msg = "Voice learned."
             await websocket.send_text(learned_msg)
-            await _speak(websocket, learned_msg, user_id=user_id)
+            await _speak(websocket, learned_msg, user_id=name)
 
         # ---------------- FINAL ----------------
         final_msg = "Confirmed."
         await websocket.send_text(final_msg)
-        await _speak(websocket, final_msg, user_id=user_id)
+        await _speak(websocket, final_msg, user_id=name)
 
         return name, ""
 
