@@ -56,7 +56,7 @@ from db.db import (
     touch_learned_knowledge, get_user_role, resolve_retain_approval,
     create_query_report, attach_search_findings, fetch_recent_memory,
     record_correction, fetch_corrections, get_user_role as _role,
-    fetch_active_conclusions, record_decision,
+    fetch_active_conclusions, record_decision, fetch_profile_names,
     get_personality_hard_rules
 )
 from core.knowledge_filter import is_worth_keeping
@@ -301,7 +301,16 @@ class System(BaseSystem):
         # reason: the fact is deterministic, the words are hers.
         if corr.is_correction(user_input):
             recent = await fetch_recent_memory(user_id, limit=5)
-            phrase = corr.find_repeated([r["response"] for r in recent])
+            # Everyone she knows by name, so "stop saying that" is never
+            # read as "stop saying my name" — which is exactly what the
+            # first live correction recorded.
+            try:
+                known = await fetch_profile_names()
+            except Exception:
+                known = []
+
+            phrase = corr.find_repeated(
+                [r["response"] for r in recent], never=known + [user_id])
 
             if phrase:
                 # His corrections bind. Anyone else's are hers to weigh —

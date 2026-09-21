@@ -496,6 +496,17 @@ async def add_memory(user, prompt, response, category="conversation", embedding=
         await db.commit()
 
 
+async def fetch_profile_names() -> list:
+    """Every name she knows people by. 2026-09-20: used by the correction
+    system so "stop saying that" is never read as "stop saying my name" —
+    which is exactly what the first live correction recorded, because she
+    addresses him by name in nearly every reply."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT username FROM profiles")
+        rows = await cursor.fetchall()
+    return [r[0] for r in rows if r[0]]
+
+
 async def record_decision(kind: str, summary: str, reasoning: str = None,
                           evidence: str = None, outcome: str = None,
                           actor: str = None, ref: str = None) -> int:

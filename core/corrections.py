@@ -94,7 +94,21 @@ MAX_PHRASE_WORDS = 6
 MIN_OCCURRENCES = 2
 
 
-def find_repeated(responses, min_occurrences: int = MIN_OCCURRENCES):
+# Things she says constantly that are not tics. 2026-09-20: the first live
+# correction recorded **"craig"** — she addresses him by name in nearly
+# every reply, so his own name is the most repeated word in her output, and
+# "stop saying that" was read as "stop saying my name".
+#
+# Names are passed in rather than listed here, because whose they are
+# depends on who is talking — see the `never` argument.
+_NEVER_A_TIC = {
+    "alex", "yeah", "okay", "sure", "right", "well", "look", "listen",
+    "anyway", "sorry", "thanks", "hey", "hello",
+}
+
+
+def find_repeated(responses, min_occurrences: int = MIN_OCCURRENCES,
+                  never=None):
     """The phrase she has been repeating across her recent replies.
 
     This is the part Craig asked for by name — she reviews what she said
@@ -112,6 +126,14 @@ def find_repeated(responses, min_occurrences: int = MIN_OCCURRENCES):
     if not responses:
         return ""
 
+    # Her habitual address is not the thing he is objecting to. Anything
+    # here is skipped outright, and a multi-word phrase built only from
+    # these is skipped too, so "okay craig" cannot sneak through.
+    excluded = set(_NEVER_A_TIC) | {
+        " ".join(str(n or "").lower().split()) for n in (never or [])
+    }
+    excluded.discard("")
+
     seen = {}
     for text in responses:
         words = re.findall(r"[a-z']+", (text or "").lower())
@@ -119,7 +141,7 @@ def find_repeated(responses, min_occurrences: int = MIN_OCCURRENCES):
         for size in range(MIN_PHRASE_WORDS, MAX_PHRASE_WORDS + 1):
             for i in range(len(words) - size + 1):
                 gram = words[i:i + size]
-                if all(w in _FUNCTION_ONLY for w in gram):
+                if all(w in _FUNCTION_ONLY or w in excluded for w in gram):
                     continue
                 here.add(" ".join(gram))
         for phrase in here:
