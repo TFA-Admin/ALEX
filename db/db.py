@@ -797,6 +797,35 @@ async def add_personality_hard_rule(rule: str):
         await db.commit()
 
 
+async def remove_personality_hard_rule(rule: str) -> bool:
+    """Drops one standing rule. Returns True if it was there.
+
+    2026-09-20 (Craig): "but it's still in her hard rules - I must not be
+    able to view these from the controller." He was right on both counts.
+    These could be ADDED (every personality override writes one) and
+    cleared wholesale, and there was nothing in between and nothing that
+    showed them — so a rule he had set weeks ago went on binding her with
+    no way to see it, and removing it from the personality description did
+    nothing because that is a different field.
+
+    Matched on normalised text rather than exact string: these arrive from
+    speech and from the Controller, so whitespace and case vary."""
+    rules = await get_personality_hard_rules()
+    target = " ".join((rule or "").lower().split())
+    kept = [r for r in rules if " ".join(str(r).lower().split()) != target]
+
+    if len(kept) == len(rules):
+        return False
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT INTO system_learning(key, value) VALUES('personality_hard_rules', ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value
+        """, (json.dumps(kept),))
+        await db.commit()
+    return True
+
+
 async def clear_personality_hard_rules():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM system_learning WHERE key='personality_hard_rules'")

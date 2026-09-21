@@ -54,6 +54,7 @@ from PySide6.QtGui import QGuiApplication, QTextCursor
 from db.db import (
     get_personality, set_personality, DEFAULT_PERSONALITY,
     log_personality_change, reset_all_phrases, add_personality_hard_rule,
+    get_personality_hard_rules, remove_personality_hard_rule,
     resolve_module_build_request,
     fetch_recent_module_build_requests, approve_elevated_access,
     fetch_decisions,
@@ -442,6 +443,37 @@ class AlexController(QWidget):
         self._refresh_persona_button()
 
         alex_layout.addLayout(alex_btns)
+
+        # -------------------------
+        # STANDING RULES (2026-09-20)
+        # -------------------------
+        # Craig: "but it's still in her hard rules - I must not be able to
+        # view these from the controller." He could not. Every personality
+        # override silently writes one of these, they are never touched by
+        # any rewrite — which is the point of them — and there was no way
+        # to see the list or remove a single entry. So rules set weeks ago
+        # went on binding her invisibly, and editing the personality
+        # description did nothing, because that is a different field.
+        alex_layout.addWidget(QLabel(
+            "Standing rules (verbatim, never rewritten — these override her personality):"))
+
+        self.hard_rules_list = QTableWidget()
+        self.hard_rules_list.setColumnCount(1)
+        self.hard_rules_list.setHorizontalHeaderLabels(["Rule"])
+        self.hard_rules_list.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.hard_rules_list.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.hard_rules_list.setMaximumHeight(140)
+        _make_readable(self.hard_rules_list, wrap_column=0)
+        alex_layout.addWidget(self.hard_rules_list)
+
+        hard_rule_btns = QHBoxLayout()
+        self.remove_hard_rule_btn = QPushButton("🗑️ Remove Selected Rule")
+        self.remove_hard_rule_btn.clicked.connect(self.remove_selected_hard_rule)
+        hard_rule_btns.addWidget(self.remove_hard_rule_btn)
+        self.refresh_hard_rules_btn = QPushButton("🔄 Refresh")
+        self.refresh_hard_rules_btn.clicked.connect(self.refresh_hard_rules)
+        hard_rule_btns.addWidget(self.refresh_hard_rules_btn)
+        alex_layout.addLayout(hard_rule_btns)
 
         # 2026-07-16 (Craig: "the vocal way seems very hit or miss") —
         # setting personality by voice/chat depends on classify_personality_set()
@@ -931,6 +963,7 @@ class AlexController(QWidget):
         self.refresh_requests()
         self.refresh_notifications()
         self.refresh_reasoning()
+        self.refresh_hard_rules()
 
         # Silent unless it finds something — no need to nag on a clean start.
         self.check_for_orphans(prompt_if_none=False)
@@ -1238,8 +1271,47 @@ class AlexController(QWidget):
 
             self.alex_log.append(f"[SYSTEM] Personality updated via Controller: {merged}")
             self.personality_override_input.clear()
+            self.refresh_hard_rules()
         except Exception as e:
             self.alex_log.append(f"⚠️ Failed to apply personality override: {e}")
+
+    def refresh_hard_rules(self):
+        try:
+            rules = asyncio.run(get_personality_hard_rules())
+        except Exception as e:
+            self.alex_log.append(f"⚠️ Failed to load standing rules: {e}")
+            rules = []
+
+        self.hard_rules_list.setRowCount(len(rules))
+        for row, rule in enumerate(rules):
+            _fill_row(self.hard_rules_list, row, [str(rule)])
+        self.hard_rules_list.resizeRowsToContents()
+
+    def remove_selected_hard_rule(self):
+        items = self.hard_rules_list.selectedItems()
+        if not items:
+            self.alex_log.append("⚠️ Select a rule to remove first.")
+            return
+
+        rule = items[0].text()
+        confirm = QMessageBox.question(
+            self, "Remove standing rule",
+            f"Remove this rule?\n\n{rule}\n\n"
+            "She stops being bound by it immediately.",
+            QMessageBox.Yes | QMessageBox.No)
+        if confirm != QMessageBox.Yes:
+            return
+
+        try:
+            removed = asyncio.run(remove_personality_hard_rule(rule))
+        except Exception as e:
+            self.alex_log.append(f"⚠️ Failed to remove standing rule: {e}")
+            return
+
+        self.alex_log.append(
+            f"[SYSTEM] Standing rule removed: {rule}" if removed
+            else f"⚠️ That rule was not found: {rule}")
+        self.refresh_hard_rules()
 
     def reset_phrases(self):
         confirm = QMessageBox.question(
