@@ -21,7 +21,7 @@ __START__/text/__END__ envelope a normal reply already uses.
 import asyncio
 import time
 
-from db.db import fetch_undelivered_curiosity_questions, mark_curiosity_questions_delivered
+from db.db import fetch_undelivered_curiosity_questions, mark_curiosity_question_asked
 from core.alex_core import alex_core
 from ws.ws_handlers import push_to_creator, get_active_creator_session_ids
 from config.logger_config import logger
@@ -63,7 +63,7 @@ async def _check_curiosity_delivery():
     delivered = await push_to_creator(q["question"])
     if delivered:
         logger.info(f"[ACTION] Proactively delivered curiosity question mid-session: {q['question']}")
-        await mark_curiosity_questions_delivered()
+        await mark_curiosity_question_asked(q["topic"])
 
 
 async def _check_idle_checkin():

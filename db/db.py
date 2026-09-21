@@ -436,6 +436,9 @@ async def ensure_access_tier_columns(db):
         # fetch_active_knowledge()'s filter and retain_report()'s real
         # expiration for search-derived entries specifically.
         ("learned_knowledge", "expires_at", "TEXT"),
+        # 2026-09-20: so a question she asked and got no answer to can be
+        # raised once more later instead of vanishing on the first miss.
+        ("curiosity_queue", "last_asked_at", "TEXT"),
     ]
 
     for table, col, col_type in additions:
@@ -986,22 +989,54 @@ async def curiosity_topic_seen(topic: str) -> bool:
 
 
 async def fetch_undelivered_curiosity_questions():
+    """Questions she still wants answered: never asked, or asked once long
+    enough ago to be worth raising again. See
+    mark_curiosity_question_asked() for why one miss is not the end of it."""
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "SELECT topic, question, created_at FROM curiosity_queue "
-            "WHERE delivered=0 ORDER BY id ASC"
-        )
+            "WHERE delivered < ? AND (last_asked_at IS NULL OR "
+            "  strftime('%s','now') - strftime('%s', last_asked_at) > ?) "
+            "ORDER BY created_at ASC",
+            (CURIOSITY_MAX_ASKS, CURIOSITY_REASK_AFTER_S))
         rows = await cursor.fetchall()
 
-    return [
-        {"topic": r[0], "question": r[1], "created_at": r[2]}
-        for r in rows
-    ]
+    keys = ["topic", "question", "created_at"]
+    return [dict(zip(keys, r)) for r in rows]
 
 
-async def mark_curiosity_questions_delivered():
+# How long before a question she never got an answer to may be asked once
+# more, and how many times she may ask at all.
+CURIOSITY_REASK_AFTER_S = 6 * 3600
+CURIOSITY_MAX_ASKS = 2
+
+
+async def mark_curiosity_question_asked(topic: str):
+    """Records that she asked THIS question, once.
+
+    2026-09-20 (Craig: "if she asks a question and doesn't get an answer
+    does it just fall through the gaps?"). It did, two ways.
+
+    First, this used to be `UPDATE curiosity_queue SET delivered=1 WHERE
+    delivered=0` — every queued question at once, however many there were,
+    because one of them had been sent. A second question silently vanished
+    without ever being asked.
+
+    Second, "delivered" meant *sent*, not answered. If he was mid-thought
+    when it arrived, or simply did not feel like it, the thing she was
+    curious about was gone for good. For a system whose whole complaint
+    was that she never asks anything, discarding the ones she does ask on
+    a single miss is the wrong default.
+
+    So: this marks one question, counts the asks, and leaves it eligible to
+    come back once after CURIOSITY_REASK_AFTER_S. Twice is the cap — a
+    question she has raised twice with no answer has been answered, by
+    silence."""
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE curiosity_queue SET delivered=1 WHERE delivered=0")
+        await db.execute(
+            "UPDATE curiosity_queue SET delivered = delivered + 1, "
+            "last_asked_at = CURRENT_TIMESTAMP WHERE topic = ?",
+            (topic,))
         await db.commit()
 
 

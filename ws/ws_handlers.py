@@ -19,7 +19,7 @@ from config.logger_config import logger
 from core.alex_core import alex_core
 from db.db import (
     get_user_role, fetch_voice_samples,
-    fetch_undelivered_curiosity_questions, mark_curiosity_questions_delivered
+    fetch_undelivered_curiosity_questions, mark_curiosity_question_asked
 )
 
 
@@ -425,7 +425,7 @@ async def ws_text(websocket: WebSocket):
                     # know she had asked it.
                     await say(websocket, q["question"], user_id=user_id)
 
-                    await mark_curiosity_questions_delivered()
+                    await mark_curiosity_question_asked(q["topic"])
 
         # -------------------------
         # MAIN LOOP

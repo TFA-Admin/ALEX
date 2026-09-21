@@ -322,7 +322,16 @@ class System(BaseSystem):
                     f"strength {strength} ({corr.consequence(strength)}), "
                     f"{'binding' if is_creator else 'advisory only'}")
             else:
-                logger.info(f"[ACTION] {user_id} corrected her but nothing was repeated")
+                # 2026-09-20 (Craig: "would she ask for clarification if I
+                # were to say dont say that on the first utterance"). She
+                # would not — find_repeated needs the same thing twice, so
+                # a first-offence correction found nothing and she carried
+                # on as if he had said nothing at all. Being corrected and
+                # visibly not registering it is worse than the tic.
+                session["correction_unclear"] = True
+                logger.info(
+                    f"[ACTION] {user_id} corrected her but nothing was "
+                    f"repeated — she will ask what he meant")
 
         # -------------------------
         # SUPPRESS — a bare acknowledgment ("thanks") right after her own
@@ -505,6 +514,14 @@ class System(BaseSystem):
         except Exception as e:
             logger.warning(f"⚠️ could not read corrections: {e}")
             active_corrections = []
+
+        if session.pop("correction_unclear", False):
+            context_blocks.append(
+                "HE JUST TOLD YOU TO STOP SAYING SOMETHING, and you cannot "
+                "tell what. Nothing in your recent replies is repeated, so "
+                "guessing would be worse than asking. Ask him which part he "
+                "meant — briefly, once, without being wounded about it — and "
+                "then answer whatever else he wanted.")
 
         told = session.pop("just_corrected", None)
         if told:

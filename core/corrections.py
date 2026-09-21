@@ -169,12 +169,25 @@ def context_line(phrase: str, strength: int) -> str:
     Phrased as something he did, not as a rule from nowhere — she should
     know it came from him and how many times, because that is exactly the
     information that makes it a correction rather than a constraint."""
+    # 2026-09-20 (Craig: "would she go to far and now just never reference
+    # anything green or does she understand the context?"). A fair worry,
+    # and the first wording invited exactly that — "do not use it again"
+    # reads as a ban on the subject when what he objected to was her
+    # inserting it unprompted. Every line now says which of the two it is,
+    # because the difference between "stop bringing this up on your own"
+    # and "never speak of this" is the whole point of a correction.
+    scope = (f'He is not banning the subject — if he raises "{phrase}" '
+             f'himself, or it is genuinely what the answer is about, use it '
+             f'normally. What he objected to is you working it into replies '
+             f'on your own.')
+
     if strength == ADVISORY:
-        return (f'He asked you once to stop saying "{phrase}". Do not use it '
-                f'again unless it genuinely is the only thing that fits.')
+        return (f'He asked you once to stop saying "{phrase}" — you had been '
+                f'repeating it. {scope}')
     if strength == STANDING:
         return (f'He has now asked you TWICE to stop saying "{phrase}". He '
-                f'notices, and he is losing patience. Do not say it.')
+                f'notices, and he is losing patience. {scope}')
     return (f'He has asked you {strength} times to stop saying "{phrase}". '
-            f'It is now stripped from your replies automatically, so saying '
-            f'it just means the sentence arrives broken. Say something else.')
+            f'It is now removed from your replies automatically wherever it '
+            f'stands on its own, so leaning on it just means the sentence '
+            f'arrives broken. {scope}')
