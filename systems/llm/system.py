@@ -44,7 +44,10 @@ import time
 
 from core.system_base import BaseSystem
 from core.embedding_engine import embed, cosine_similarity
-from core.text_utils import strip_trailing_punctuation, strip_emojis
+from core.text_utils import (
+    strip_trailing_punctuation, strip_emojis, extract_banned_phrases,
+    PhraseSuppressor,
+)
 from llm.ollama_client import ollama_manager
 from datetime import datetime, timezone, timedelta
 
@@ -650,14 +653,55 @@ class System(BaseSystem):
         # strip_emojis() docstring for the reasoning.
         suppress_emojis = any("emoji" in r.lower() for r in hard_rules)
 
+        # 2026-09-20 — the same deterministic guarantee, generalised.
+        #
+        # Craig told her "stop saying 'Deal with it'". It went into the hard
+        # rules, rendered as "never violate these, no matter what". She said
+        # it twice more inside two minutes, and asked whether that was spite
+        # or an error.
+        #
+        # Error. In the three minutes BEFORE the instruction she had used the
+        # phrase eight times, twice in byte-identical replies — her own output
+        # returns in every prompt as the last four turns of MEMORY, so each
+        # use made the next likelier. By the time the rule arrived her context
+        # was full of concrete examples of saying it, and one line of
+        # instruction was competing with several demonstrations. Examples win.
+        # Then he said "say deal with it again and there will be
+        # repercussions", putting the phrase in her context once more, and she
+        # said it two seconds later.
+        #
+        # strip_emojis above exists for exactly this reason, after "stop using
+        # emojis" failed in both the personality AND the hard-rules block.
+        # This is that lesson applied to any rule of the form "stop saying X"
+        # rather than only to emoji characters.
+        #
+        # Buffered rather than per-chunk: an emoji is one character and never
+        # straddles a chunk boundary, a phrase does. See PhraseSuppressor.
+        banned = extract_banned_phrases(hard_rules)
+        if banned:
+            logger.info(f"[ACTION] Enforcing banned phrases on output: {banned}")
+
         async def stream():
             gen_start = time.time()
             first_chunk_at = None
+            bans = PhraseSuppressor(banned)
+
             async for chunk in ollama_manager.generate_stream(prompt):
                 if first_chunk_at is None:
                     first_chunk_at = time.time()
                     logger.info(f"[TIMING] generation time-to-first-chunk: {first_chunk_at - gen_start:.2f}s")
-                yield strip_emojis(chunk) if suppress_emojis else chunk
+
+                if suppress_emojis:
+                    chunk = strip_emojis(chunk)
+
+                out = bans.feed(chunk) if bans.active else chunk
+                if out:
+                    yield out
+
+            tail = bans.flush()
+            if tail:
+                yield tail
+
             logger.info(f"[TIMING] generation total (prompt eval + full output): {time.time() - gen_start:.2f}s")
 
         return {
