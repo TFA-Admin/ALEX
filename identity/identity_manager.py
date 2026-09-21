@@ -89,6 +89,38 @@ async def _speak(websocket, text):
     await asyncio.sleep(seconds + SPEECH_SETTLE_S)
 
 
+def _is_just_the_prompt(heard: str, prompt: str) -> bool:
+    """True if everything heard is already in the prompt she just spoke.
+
+    Ignores filler that surrounds compliance ("okay", "alex", "it's",
+    "craig") so "Alex, it's Craig — verify access" still counts as simply
+    doing as asked."""
+    filler = {"alex", "its", "it", "is", "im", "craig", "okay", "ok", "sure",
+              "yeah", "yes", "um", "uh", "and", "the", "a", "my", "name",
+              "please", "here", "this", "hey", "hello", "hi", "thats"}
+
+    def words(text):
+        # Apostrophes stripped BEFORE tokenising. Leaving them in split
+        # "it's" into {"it", "s"} and "I'll" into {"i", "ll"}, and the
+        # orphan letters were never in the prompt, so a perfectly
+        # compliant "Alex, it's Craig. Verify access" failed the test.
+        flat = (text or "").lower().replace("'", "").replace("’", "")
+        return {w for w in re.findall(r"[a-z]+", flat) if len(w) > 1} - filler
+
+    said, asked = words(heard), words(prompt)
+
+    if not heard.strip():
+        return False
+
+    # Nothing left after filler means he answered with his name and
+    # pleasantries — "My name is Craig" against "state your name". That is
+    # compliance, not a request, and must not be routed either.
+    if not said:
+        return True
+
+    return said <= asked
+
+
 class IdentityManager:
 
     def __init__(self):
@@ -457,6 +489,30 @@ class IdentityManager:
             best_score = max(best_score, score)
 
             print(f"🎙️ Voice verification for {user_id}, attempt {attempt}: score={score:.3f}")
+
+            # 2026-09-20 — do not hand back the phrase she just asked for.
+            #
+            # Craig: "she asked me to say something so I did. then she gave
+            # me diagnostic information... She seems unaware of her own
+            # utterence to start." Exactly that, in her log:
+            #
+            #   00:39:03  Voice verified (score=0.76)
+            #   00:39:05  intent 'status_check' (from: 'Verify access.')
+            #   00:39:06  All core systems online...
+            #
+            # She asked him to say "verify access", he said it, and the
+            # pipeline read her own requested passphrase as a command. The
+            # 2026-07-17 change that routes this transcript is right —
+            # nothing said during verification should be thrown away — but
+            # it routed BLIND, with nothing knowing the words came from her.
+            #
+            # Subset test rather than equality: speech recognition will not
+            # return the prompt verbatim, and he may add "Alex" or "it's
+            # Craig" around it. If everything he said already appears in
+            # what she asked for, he was complying, not requesting.
+            if heard_text and _is_just_the_prompt(heard_text, msg):
+                print(f"🎙️ Heard back the phrase she asked for; not routing it")
+                heard_text = ""
 
             if score >= MATCH_THRESHOLD:
                 # confirmed-genuine sample — reinforce the profile with it

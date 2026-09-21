@@ -423,6 +423,18 @@ async def _say_it_fresh(key: str, intent: str, voice: str,
         extra += (" This one is about security or identity. It has to read "
                   "as serious and unambiguous — your words, never a joke.")
 
+    # 2026-09-20: composing this line fresh each time produced "say 'verify
+    # access'" and "say 'hello, party animal'" — inventing a passphrase to
+    # repeat, which the registry intent never asked for. Any phrase she
+    # names then arrives back as a transcript and can be read as a command;
+    # "verify access" was classified as a status check and answered with a
+    # system report. Voice matching compares the SPEAKER, not the words, so
+    # a fixed phrase buys nothing and costs this.
+    if key == "voice_verify_prompt":
+        extra += (" Ask them to say something in their own words — anything, "
+                  "a sentence of their choosing. Do NOT give them a specific "
+                  "phrase to repeat and do not put any phrase in quotes.")
+
     try:
         personality = await get_personality()
         result = await ollama_manager.generate_json(

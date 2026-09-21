@@ -1008,6 +1008,19 @@ ws.onmessage = (e)=>{
     }
 
     if(data === "__END__"){
+        // 2026-09-20 (Craig: "Why is it making these blank sqaures now?")
+        // __START__ always creates a bubble, and identity_manager._speak()
+        // sends an envelope carrying ONLY audio — its callers already sent
+        // their text separately. So every spoken handshake prompt left an
+        // empty box behind. Introduced this morning by wrapping that audio
+        // in the envelope, which was itself the fix for the audio being
+        // silently dropped. Drop the bubble if nothing was ever written to
+        // it; the audio has already played by now either way.
+        if(currentDiv && !currentMsg){
+            currentDiv.remove();
+            currentDiv = null;
+        }
+
         // Safety net: reveal any text still waiting on audio that never
         // arrived (e.g. synthesis failed for that clause) so it's never
         // silently lost — everything else already got revealed in sync
