@@ -411,9 +411,17 @@ shape as the verification prompt above.
 01:06 incident's log is gone.
 
 **Cause** a new file per process start and a five-file cap, with restarts
-every few minutes.
+every few minutes. Worse than it looked: the prune ran at IMPORT, so
+every helper script, harness run or Controller launch that imported
+`config/logger_config.py` created an (empty) log and pushed a real one
+out. Seen again 2026-09-21 19:20 after an afternoon of tooling: the only
+survivors were the live log and four empty files; the morning's incidents
+were gone.
 
-**Not fixed.** Prune by age or size, not count.
+**Fixed 2026-09-21.** The file opens on the first record actually written
+(`delay=True`), so a process that never logs creates nothing; the prune
+runs only then, keeps 20, and drops empty files first. Verified: an
+import alone leaves the folder unchanged.
 
 ### Curiosity questions drawn from debugging
 Four of the six questions she has ever asked are about her own faults
