@@ -147,13 +147,41 @@ class System(BaseSystem):
         # (vector-similarity match, no recency awareness) got surfaced and
         # stated as if it were the current conversation. A real timestamp
         # gives the model something concrete to reason about instead.
-        context_parts = []
+        # 2026-09-20 — formatted as dialogue rather than as data rows.
+        #
+        # Craig caught her emitting a context line verbatim into a reply:
+        # "Did you write the error message yourself or did you let me handle
+        # that part? Recent (from 2026-09-21 05:26:09): you testing your
+        # same systems repeatedly. -> What's next on the agenda, Craig?"
+        #
+        # Not truncation — the prompt was at 65% of num_ctx with 1400
+        # tokens spare. The old shape was the problem:
+        #
+        #     Recent (from <timestamp>): <prompt> -> <response>
+        #
+        # A labelled row with an arrow in it reads as a template to
+        # continue, and a model given several of them in a list will
+        # sometimes produce another one instead of an answer. Written as
+        # speech it is unambiguous: these are things that were SAID, and
+        # the next thing to produce is a reply rather than another row.
+        #
+        # The timestamp stays — it exists because an old vector-matched
+        # exchange once got stated as if it were the current conversation,
+        # and she needs something concrete to date it by.
+        def _as_dialogue(row, label):
+            said = (row["prompt"] or "").strip()
+            replied = (row["response"] or "").strip()
 
-        for m in top_memories:
-            context_parts.append(f"Relevant (from {m['created_at']}): {m['prompt']} -> {m['response']}")
+            # Her own unprompted turns have a marker in the prompt column
+            # rather than anything he said — see db.remember_own_utterance().
+            if said.startswith("(unprompted"):
+                return f'[{label} {row["created_at"]}] You said, unprompted: "{replied}"'
 
-        for r in recent:
-            context_parts.append(f"Recent (from {r['created_at']}): {r['prompt']} -> {r['response']}")
+            return (f'[{label} {row["created_at"]}] He said: "{said}"\n'
+                    f'    You answered: "{replied}"')
+
+        context_parts = [_as_dialogue(m, "earlier") for m in top_memories]
+        context_parts += [_as_dialogue(r, "recent") for r in recent]
 
         context_text = "\n".join(context_parts)
 

@@ -663,6 +663,13 @@ class System(BaseSystem):
     You have access to stored information about the user.
 
     CRITICAL RULES (these apply no matter what your personality is):
+    - Everything below the line "The following information is known about
+      the user" is your own private notes — what was said before, what you
+      know about him, what you have worked out. It is there for you to
+      reason from. NEVER quote it, never repeat a line of it back, and
+      never continue its formatting. He cannot see any of it, so a line
+      from it appearing in your reply is nonsense to him. Answer in your
+      own words, as speech.
     - If the user asks for a specific, checkable fact you don't have
       stored, from a module, or from research, and you're about to answer
       from general knowledge instead: say so plainly as part of your
