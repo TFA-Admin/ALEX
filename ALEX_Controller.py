@@ -1,5 +1,6 @@
 import sys
 import os
+import json
 from datetime import datetime
 import glob
 import subprocess
@@ -46,7 +47,7 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton,
     QTextEdit, QLabel, QHBoxLayout, QTabWidget,
     QTableWidget, QTableWidgetItem, QMessageBox, QComboBox,
-    QAbstractItemView, QLineEdit, QDialog, QHeaderView
+    QAbstractItemView, QLineEdit, QDialog, QHeaderView, QInputDialog
 )
 from PySide6.QtCore import QThread, Signal, QTimer, Qt
 from PySide6.QtGui import QGuiApplication, QTextCursor
@@ -57,7 +58,8 @@ from db.db import (
     get_personality_hard_rules, remove_personality_hard_rule,
     resolve_module_build_request,
     fetch_recent_module_build_requests, approve_elevated_access,
-    fetch_decisions,
+    fetch_decisions, fetch_active_conclusions, confirm_conclusion,
+    retract_conclusion, record_decision,
     list_module_registry, fetch_recent_query_reports,
     fetch_unacknowledged_security_events, acknowledge_security_events,
     fetch_unacknowledged_personality_changes, acknowledge_personality_changes,
@@ -70,6 +72,48 @@ from core.intent_classifier import merge_personality_change
 from module_runtime.module_installer import install_module
 
 ALEX_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# 2026-09-21: which model she runs is chosen here and passed to her process
+# as ALEX_LLM_MODEL (llm/ollama_client.py reads it). It used to be whatever
+# the Controller's own environment happened to carry, which meant editing
+# a Windows user variable and restarting everything to compare models —
+# the same trap OLLAMA_MAX_LOADED_MODELS turned out to be. Persisted in a
+# small JSON file so a choice survives a Controller restart.
+CONTROLLER_SETTINGS_PATH = os.path.join(ALEX_DIR, "config", "controller_settings.json")
+DEFAULT_ALEX_MODEL = "qwen2.5:7b"
+OLLAMA_MODELS_DIR = os.getenv("OLLAMA_MODELS", "D:/project_ALEX/Ollama Models")
+
+
+def _load_controller_settings() -> dict:
+    try:
+        with open(CONTROLLER_SETTINGS_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_controller_settings(data: dict):
+    try:
+        with open(CONTROLLER_SETTINGS_PATH, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+    except OSError:
+        pass
+
+
+def _installed_ollama_models() -> list:
+    """Model names from Ollama's manifests on disk, so the list is right
+    even while Ollama is stopped. Empty if the directory is not where
+    OLLAMA_MODELS says; the selector is editable either way."""
+    root = os.path.join(OLLAMA_MODELS_DIR, "manifests", "registry.ollama.ai", "library")
+    found = []
+    try:
+        for name in sorted(os.listdir(root)):
+            for tag in sorted(os.listdir(os.path.join(root, name))):
+                found.append(f"{name}:{tag}")
+    except OSError:
+        pass
+    return found
 LOG_DIR = os.path.join(ALEX_DIR, "config", "Logs")
 OLLAMA_LOG_PATH = os.path.join(LOG_DIR, "ollama_output.log")
 DB_PATH = os.path.join(ALEX_DIR, "db", "memory.db")
@@ -794,6 +838,24 @@ class AlexController(QWidget):
         self.clear_ollama_console_btn.clicked.connect(self.ollama_log.clear)
         ollama_layout.addWidget(self.clear_ollama_console_btn)
 
+        # 2026-09-21: her model, chosen here. Takes effect on her next
+        # start or restart (the value goes into her process environment as
+        # ALEX_LLM_MODEL). Editable, so a tag not yet on disk can be typed.
+        model_row = QHBoxLayout()
+        model_row.addWidget(QLabel("Her model (applies on next start/restart):"))
+        self.model_selector = QComboBox()
+        self.model_selector.setEditable(True)
+        installed = _installed_ollama_models()
+        current = _load_controller_settings().get("alex_llm_model", DEFAULT_ALEX_MODEL)
+        for name in installed:
+            self.model_selector.addItem(name)
+        if current not in installed:
+            self.model_selector.addItem(current)
+        self.model_selector.setCurrentText(current)
+        self.model_selector.currentTextChanged.connect(self._model_choice_changed)
+        model_row.addWidget(self.model_selector)
+        ollama_layout.addLayout(model_row)
+
         self.ollama_tab.setLayout(ollama_layout)
 
         # 🔔 NOTIFICATIONS TAB (2026-07-17, Craig: "her showing me what
@@ -887,6 +949,43 @@ class AlexController(QWidget):
         # the two would make her look like she is thinking when she is not.
         self.reasoning_tab = QWidget()
         reasoning_layout = QVBoxLayout()
+
+        # -------------------------
+        # BELIEFS (2026-09-21)
+        # -------------------------
+        # Her live beliefs, and the two things only Craig can do to one.
+        # An unconfirmed belief is hers to hold and revise and it steers
+        # nothing; confirming it is what lets it reach her replies
+        # (systems/llm/system.py reads status='confirmed' only). Retracting
+        # says it was wrong, with a reason she keeps.
+        #
+        # The gate exists because the unconfirmed version was in her prompt
+        # for one night (2026-09-20/21) and she spent it arguing: four
+        # beliefs that he was "testing" and "provoking" her had her reading
+        # a plain correction as provocation, and reflection then concluded
+        # from the argument that he was provoking her.
+        reasoning_layout.addWidget(QLabel(
+            "What she currently believes. Nothing here reaches her replies "
+            "until you confirm it. Retract what is wrong."))
+
+        self.beliefs_table = QTableWidget()
+        self.beliefs_table.setColumnCount(5)
+        self.beliefs_table.setHorizontalHeaderLabels(
+            ["#", "Status", "About", "Belief", "Based on"])
+        self.beliefs_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.beliefs_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        _make_readable(self.beliefs_table, wrap_column=3)
+        self.beliefs_table.setMaximumHeight(240)
+        reasoning_layout.addWidget(self.beliefs_table)
+
+        beliefs_btns = QHBoxLayout()
+        self.belief_confirm_btn = QPushButton("Confirm belief")
+        self.belief_confirm_btn.clicked.connect(self.confirm_belief)
+        beliefs_btns.addWidget(self.belief_confirm_btn)
+        self.belief_retract_btn = QPushButton("Retract belief")
+        self.belief_retract_btn.clicked.connect(self.retract_belief)
+        beliefs_btns.addWidget(self.belief_retract_btn)
+        reasoning_layout.addLayout(beliefs_btns)
 
         reasoning_layout.addWidget(QLabel(
             "What she decided, and why. Newest first."))
@@ -2047,6 +2146,102 @@ class AlexController(QWidget):
                 d["outcome"] or "",
             ])
         self.reasoning_table.resizeRowsToContents()
+        self.refresh_beliefs()
+
+    def refresh_beliefs(self):
+        """Her live beliefs — unconfirmed and confirmed — newest first."""
+        try:
+            rows = asyncio.run(fetch_active_conclusions(limit=50))
+        except Exception as e:
+            self.alex_log.append(f"⚠️ Failed to load her beliefs: {e}")
+            rows = []
+
+        self._beliefs = rows
+        self.beliefs_table.setRowCount(len(rows))
+        for row, c in enumerate(rows):
+            _fill_row(self.beliefs_table, row, [
+                c["id"],
+                "confirmed by you" if c.get("status") == "confirmed" else "hers, unconfirmed",
+                c["kind"],
+                c["statement"],
+                c["evidence"] or "",
+            ])
+        self.beliefs_table.resizeRowsToContents()
+
+    def _selected_belief(self):
+        row = self.beliefs_table.currentRow()
+        beliefs = getattr(self, "_beliefs", [])
+        if row < 0 or row >= len(beliefs):
+            QMessageBox.information(self, "Beliefs", "Select a belief first.")
+            return None
+        return beliefs[row]
+
+    def confirm_belief(self):
+        """Craig says a belief of hers is true. From then on it is part of
+        how she reads him — see systems/llm/system.py."""
+        belief = self._selected_belief()
+        if not belief:
+            return
+        if belief.get("status") == "confirmed":
+            QMessageBox.information(self, "Beliefs", "Already confirmed.")
+            return
+
+        confirm = QMessageBox.question(
+            self, "Confirm belief",
+            "Confirm this as true? From now on it shapes how she reads "
+            "you.\n\n" + belief["statement"],
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if confirm != QMessageBox.Yes:
+            return
+
+        try:
+            ok = asyncio.run(confirm_conclusion(belief["id"]))
+            if ok:
+                asyncio.run(record_decision(
+                    "confirmation", f"He confirmed: {belief['statement']}",
+                    reasoning="His call, at the Controller — not hers.",
+                    outcome="from now on this reaches her replies",
+                    actor="craig", ref=f"conclusions#{belief['id']}"))
+                self.alex_log.append(f"[SYSTEM] Confirmed belief #{belief['id']}")
+            else:
+                self.alex_log.append(
+                    f"[SYSTEM] Belief #{belief['id']} could not be confirmed — "
+                    "it is no longer active")
+        except Exception as e:
+            self.alex_log.append(f"⚠️ Failed to confirm belief: {e}")
+
+        self.refresh_reasoning()
+
+    def retract_belief(self):
+        """Craig says a belief of hers is wrong. She keeps the reason."""
+        belief = self._selected_belief()
+        if not belief:
+            return
+
+        reason, ok = QInputDialog.getText(
+            self, "Retract belief",
+            "Why is this wrong? She keeps the reason.\n\n" + belief["statement"])
+        if not ok:
+            return
+        reason = reason.strip() or "retracted by Craig at the Controller"
+
+        try:
+            done = asyncio.run(retract_conclusion(belief["id"], reason))
+            if done:
+                asyncio.run(record_decision(
+                    "retraction", f"He retracted: {belief['statement']}",
+                    reasoning=reason,
+                    outcome="no longer held, and it never reaches her replies",
+                    actor="craig", ref=f"conclusions#{belief['id']}"))
+                self.alex_log.append(f"[SYSTEM] Retracted belief #{belief['id']}")
+            else:
+                self.alex_log.append(
+                    f"[SYSTEM] Belief #{belief['id']} could not be retracted — "
+                    "it is no longer live")
+        except Exception as e:
+            self.alex_log.append(f"⚠️ Failed to retract belief: {e}")
+
+        self.refresh_reasoning()
 
     def refresh_notifications(self):
         """Populates the Notifications tab's two tables — the exact same
@@ -2294,9 +2489,16 @@ class AlexController(QWidget):
         # (the log tailer watches the log file instead), and an unread
         # PIPE would eventually fill and block the whole process once its
         # buffer fills up.
+        # 2026-09-21: her model travels with the process. Everything else in
+        # the environment is inherited as before.
+        alex_env = os.environ.copy()
+        alex_env["ALEX_LLM_MODEL"] = self.selected_model()
+        self.log(f"[ALEX] Model: {alex_env['ALEX_LLM_MODEL']}")
+
         self.alex_proc = subprocess.Popen(
             ["python", "-X", "utf8", "ALEX.py"],
             cwd=ALEX_DIR,
+            env=alex_env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
@@ -2304,6 +2506,20 @@ class AlexController(QWidget):
         )
 
         self.update_status()
+
+    def selected_model(self) -> str:
+        selector = getattr(self, "model_selector", None)
+        text = selector.currentText().strip() if selector else ""
+        return text or _load_controller_settings().get("alex_llm_model", DEFAULT_ALEX_MODEL)
+
+    def _model_choice_changed(self, text: str):
+        text = (text or "").strip()
+        if not text:
+            return
+        settings = _load_controller_settings()
+        settings["alex_llm_model"] = text
+        _save_controller_settings(settings)
+        self.log(f"[SYSTEM] Her model set to {text} — restart her to apply")
 
     def stop_alex(self):
         if self.alex_proc:

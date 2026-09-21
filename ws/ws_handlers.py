@@ -329,7 +329,16 @@ async def ws_text(websocket: WebSocket):
         # only ever targets a verified creator, and role is unknown until
         # now. Cleared in the finally block below regardless of how this
         # connection ends.
-        _active_connections[session_id] = {"websocket": websocket, "role": role}
+        # 2026-09-21: user_id included. push_to_creator() hands
+        # conn.get("user_id") to core/voice.say(), which records what she
+        # said only when it has one — and this dict never carried it, so
+        # every question pushed mid-session was spoken and then forgotten.
+        # Confirmed in the data: the two curiosity questions pushed
+        # mid-session on 2026-09-21 have no memory row; the one delivered at
+        # connect, which passes user_id explicitly, does. This was the last
+        # empty cell in the table in core/voice.py.
+        _active_connections[session_id] = {
+            "websocket": websocket, "role": role, "user_id": user_id}
 
         if role in ("creator", "super_user") and not session.get("creator_verified"):
             # not already verified above (voice-first recognition during
@@ -540,6 +549,11 @@ async def process_message(websocket, msg, user_id, session_id, audio, audio_byte
             prompt_text = await audio.process_end(
                 audio_bytes, websocket, send_debug, user_id=user_id)
             if not prompt_text:
+                # 2026-09-21: if she just asked "did you say X?", the
+                # conversation is open — his answer must not need the wake
+                # word, whatever the window said.
+                if audio.pending_clarification is not None:
+                    alex_core.get_session(session_id)["last_addressed_at"] = time.time()
                 return
 
             # -------------------------
@@ -555,7 +569,11 @@ async def process_message(websocket, msg, user_id, session_id, audio, audio_byte
             now = time.time()
             last_addressed = session.get("last_addressed_at", 0)
 
-            addressed = bool(WAKE_WORD_RE.search(prompt_text))
+            # An answer to her own clarification is addressed to her by
+            # definition (see AudioProcessor.answered_clarification).
+            answered_her = audio.answered_clarification
+            audio.answered_clarification = False
+            addressed = bool(WAKE_WORD_RE.search(prompt_text)) or answered_her
             in_window = (now - last_addressed) < CONVERSATION_WINDOW_S
 
             if not (addressed or in_window):

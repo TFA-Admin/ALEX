@@ -48,6 +48,49 @@ from config.logger_config import logger
 # is a reasoned starting point rather than a tuned one.
 MEMORY_RELEVANCE_FLOOR = 0.45
 
+# How many turns she is shown, and a ceiling on what they may add up to.
+#
+# 2026-09-21. The window was 4 turns, by a `recent[-4:]` slice below. The
+# commit the night before "raised it to twelve" by changing the fetch limit
+# and left the slice in place, so nothing reached her that had not before —
+# and its diagnosis was wrong anyway: on every turn of the "thrilling"
+# argument her own line WAS inside the four turns she was given, checked row
+# by row against `memory`. The window was not why she argued (that was the
+# unconfirmed beliefs block, see systems/llm/system.py). It is still too
+# short for continuity, and the reason to bound it by size rather than by a
+# turn count is a real hazard: the prompt shares num_ctx=4096 with a
+# 300-token reply, and Ollama truncates an over-long prompt from the FRONT,
+# silently — the first thing to go would be "You are A.L.E.X." and
+# everything after it.
+#
+# Measured on her real rows, rendered exactly as below (user=craig, last
+# 400 turns):
+#
+#   window      median    p90    p99    max   (chars)
+#   4 turns       992    1422   2538   4059
+#   8 turns      2013    2745   3883   5467
+#   12 turns     3003    4026   5191   6254
+#   one turn      232      --    635   2740
+#
+# The prompt measured ~2670 tokens with the old 4-turn window and ~1400
+# spare. 4000 chars is roughly 1000 tokens: twelve ordinary turns fit at the
+# median and nearly at p90, the long tail (recall dumps, monologues) drops
+# the OLDEST turns instead of the system prompt, and there is headroom left.
+MEMORY_WINDOW_TURNS = 12
+MEMORY_CONTEXT_MAX_CHARS = 4000
+
+
+def _fit_recent_to_budget(parts, budget):
+    """Drops the oldest turns until the rendered window fits `budget`.
+
+    Never drops the newest one: a single oversized turn (a recall dump) is
+    still the thing he just heard, and cutting it would recreate the exact
+    fault a memory window exists to prevent."""
+    kept = list(parts)
+    while len(kept) > 1 and sum(len(p) + 1 for p in kept) > budget:
+        kept.pop(0)
+    return kept
+
 
 class System(BaseSystem):
 
@@ -126,35 +169,14 @@ class System(BaseSystem):
         # -------------------------
         # RECENT MEMORY
         # -------------------------
+        # Fetched by count, kept by size — see MEMORY_WINDOW_TURNS and
+        # MEMORY_CONTEXT_MAX_CHARS above. The trimming happens after the
+        # rows are rendered, because the size that matters is the rendered
+        # one.
         try:
-            # 2026-09-20: 12, not the default 5.
-            #
-            # Watched this cause a real argument. She said "let's talk
-            # about something thrilling — like optimizing your daily
-            # routine" at 01:58. Five turns later he quoted it back and she
-            # insisted, repeatedly, that HE had said it. She was not lying
-            # and she was not confabulating from nothing: her own statement
-            # had fallen out of the five-turn window, so she could not see
-            # it, and a personality tuned never to back down filled the gap
-            # with confidence.
-            #
-            # Five turns is roughly four minutes of speech. Any
-            # disagreement about what was just said outlives it. The prompt
-            # was measured at ~2670 of 4096 tokens with 1400 spare, and
-            # twelve turns costs about 250 of them — the cheapest fix
-            # available for the most corrosive failure she has, which is
-            # confidently contradicting him about what he can plainly
-            # remember.
-            recent = await fetch_recent_memory(user_id, limit=12)
+            recent = await fetch_recent_memory(user_id, limit=MEMORY_WINDOW_TURNS)
         except:
             recent = []
-
-        # 2026-07-16: widened from -2: to -4:, affordable now that
-        # llm/ollama_client.py's shared num_ctx quadrupled. A 2-turn window
-        # let a real topic scroll out after just one intervening exchange
-        # (confirmed live: python_code_explorer -> info_lookup -> "what did
-        # I just ask you to build?" already had the real answer pushed out).
-        recent = recent[-4:]
 
         # -------------------------
         # BUILD CONTEXT STRING
@@ -198,10 +220,12 @@ class System(BaseSystem):
             return (f'[{label} {row["created_at"]}] He said: "{said}"\n'
                     f'    You answered: "{replied}"')
 
-        context_parts = [_as_dialogue(m, "earlier") for m in top_memories]
-        context_parts += [_as_dialogue(r, "recent") for r in recent]
+        earlier_parts = [_as_dialogue(m, "earlier") for m in top_memories]
+        recent_parts = _fit_recent_to_budget(
+            [_as_dialogue(r, "recent") for r in recent],
+            MEMORY_CONTEXT_MAX_CHARS - sum(len(p) + 1 for p in earlier_parts))
 
-        context_text = "\n".join(context_parts)
+        context_text = "\n".join(earlier_parts + recent_parts)
 
         # -------------------------
         # STORE IN SESSION

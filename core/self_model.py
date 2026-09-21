@@ -244,8 +244,12 @@ def describe(snap: dict) -> str:
     mods = snap.get("modules") or []
     enabled = [m for m in mods if m["status"] == "enabled"]
     if enabled:
-        parts.append("Your modules: " + ", ".join(
-            f"{m['name']} (access: {m['access']})" for m in enabled))
+        # 2026-09-21: "diagnostic_tool (access: db,network,introspection,
+        # os_process)" was read back to Craig by the 9b as "the diagnostic
+        # tool has its introspection scope disabled". Say the state in
+        # words that cannot be inverted.
+        parts.append("Your modules, all enabled: " + "; ".join(
+            f"{m['name']} (may use {m['access']})" for m in enabled))
     else:
         parts.append("You have no modules enabled.")
 

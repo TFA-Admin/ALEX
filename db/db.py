@@ -216,7 +216,9 @@ async def init_db():
         #
         # kind: 'self' (about her own behaviour/state), 'craig' (about
         # him), 'world' (everything else).
-        # status: 'active' | 'superseded' | 'retracted'.
+        # status: 'active' (hers, unchecked) | 'confirmed' (by Craig at the
+        # Controller — the ONLY status the conversational prompt reads, since
+        # 2026-09-21) | 'superseded' | 'retracted'.
         # evidence: what in her own records led her here — required, so a
         # conclusion with nothing behind it is visibly ungrounded rather
         # than indistinguishable from a solid one (Design Principle 1).
@@ -1052,10 +1054,33 @@ async def create_conclusion(statement: str, kind: str, evidence: str,
         return cursor.lastrowid
 
 
-async def fetch_active_conclusions(kind: str = None, limit: int = 25):
-    sql = "SELECT id, statement, kind, evidence, created_at FROM conclusions " \
-          "WHERE status='active'"
-    args = []
+# Which of her conclusions may steer a reply. 2026-09-21: 'active' means she
+# formed it and nobody has checked it; 'confirmed' means Craig has. Only the
+# second reaches her prompt — see systems/llm/system.py for the measured
+# reason. Both are "live" for her own purposes: reflection can revise either,
+# and a revision of a confirmed belief comes back as 'active', i.e. it needs
+# confirming again before it can act on anything.
+LIVE_CONCLUSION_STATUSES = ("active", "confirmed")
+
+
+async def fetch_active_conclusions(kind: str = None, limit: int = 25,
+                                   status: str = None):
+    """Her live beliefs, newest first.
+
+    `status=None` returns everything she currently holds (active and
+    confirmed) — what reflection revises and de-duplicates against.
+    `status='confirmed'` returns only what Craig has confirmed — the only
+    thing the conversational prompt is allowed to read."""
+    if status:
+        where = "WHERE status=?"
+        args = [status]
+    else:
+        placeholders = ",".join("?" for _ in LIVE_CONCLUSION_STATUSES)
+        where = f"WHERE status IN ({placeholders})"
+        args = list(LIVE_CONCLUSION_STATUSES)
+
+    sql = ("SELECT id, statement, kind, evidence, status, created_at "
+           f"FROM conclusions {where}")
     if kind:
         sql += " AND kind=?"
         args.append(kind)
@@ -1066,18 +1091,35 @@ async def fetch_active_conclusions(kind: str = None, limit: int = 25):
         cursor = await db.execute(sql, args)
         rows = await cursor.fetchall()
 
-    keys = ["id", "statement", "kind", "evidence", "created_at"]
+    keys = ["id", "statement", "kind", "evidence", "status", "created_at"]
     return [dict(zip(keys, r)) for r in rows]
+
+
+async def confirm_conclusion(conclusion_id: int) -> bool:
+    """Craig's confirmation — the one thing that lets a belief of hers reach
+    her replies. Only an unchecked ('active') belief can be confirmed; a
+    superseded or retracted one is history."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE conclusions SET status='confirmed', "
+            "updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='active'",
+            (conclusion_id,)
+        )
+        await db.commit()
+        return cursor.rowcount > 0
 
 
 async def retract_conclusion(conclusion_id: int, reason: str) -> bool:
     """Craig's override. Separate from superseding, which is her revising
-    her own view — this is him saying it was wrong, with no replacement."""
+    her own view — this is him saying it was wrong, with no replacement.
+    Works on a confirmed belief too: confirming was his call and so is
+    taking it back."""
+    placeholders = ",".join("?" for _ in LIVE_CONCLUSION_STATUSES)
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "UPDATE conclusions SET status='retracted', superseded_reason=?, "
-            "updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='active'",
-            (reason, conclusion_id)
+            f"updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ({placeholders})",
+            (reason, conclusion_id, *LIVE_CONCLUSION_STATUSES)
         )
         await db.commit()
         return cursor.rowcount > 0

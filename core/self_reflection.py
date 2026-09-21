@@ -452,12 +452,16 @@ async def _form_conclusion(recent, snap):
     switched off, how often she has been re-wording herself. Reflection
     previously only ever saw the conversation.
 
-    IMPORTANT, and stated here because it is load-bearing: conclusions are
-    NOT fed back into her conversational answers as fact. They are hers to
-    hold and revise, and Craig can see and retract them. Wiring unverified
-    self-inference into the retrieval path is exactly the loop that was
-    closed earlier today in systems/llm/system.py, and this must not
-    quietly rebuild it."""
+    IMPORTANT, and stated here because it is load-bearing: a conclusion
+    she forms does NOT reach her conversational answers until Craig has
+    confirmed it (status='confirmed', set at the Controller's Reasoning
+    tab). 2026-09-21: the unconfirmed version was wired into every reply
+    the night before, and within hours four beliefs that he was "testing"
+    and "provoking" her had her reading a plain correction as provocation,
+    holding a false position for four turns, and then concluding from that
+    argument that he was provoking her. Unverified self-inference steering
+    behaviour is the confabulation loop with a different seed. Only he can
+    open the gate, and only per belief."""
     convo_text = "\n".join(
         f"{r['user']}: {r['prompt']}\nALEX: {r['response']}" for r in recent
     )
@@ -807,6 +811,10 @@ async def run_self_reflection():
                 continue
 
             doubt, replacement, reason = revision
+            # A revision of something he confirmed comes back unconfirmed:
+            # his confirmation was of the old wording, not of whatever she
+            # turns it into. See db.LIVE_CONCLUSION_STATUSES.
+            was_confirmed = conclusion.get("status") == "confirmed"
             new_id = await create_conclusion(
                 replacement, conclusion["kind"],
                 f"revised from #{conclusion['id']} (doubt {doubt}/10): {reason}",
@@ -817,7 +825,9 @@ async def run_self_reflection():
                 f"Changed her mind: {conclusion['statement']}",
                 reasoning=reason,
                 evidence=f"doubt {doubt}/10 after re-reading recent conversation",
-                outcome=f"replaced with: {replacement}",
+                outcome=f"replaced with: {replacement}" + (
+                    " — he had confirmed the old one; this one is unconfirmed "
+                    "until he says so" if was_confirmed else ""),
                 ref=f"conclusions#{new_id}")
             outcome.append(f"revised #{conclusion['id']} -> #{new_id}")
             logger.info(

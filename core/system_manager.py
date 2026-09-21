@@ -17,6 +17,11 @@ import asyncio
 from typing import Dict, Any
 
 
+# Spoken only if the phrasebook itself is unreachable. Mirrors the registry
+# default for "nothing_handled" in core/phrasebook.py.
+_NOTHING_HANDLED_LINE = "Something went wrong on my end with that one. Say it again?"
+
+
 class SystemManager:
 
     def __init__(self):
@@ -193,10 +198,30 @@ class SystemManager:
         # -------------------------
         # FALLBACK
         # -------------------------
-        return {
-            "type": "response",
-            "content": "No system handled the input."
-        }
+        # 2026-09-21: "No system handled the input." was spoken to Craig
+        # four times in nine minutes ("It's me." -> "No system handled the
+        # input.") while a NameError in the LLM system made every turn fall
+        # through. Reaching here is an internal failure — the LLM system is
+        # priority 100 and answers anything — and an internal failure string
+        # read aloud in her voice is a fault of its own. Log it with the
+        # input so it can be found; say something in her own words that
+        # means "that didn't work, say it again"; say nothing at all for
+        # empty input, which is not an error.
+        from config.logger_config import logger
+        text = (input_data or {}).get("text", "")
+        logger.warning(f"[ROUTE] No system handled input from {user_id}: {text!r}")
+
+        if not text:
+            return {"type": "silence"}
+
+        try:
+            from core.phrasebook import get_phrase
+            content = await get_phrase("nothing_handled")
+        except Exception as e:
+            logger.warning(f"[ROUTE] fallback phrase failed too: {e}")
+            content = _NOTHING_HANDLED_LINE
+
+        return {"type": "response", "content": content}
 
     # -------------------------
     # AFTER RESPONSE HOOK
