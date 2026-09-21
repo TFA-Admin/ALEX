@@ -393,6 +393,22 @@ REVISION_TOPIC_FLOOR = 0.25
 # proposals keeps the volume at something he will actually read.
 PROPOSAL_COOLDOWN_DAYS = 7
 
+# What her installed modules actually do, so a proposal is judged against
+# capability rather than against a list of names. Keyed by registry name;
+# anything unlisted falls back to "installed".
+_MODULE_PURPOSE = {
+    "diagnostic_tool": "check your own systems and modules and report faults",
+    "inquiry": "search the web, with his approval, and keep what you find",
+    "recall": "look things up in your own database and past conversations",
+}
+
+# Names that describe a permission rather than a capability. A module called
+# "database_access" is a scope with a module's clothes on.
+_SCOPE_WORDS = (
+    "access", "permission", "privilege", "scope", "admin", "root",
+    "database_", "_database", "filesystem", "network_", "_network", "sudo",
+)
+
 # Per-pass cap. She can conclude one thing per reflection, not a list.
 MAX_CONCLUSIONS_PER_PASS = 1
 
@@ -556,11 +572,23 @@ async def _propose_module(recent, snap):
     convo_text = "\n".join(
         f"{r['user']}: {r['prompt']}\nALEX: {r['response']}" for r in recent
     )
-    have = ", ".join(m["name"] for m in snap.get("modules", [])) or "none"
+    # 2026-09-20: this used to pass module NAMES only, and the very first
+    # proposal it produced was "database_access — to store and retrieve
+    # information about various topics". She already has `recall` (db scope)
+    # and learned_knowledge does exactly that; she proposed something she
+    # owns because nothing told her what "recall" is. Names alone are not a
+    # description.
+    have = "\n".join(
+        f"  - {m['name']}: {_MODULE_PURPOSE.get(m['name'], 'installed')}"
+        for m in snap.get("modules", []) if m.get("status") == "enabled"
+    ) or "  - none"
 
     prompt = f"""You are A.L.E.X, privately reviewing what you could not do.
 
-Modules you already have: {have}
+What you can already do:
+{have}
+  - remember conversations, recall them, and store things you have looked up
+  - check your own systems and report what is wrong
 
 Recent conversations:
 {convo_text}
@@ -602,6 +630,20 @@ Respond with ONLY a JSON object:
     # _reflect_on_phrase: a structural check, not a better prompt.
     if not re.fullmatch(r"[a-z][a-z0-9_]{2,39}", name):
         logger.info(f"[REFLECTION] Discarded module proposal with unusable name: {name!r}")
+        return None
+
+    # A module is a capability, not a permission. 2026-09-20: the first
+    # proposal this ever made was named "database_access", which reads like a
+    # privilege-escalation request — Craig's reaction was "she requested
+    # database access. Not sure why and the request itself is very vague."
+    # It was not asking for a scope (requested_access was None), but a name
+    # that looks like one is alarming and tells him nothing about what it
+    # would DO. Deterministic rather than a prompt instruction, for the same
+    # reason as every other check in this file.
+    if any(w in name for w in _SCOPE_WORDS):
+        logger.info(
+            f"[REFLECTION] Discarded module proposal {name!r} — that names a "
+            f"permission, not a capability")
         return None
 
     if name in {m["name"] for m in snap.get("modules", [])}:
