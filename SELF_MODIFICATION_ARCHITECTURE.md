@@ -1543,6 +1543,16 @@ or a design limit.
 
 ## Backlog — measured, not yet built
 
+- **Her avatar shows readiness (Craig, 2026-09-21 19:45):** "have her avatar
+  start small or as a line until she's booted where it balloons or opens
+  like an eyeball to symbolize she is now present and ready." The page
+  already has the states (`setReadiness("loading"/"ready")`, the
+  `__READY__` signal after `__PROFILE__`); this is the drawing. Came from
+  the night she said nothing on connect and he assumed she was warming up.
+- **`model_usage` table is dead:** `log_model_usage()` has no caller (2
+  rows, never written since). Drop it with a migration when the schema is
+  next touched; `tests/harness.py` still lists it in USER_SCOPED_TABLES.
+
 - **Intent-classification pre-gate.** Would skip the 1.00s classifier on
   messages that cannot be any of its 5 categories. Built and validated
   against 523 real utterances: a first-pass gate skipped 31% but **lost 4
