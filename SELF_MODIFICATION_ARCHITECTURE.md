@@ -97,19 +97,20 @@ items when they land.
 first.** It corrects two claims made in the small hours of 2026-09-21 and
 records a loop that was closed and reopened the same day.
 
-**Where the 2026-09-21 session stopped (14:10 EDT):** program items 1
+**Where the 2026-09-21 session stopped (14:35 EDT):** program items 1
 (tools, first slice), 2, 3 (9b chosen), 4 (deliberation, merged with the
-intent call), 13 (Controller pass — `controller/` package, People by
-name via the new `sessions` table; Craig restarted her and relaunched it
-at 13:22) and 5 (intent suite, `eval_runs` recording, `my_scores`,
-Scores tab) are landed; see "## Program approved 2026-09-21" for each
-item's measurements. **Owed: one restart of her** for item 5's core
-changes (`core/intent_classifier.py` category-4 clause, `core/tools.py`
-my_scores) and a Controller relaunch for the Scores tab. Commits since
-the last push are unpushed — push only when asked. Next in order: 6
-(self-modification container — the harness gate now has `eval_runs` to
-read), then 7's decision, 9, 10, 11. Personality "voice" arm undecided.
-Other-user access: Craig put it off ("We still have a lot to do").
+intent call), 13 (Controller pass), 5 (intent suite, `eval_runs`,
+`my_scores`, Scores tab) and 6 (self-modification container, first
+slice — `controller/versions.py`, `core/self_author.py`, Inbox →
+Versions, `tools/propose.py`) are landed; see "## Program approved
+2026-09-21" for each item's measurements. **Proposal #1 (hers,
+`deliberation.threshold` 7 → 8, rationale backwards) is gated and
+waiting in his Inbox.** **Owed: one restart of her** (`core/tools.py`
+propose_change + my_scores, `core/intent_classifier.py` clause) and a
+Controller relaunch (Scores, Versions). Commits since the last push are
+unpushed — push only when asked. Next in order: item 6's second slice
+(overnight author schedule, author model), then 7's decision, 9, 10,
+11. Personality "voice" arm undecided. Other-user access put off.
 
 **Current objective: give her the capacity to disagree, and stop the
 reflection loop from sanding it off.** (Design Principle 12.) Chosen
@@ -921,6 +922,53 @@ The items, in build order:
    systems/controller/_role_gates.py, tests/, the merge tool). Her author
    starts on whitelisted prompt text and thresholds, overnight, on an
    offloaded larger model; widens only when the numbers say so.
+
+   **LANDED 2026-09-21 (14:30), first slice.** The container exists and
+   has been driven end to end once, from the command line, on a proposal
+   her own author wrote:
+
+   | piece | where | what |
+   |---|---|---|
+   | proposal = branch + worktree | `controller/versions.py` `create()` / `author_from_request()` | `git worktree add -b proposal/<id>` under `D:/project_ALEX/versions/<id>-<slug>`; the change committed there with her (or Claude) as git author; the live tree never touched |
+   | staging copy | `launch_staging()` | the worktree's `ALEX.py` on port 5001 (`ALEX_PORT`, new), with a snapshot of `db/memory.db`, the certs and the model choice copied in; one at a time; `kill_staging()` by PID and by port |
+   | gate | `run_gate()` | runs `tests/harness.py` FROM the worktree: `intent` imports the proposal's code, `authority` talks to port 5001 (`ALEX_URL`, new); scores recorded in the LIVE database (`ALEX_EVAL_DB`, new) so the Controller and `my_scores` see them; the live `tests/` is copied over the worktree's first (see below) |
+   | decide | `approve()` / `reject()` | approve refuses a dirty live tree and re-diffs the branch against PROTECTED_PATHS, then `git merge --no-ff` and the caller restarts her; reject records the reason and removes worktree + branch; both write a `decisions` row |
+   | protected | `PROTECTED_PATHS` | `ALEX_Controller.py`, `controller/`, `tools/`, `tests/`, `module_runtime/validator.py`, `core/self_model.py`, `core/override_code.py`, `core/self_author.py`, `core/tools.py`, `systems/controller/_role_gates.py`, `.gitignore`, `certs/`, `config/`, `db/` — checked at creation and at approve, by diff |
+   | her author | `core/self_author.py` | five whitelisted targets: `deliberation.threshold` (3-10), `deliberation.max_lookups` (1-3), `memory.window_turns` (4-20), `memory.context_chars` (1500-6000), `intent.status_check` (the one prompt line). Shows her model the current value, the comment above it, her `my_scores`, and the reason; validates the JSON answer against bounds; renders the file as a string. Never writes, never runs git, never runs in her process |
+   | her ask | `core/tools.py` `propose_change` (creator-only) | adds a `requested` row and nothing else; one open request per target |
+   | the window | Inbox → Versions | Ask her author / Launch / Talk / Gate (on a thread) / Kill / Approve (merge + restart her) / Reject with reason; open proposals also appear in Waiting on you |
+   | CLI | `tools/propose.py` | `new` (Claude's proposals from files or a patch), `ask <target>`, `list`, `gate`, `reject` |
+
+   **Proposal #1, hers:** asked about `deliberation.threshold` with the
+   reason "you sometimes state things as remembered that were never
+   said", she proposed 7 → 8 with the rationale that a higher threshold
+   "will force more frequent lookups". That is backwards — the target's
+   own description says higher means fewer lookups — and it is exactly
+   the kind of proposal the gate and Craig exist to catch. Left in his
+   Inbox as gated (intent 83/84 = the known residual miss; authority
+   2/2) for him to decide, and as the first real test of the loop.
+
+   **Two things found by driving it, both fixed:**
+   - The first launch died instantly: the worktree branched from main
+     BEFORE the `ALEX_PORT` change was committed, so the staging copy
+     tried port 5000. The container's own support code has to be on main
+     before a branch can carry it — committed, branch rebased once.
+   - The first gate scored four clear refusals as UNCLEAR (0/2). The
+     harness's judge had never run on the 9b: qwen3.5 thinks by default
+     and in JSON mode the thinking ate the answer. `_think_off()` in
+     `tests/harness.py` mirrors `_THINK_KW`; and since a proposal's
+     worktree may predate a harness fix (and cannot change `tests/`,
+     which is protected), `run_gate()` now copies the live `tests/` over
+     the worktree's before every run. Bogus rows #4/#5/#8 deleted; live
+     authority with the 9b judge is 2/2 (#6).
+
+   **Not built yet, in this order:** the overnight schedule for her
+   author (a Controller toggle + a target rotation); a larger offloaded
+   author model (`ALEX_AUTHOR_MODEL` is honoured, none chosen — needs a
+   pull, which needs Craig); the judged suites beyond `authority` in the
+   gate (`GATE_SUITES`, one line); widening the whitelist "only when the
+   numbers say so". Needs her restart (`core/tools.py`) and a Controller
+   relaunch (Versions tab).
 7. **The personality tax.** Craig: "Do it." `tests/personality_ab.py` now
    has a `voice` arm (concise, dry, dark; no dismissive/rude/psychosis) and
    swaps the HARD RULES with the prose — the 09-20 A/B did not, and its

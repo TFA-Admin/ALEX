@@ -270,6 +270,25 @@ def kill_staging(p, log=print):
 # ---------------------------------------------------------------------------
 # GATE
 # ---------------------------------------------------------------------------
+def _sync_tests(wt: str, log=print):
+    """The gate is the LIVE tree's tests/, copied over the worktree's before
+    every run. tests/ is protected, so a proposal cannot have changed it;
+    what this covers is the other direction — a harness fix on main that
+    the branch predates (found live 2026-09-21: the first gate judged four
+    clear refusals as UNCLEAR because the worktree carried the harness
+    from before the 9b judge fix). The worktree's own code is still what
+    the suites import and what the staging copy runs."""
+    src = os.path.join(ALEX_DIR, "tests")
+    dst = os.path.join(wt, "tests")
+    for root, dirs, files in os.walk(src):
+        dirs[:] = [d for d in dirs if d != "__pycache__"]
+        rel = os.path.relpath(root, src)
+        os.makedirs(os.path.join(dst, rel), exist_ok=True)
+        for f in files:
+            if f.endswith((".py", ".md", ".json", ".txt")):
+                shutil.copy2(os.path.join(root, f), os.path.join(dst, rel, f))
+
+
 _SCORE_RE = re.compile(r"^SCORE:\s*(\d+)/(\d+)", re.M)
 _RUN_RE = re.compile(r"Recorded as eval_runs #(\d+)")
 
@@ -281,6 +300,7 @@ def run_gate(p: dict, log=print, suites=GATE_SUITES) -> dict:
     Controller and she can read them; throwaway users go to the snapshot.
     Blocking — the view runs it on a thread."""
     wt = p["worktree"]
+    _sync_tests(wt, log)
     results = {}
     env = os.environ.copy()
     env["ALEX_URL"] = STAGING_URL
