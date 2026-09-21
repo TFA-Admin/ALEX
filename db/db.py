@@ -712,59 +712,13 @@ async def get_learned_phrase(key: str, default: str) -> str:
     return row[0] if row else default
 
 
-async def get_phrase_variants(key: str) -> list:
-    """Alternate wordings of the same line, so she does not say it
-    byte-for-byte identically every time.
-
-    2026-09-20 (Craig, on hearing the same voice-verification sentence on
-    every single connect): "she should theoretically be coming up with
-    something new for it with every statement in terms of how it's
-    presented at least... I don't say hello the exact same way every single
-    time. The words may be similar but are still slightly different."
-
-    Stored separately from the canonical `phrase:<key>` rather than
-    replacing it, so `set_learned_phrase()` and the Controller's reset
-    both keep working unchanged, and so there is always one known-current
-    wording to fall back to."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            "SELECT value FROM system_learning WHERE key=?",
-            (f"phrase_variants:{key}",)
-        )
-        row = await cursor.fetchone()
-
-    if not row:
-        return []
-    try:
-        variants = json.loads(row[0])
-    except (json.JSONDecodeError, TypeError):
-        return []
-    return [v for v in variants if isinstance(v, str) and v.strip()]
-
-
-async def set_phrase_variants(key: str, variants: list):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            INSERT INTO system_learning(key, value)
-            VALUES(?, ?)
-            ON CONFLICT(key)
-            DO UPDATE SET value=excluded.value
-        """, (f"phrase_variants:{key}", json.dumps(variants)))
-        await db.commit()
-
-
-async def clear_phrase_variants(key: str):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM system_learning WHERE key=?",
-                         (f"phrase_variants:{key}",))
-        await db.commit()
-
-
 async def set_learned_phrase(key: str, text: str):
-    """Sets the canonical wording. **Also drops any stored variants**, since
-    they were alternate wordings of the PREVIOUS text — keeping them would
-    mean a phrase she just changed still comes out in its old voice a few
-    times out of five. Reflection regenerates them on a later pass."""
+    """Sets her stored wording for a phrase.
+
+    2026-09-20: this is no longer what she says. core/phrasebook.py
+    composes each line fresh at the moment of speaking; this is the voice
+    reference it works from, what self-reflection evolves, and the fallback
+    when composing fails."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             INSERT INTO system_learning(key, value)
@@ -772,8 +726,6 @@ async def set_learned_phrase(key: str, text: str):
             ON CONFLICT(key)
             DO UPDATE SET value=excluded.value
         """, (f"phrase:{key}", text))
-        await db.execute("DELETE FROM system_learning WHERE key=?",
-                         (f"phrase_variants:{key}",))
         await db.commit()
 
 

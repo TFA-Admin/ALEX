@@ -15,6 +15,7 @@ from speech.voice_id_engine import embed_voice_bytes, best_match, identify_speak
 from ws.ws_utils import send_debug
 from llm.ollama_client import ollama_manager
 from core.phrasebook import get_phrase
+from core.override_code import is_creator_override_code
 
 ENROLL_TARGET_SAMPLES = 3
 ENROLL_MAX_ATTEMPTS = 6
@@ -157,7 +158,28 @@ class IdentityManager:
     # -------------------------
     # RECEIVE RAW VOICE SAMPLE (for enrollment/verification, not transcription)
     # -------------------------
-    async def receive_voice_sample(self, websocket) -> bytes:
+    async def receive_voice_sample(self, websocket):
+        """Returns (audio_bytes, typed_text). typed_text is "" unless the
+        person answered by typing instead of speaking.
+
+        2026-09-20 (Craig, on trying to use her from chat for the first
+        time): "she's not accepting my responses and returning some odd
+        responses." Confirmed in her own log —
+
+            19:32:28  Timed out waiting for a response.
+            19:32:53  Timed out waiting for a response.
+            19:33:27  Got typed text instead of a voice sample.
+
+        This used to throw the typed text away and return an empty buffer,
+        which scored 0 against the enrolled profile. verify_voice() then
+        retried twice more and failed, and every message he typed was
+        swallowed by the loop. **There was no way through this gate from a
+        text client at all** — not a hard path, no path.
+
+        Returning the text instead of discarding it is the same fix applied
+        to verify_voice() on 2026-07-17 for a different swallow ("nothing
+        said during verification is thrown away anymore"), which this path
+        never got."""
         audio_buffer = b""
 
         while True:
@@ -165,21 +187,23 @@ class IdentityManager:
 
             if message is None:
                 await send_debug(websocket, "⚠️ Timed out waiting for audio — no data received.")
-                return audio_buffer
+                return audio_buffer, ""
 
             if "text" in message and message["text"]:
-                text = message["text"].strip().lower()
+                raw = message["text"].strip()
+                text = raw.lower()
 
                 if text == "__end_audio__":
                     await send_debug(websocket, f"🎙️ Captured {len(audio_buffer)} bytes of audio")
-                    return audio_buffer
+                    return audio_buffer, ""
 
                 if text.startswith("__"):
                     continue
 
-                # typed text where a voice sample was expected — give up on this attempt
-                await send_debug(websocket, "⚠️ Got typed text instead of a voice sample.")
-                return audio_buffer
+                # Typed where a voice sample was expected. Hand it back
+                # rather than dropping it — the caller decides what it means.
+                await send_debug(websocket, f"⌨️ Typed instead of spoken: {raw!r}")
+                return audio_buffer, raw
 
             if "bytes" in message and message["bytes"]:
                 audio_buffer += message["bytes"]
@@ -284,7 +308,18 @@ class IdentityManager:
             await websocket.send_text(prompt)
             await _speak(websocket, prompt)
 
-            audio = await self.receive_voice_sample(websocket)
+            audio, typed = await self.receive_voice_sample(websocket)
+
+            if typed:
+                # Enrollment genuinely cannot be done by typing — there is
+                # no voice to learn. Say so plainly instead of silently
+                # retrying, which is what made this look broken.
+                note = ("I can't learn your voice from typed text — I need to "
+                        "hear you. Turn Auto Listen on, or keep going in text "
+                        "and I'll work without voice recognition.")
+                await websocket.send_text(note)
+                await _speak(websocket, note)
+                return collected
 
             if not audio:
                 empty_in_a_row += 1
@@ -347,7 +382,30 @@ class IdentityManager:
             await websocket.send_text(msg)
             await _speak(websocket, msg)
 
-            audio = await self.receive_voice_sample(websocket)
+            audio, typed = await self.receive_voice_sample(websocket)
+
+            if typed:
+                # 2026-09-20: a text client has no voice to offer, so voice
+                # cannot be the only way through. Two outcomes, both of them
+                # already part of the design:
+                #
+                #   the override code  -> proof. core/override_code.py and
+                #       systems/controller/_role_gates.py already treat the
+                #       code alone as sufficient creator proof, independent
+                #       of whatever voice this session resolved to. This is
+                #       the same rule, applied one step earlier.
+                #
+                #   anything else      -> not proof, and not a failure
+                #       either. She stops asking, carries on unverified, and
+                #       what he typed is returned so it gets a real answer
+                #       instead of being eaten by this loop. Privileged
+                #       actions stay gated by require_creator(), which is
+                #       where that decision belongs.
+                if await is_creator_override_code(typed):
+                    print(f"🎙️ Voice verification for {user_id}: override code accepted in text")
+                    return True, 1.0, typed
+                return False, best_score, typed
+
             embedding = embed_voice_bytes(audio)
 
             if audio:

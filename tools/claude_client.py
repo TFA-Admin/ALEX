@@ -6,11 +6,13 @@ A text-only WebSocket client so Claude (running in a separate agent
 environment on the same machine) can talk to A.L.E.X. directly. Registers
 as an ordinary "claude" user profile — no special role, no elevated
 trust, same as any other user (per the resolved design: advisory only).
-She's fundamentally voice-first, but onboarding already tolerates a
-client that never sends audio (identity/identity_manager.py's
-receive_voice_sample() treats typed text as "give up this attempt, no
-sample collected" rather than blocking), so no backend changes were
-needed to make this work.
+She's fundamentally voice-first, but onboarding tolerates a client that
+never sends audio. 2026-09-20: that used to work by accident —
+receive_voice_sample() silently discarded typed text and returned an
+empty sample, so enrolment just failed quietly three times over. It now
+returns the typed text, and enrolment says plainly that it cannot learn a
+voice from typing and stops asking. Same outcome here, one round trip
+instead of three, and it no longer depends on a swallow.
 
 Usage:
     python tools/claude_client.py register        # one-time: creates the "claude" profile
@@ -38,9 +40,9 @@ SSL_CONTEXT.verify_mode = ssl.CERT_NONE
 
 # Scripted replies for the one-time onboarding handshake — name, then
 # confirmation. Anything after that (voice enrollment prompts) just needs
-# ANY non-empty text reply to move on; receive_voice_sample() treats typed
-# text as "no sample this attempt" and continues, so a generic filler is
-# fine and harmless.
+# ANY non-empty text reply to move on: typed text ends enrolment with a
+# "I can't learn your voice from text" note, which is exactly right for a
+# client with no microphone.
 ONBOARDING_SCRIPT = ["claude", "yes"]
 ONBOARDING_FILLER = "text-only client, no microphone available"
 

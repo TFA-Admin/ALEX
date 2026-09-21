@@ -17,7 +17,6 @@ from db.db import (
     fetch_recent_memory_all, get_personality, set_personality,
     log_personality_change, get_learned_phrase, set_learned_phrase,
     queue_curiosity_question, get_personality_hard_rules,
-    set_phrase_variants, get_phrase_variants,
     fetch_undelivered_curiosity_questions, curiosity_topic_seen,
     create_conclusion, fetch_active_conclusions, create_module_build_request,
     fetch_recent_module_build_requests, get_creator_identity,
@@ -178,113 +177,6 @@ or
         return None
 
     return new_text
-
-
-async def _generate_phrase_variants(key, personality):
-    """Alternate ways to say the same line, so it is not identical every time.
-
-    2026-09-20 (Craig): "I want her to be able to change it, but she hasn't
-    in a long time. So hearing it every single time seems odd... I don't say
-    hello the exact same way every single time. The words may be similar but
-    are still slightly different."
-
-    **Meaning comes from the registry INTENT, voice from her current
-    wording.** That split is deliberate and it fixes a real drift, not just
-    the repetition. `voice_verify_prompt` started as "Please say a short
-    phrase so I can verify it's you" — any phrase, which is all the speaker
-    embedding needs — and self-reflection re-voiced it into "Say 'hello,
-    party animal' so I can make sure it's you" (personality_log #55,
-    2026-07-16, reason "the conversations showed a need for more engagement
-    and clarity"). Three later re-voicings kept the scripted passphrase,
-    because each one only ever adjusted tone against the previous TEXT.
-    Nothing checked that the meaning survived, and a fixed spoken passphrase
-    is a replay-attack gift where a varying one is not.
-
-    Generating from the intent — which lives in code and cannot drift —
-    is meant to break that chain: each variant is re-derived from what the
-    line is FOR, with her wording supplied only as the voice to match.
-
-    **Measured, and it only half works.** Told explicitly that the current
-    line is a voice reference and its specifics can be dropped, the model
-    still reproduced "hello, party animal" verbatim in 2 of 3 runs; the
-    third invented new passphrases instead ("sup, space cadet"). It anchors
-    on the current TEXT harder than on the instruction, and no wording of
-    this prompt reliably breaks that. So variation is real — every run
-    produced four distinct ways to say the line — but a meaning that has
-    already drifted into the canonical wording tends to survive being
-    varied. Resetting that one phrase to its registry default is the only
-    thing that clears the anchor, and that is the creator's call, not
-    something to do on his behalf.
-
-    Returns a list of variants, or [] on any failure."""
-    default_text, intent = PHRASE_REGISTRY[key]
-    current = await get_learned_phrase(key, default=default_text)
-
-    required_placeholders = set(_PLACEHOLDER_RE.findall(default_text))
-
-    placeholder_instruction = ""
-    if required_placeholders:
-        names = ", ".join(f"{{{p}}}" for p in sorted(required_placeholders))
-        placeholder_instruction = (
-            f" Every version must contain {names}, spelled exactly like that, "
-            f"since other code fills them in. Do not add any other "
-            f"{{curly-brace}} tokens.")
-
-    # Same gravity instruction as _reflect_on_phrase, for the same reason:
-    # the rewording process must never be free to make a security line sound
-    # like a joke, whatever the personality says.
-    gravity = ""
-    if key in SECURITY_SENSITIVE_PHRASES:
-        gravity = (" This one is about security or identity. Every version "
-                   "must still read as serious and unambiguous — vary the "
-                   "words, never the seriousness.")
-
-    prompt = f"""You are A.L.E.X. Your personality: "{personality}"
-
-You need to say this to someone: {intent}
-
-You currently say it like this: "{current}"
-
-That existing line is there to show you your own voice, nothing more. What the line has to DO is the instruction above it — anything else the current wording happens to contain is not required and you can drop it.
-
-Write {PHRASE_VARIANTS_TARGET} other ways you could say it. Same job, your voice, not word for word the same — the way a person does not greet someone identically twice.{placeholder_instruction}{gravity}
-
-Respond with ONLY a JSON object:
-{{"variants": ["<first>", "<second>", "<third>"]}}"""
-
-    result = await ollama_manager.generate_json(prompt, timeout=30.0)
-    if not result:
-        return []
-
-    raw = result.get("variants")
-    if not isinstance(raw, list):
-        return []
-
-    seen = {" ".join(current.lower().split())}
-    variants = []
-
-    for item in raw:
-        if not isinstance(item, str):
-            continue
-        text = item.strip()[:400]
-        if not text:
-            continue
-
-        # Structural check, not a better prompt — the same guarantee
-        # _reflect_on_phrase already makes. A variant that dropped or
-        # invented a placeholder would raise on .format() at the moment she
-        # needed to say it.
-        if set(_PLACEHOLDER_RE.findall(text)) != required_placeholders:
-            logger.info(f"[PERSONALITY] Dropped a '{key}' variant with wrong placeholders")
-            continue
-
-        normalized = " ".join(text.lower().split())
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        variants.append(text)
-
-    return variants
 
 
 async def _reflect_on_curiosity(recent):
@@ -478,15 +370,6 @@ NEED_TO_PROPOSE = 7
 # time. One LLM call each — see _revise_belief for why they are checked one
 # at a time rather than as a list.
 BELIEFS_CHECKED_PER_PASS = 3
-
-# How many alternate wordings each phrase keeps, and how many phrases get
-# them topped up per pass. 3 variants plus the canonical means she has four
-# ways to say a given line — enough that it stops sounding scripted without
-# the set becoming a maintenance problem. 4 keys per pass is the same
-# reasoning as the 5-key re-voicing cap below: this runs during a lull, but
-# a lull is not unlimited and it shares one Ollama instance.
-PHRASE_VARIANTS_TARGET = 3
-PHRASE_KEYS_VARIED_PER_PASS = 4
 
 # A revision has to still be ABOUT the thing it revises. Measured on real
 # output from this function:
@@ -727,55 +610,6 @@ Respond with ONLY a JSON object:
     return name, purpose
 
 
-async def _top_up_phrase_variants() -> int:
-    """Give a few phrases alternate wordings, preferring the ones that have
-    none yet. Returns how many keys were filled in this pass.
-
-    Sampled and capped rather than exhaustive: 78 phrases x one LLM call
-    each would monopolise the single Ollama instance for minutes, which is
-    the exact failure this file already records from re-voicing the whole
-    registry at once (2026-07-16). Across passes the coverage builds up."""
-    personality = await get_personality()
-
-    keys = list(PHRASE_REGISTRY)
-    random.shuffle(keys)
-
-    # Anything with no variants at all is the most worth doing, since that
-    # is a line currently said identically every single time.
-    empty, stocked = [], []
-    for key in keys:
-        try:
-            (stocked if await get_phrase_variants(key) else empty).append(key)
-        except Exception:
-            continue
-
-    todo = (empty + stocked)[:PHRASE_KEYS_VARIED_PER_PASS]
-
-    filled = 0
-    for key in todo:
-        try:
-            variants = await _generate_phrase_variants(key, personality)
-        except Exception as e:
-            logger.warning(f"⚠️ Variant generation failed for '{key}': {e}")
-            continue
-
-        if not variants:
-            continue
-
-        # Same deterministic guarantee the generation stream and phrase
-        # re-voicing both make — a hard rule about emojis is not something
-        # to trust a prompt with.
-        hard_rules = await get_personality_hard_rules()
-        if any("emoji" in r.lower() for r in hard_rules):
-            variants = [strip_emojis(v) for v in variants]
-
-        await set_phrase_variants(key, variants)
-        filled += 1
-        logger.info(f"[PERSONALITY] {len(variants)} new ways to say '{key}': {variants}")
-
-    return filled
-
-
 async def run_self_reflection():
     # Idle gate, checked first and cheaply (no LLM call) — don't even look
     # at whether there's new conversation to reflect on until there's
@@ -979,24 +813,6 @@ async def run_self_reflection():
                     f"(request #{rid}, awaiting approval) — {purpose}")
             else:
                 outcome.append("no proposal")
-
-        # -------------------------------------------------------------
-        # KEEPING HER LINES FROM SOUNDING SCRIPTED (2026-09-20)
-        # -------------------------------------------------------------
-        # Deliberately here, BEFORE the persona and personality-change gates
-        # below, so it runs on every pass. Phrase re-voicing further down
-        # only happens when the personality actually changed, which is rare —
-        # Craig heard the same voice-verification sentence on every connect
-        # for two months because nothing had changed it since July. Variation
-        # is not downstream of a personality change; it is what stops a line
-        # being identical the tenth time he hears it.
-        try:
-            varied = await _top_up_phrase_variants()
-        except Exception as e:
-            logger.warning(f"⚠️ Phrase variant generation failed: {e}")
-            varied = 0
-
-        outcome.append(f"varied {varied} phrase(s)" if varied else "no new phrasings")
 
         # 2026-09-20: while the persona switch is on she is speaking in a
         # neutral voice that is not hers, so letting her reflect on "how these

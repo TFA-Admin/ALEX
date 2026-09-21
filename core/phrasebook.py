@@ -13,9 +13,15 @@ get_phrase() always has a hardcoded default as a safety net, so a missing
 or corrupted stored phrase never breaks a flow — it just falls back to the
 plain, functional default wording.
 """
-import random
+import re
 
-from db.db import get_learned_phrase, get_phrase_variants, persona_disabled
+from db.db import (
+    get_learned_phrase, get_personality, get_personality_hard_rules,
+    persona_disabled,
+)
+from config.logger_config import logger
+
+_PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
 
 # key -> (default_text, functional_intent — used by the reflection loop
 # when it rewrites a phrase, to keep the purpose intact)
@@ -354,59 +360,139 @@ SECURITY_SENSITIVE_PHRASES = {
 }
 
 
+# How long a fresh wording gets before she falls back to the stored one.
+# Generation measures ~0.45s since llm/ollama_client.py started pooling its
+# connection; this is the point at which waiting is worse than repeating
+# herself. A scripted line is usually the WHOLE reply (a greeting, a
+# refusal), so this sits directly in front of the user.
+FRESH_PHRASE_TIMEOUT_S = 6.0
+
+_FRESH_PHRASE_PROMPT = """You are A.L.E.X. Your personality: "{personality}"
+
+You need to say this to someone, right now: {intent}
+
+For reference, here is how you have put it before — that is only to show you your own voice, not a script. What the line has to DO is the instruction above. Anything else that wording happens to contain is not required.
+
+    "{voice}"
+
+Say it. Your words, this time, not a repeat.{extra}
+
+Respond with ONLY a JSON object:
+{{"line": "<what you say>"}}"""
+
+
+async def _say_it_fresh(key: str, intent: str, voice: str,
+                        placeholders: set) -> str:
+    """Compose the line now, rather than reading one back.
+
+    2026-09-20 (Craig, rejecting a pre-generated-variants design that
+    rotated between four stored wordings): "The rotating intros isn't what
+    I want. She should be making her own."
+
+    He is right that rotation is not the same thing — four scripts is still
+    scripts. This generates at the moment of speaking, from the registry
+    INTENT (which lives in code and cannot drift) with her stored wording
+    supplied only as a voice reference.
+
+    That split matters beyond style. `voice_verify_prompt` began as "Please
+    say a short phrase so I can verify it's you" — any phrase, which is all
+    the speaker embedding needs — and self-reflection re-voiced it into "Say
+    'hello, party animal' so I can make sure it's you" (personality_log
+    #55). Three later passes kept the passphrase, because each only adjusted
+    tone against the previous TEXT and nothing checked the meaning survived.
+    Deriving from the intent each time stops a drifted wording being the
+    only thing she has to work from.
+
+    Returns "" on anything that goes wrong. Every caller falls back to the
+    stored wording, so a slow or unreachable Ollama costs her some variety
+    and never costs her the line.
+    """
+    from llm.ollama_client import ollama_manager      # local: import cycle
+    from core.text_utils import strip_emojis
+
+    extra = ""
+    if placeholders:
+        names = ", ".join(f"{{{p}}}" for p in sorted(placeholders))
+        extra += (f" Include {names}, spelled exactly like that, since other "
+                  f"code fills it in. Use no other {{curly-brace}} tokens.")
+
+    # Same reasoning as the re-voicing path in core/self_reflection.py: the
+    # composing step must never be free to make a security line sound like
+    # a joke, whatever the personality says.
+    if key in SECURITY_SENSITIVE_PHRASES:
+        extra += (" This one is about security or identity. It has to read "
+                  "as serious and unambiguous — your words, never a joke.")
+
+    try:
+        personality = await get_personality()
+        result = await ollama_manager.generate_json(
+            _FRESH_PHRASE_PROMPT.format(personality=personality, intent=intent,
+                                        voice=voice, extra=extra),
+            timeout=FRESH_PHRASE_TIMEOUT_S)
+    except Exception as e:
+        logger.debug(f"fresh phrase '{key}' failed: {e}")
+        return ""
+
+    if not result:
+        return ""
+
+    line = str(result.get("line", "")).strip()[:400]
+    if not line:
+        return ""
+
+    # Structural check, not a better prompt — the guarantee
+    # _reflect_on_phrase already makes. A line that dropped or invented a
+    # placeholder would raise on .format() at the moment she needed it.
+    if set(_PLACEHOLDER_RE.findall(line)) != placeholders:
+        logger.debug(f"fresh phrase '{key}' had wrong placeholders")
+        return ""
+
+    try:
+        if any("emoji" in r.lower() for r in await get_personality_hard_rules()):
+            line = strip_emojis(line)
+    except Exception:
+        pass
+
+    return line
+
+
 async def get_phrase(key: str, **kwargs) -> str:
-    """The line she actually says, picked fresh each time.
+    """The line she actually says — composed now, not read back.
 
-    2026-09-20 (Craig, after hearing the identical voice-verification
-    sentence on every connect): "she should theoretically be coming up with
-    something new for it with every statement in terms of how it's
-    presented at least... I don't say hello the exact same way every single
-    time. The words may be similar but are still slightly different."
+    Craig, on hearing the identical voice-verification sentence on every
+    connect: "I don't say hello the exact same way every single time. The
+    words may be similar but are still slightly different." Then, on a
+    first attempt that rotated between pre-generated wordings: "The
+    rotating intros isn't what I want. She should be making her own."
 
-    Until then a phrase was ONE stored string, re-voiced occasionally by
-    self-reflection and byte-identical between those passes. Now the
-    canonical wording sits alongside a handful of variants
-    (db.get_phrase_variants) and one is chosen at random per call.
+    So the stored phrase is no longer what she says. It is her voice
+    reference, what self-reflection evolves, and the fallback when
+    composing fails. See _say_it_fresh above.
 
-    Chosen at CALL time from pre-generated text rather than generated per
-    call: generating would add an LLM round-trip to every scripted line,
-    including the connect handshake and mid-conversation denials, and give
-    every one of them a new way to fail. The variants are produced during
-    idle self-reflection instead, which is where phrase re-voicing already
-    happens. Still hers — she writes them, nothing here is authored wording.
+    Falls back at every step: a failed generation gives the stored wording,
+    a stored wording that breaks its {placeholder} gives the code default.
+    """
+    default_text, intent = PHRASE_REGISTRY[key]
 
-    Falls back at every step: no variants means the canonical text, a
-    variant that breaks its {placeholder} means the canonical text, and a
-    canonical that breaks means the code default."""
-    default_text, _ = PHRASE_REGISTRY[key]
-
-    # 2026-09-20: her re-voiced wording is persona, so the persona switch mutes
-    # it too and every line falls back to the plain functional default. The
-    # stored phrases are untouched and come back the instant it is switched off.
-    # Variants are persona for the same reason, so they are skipped too — a
-    # muted persona should be flat and predictable, not varied.
+    # The persona switch mutes her wording entirely — every line falls back
+    # to the plain functional default, and nothing is composed. A muted
+    # persona should be flat and predictable, and it should not be spending
+    # a generation per line to sound that way.
     if persona_disabled():
         return default_text.format(**kwargs)
 
-    text = await get_learned_phrase(key, default=default_text)
+    voice = await get_learned_phrase(key, default=default_text)
+    placeholders = set(_PLACEHOLDER_RE.findall(default_text))
 
-    try:
-        variants = await get_phrase_variants(key)
-    except Exception:
-        variants = []
-
-    if variants:
-        chosen = random.choice([text] + variants)
+    fresh = await _say_it_fresh(key, intent, voice, placeholders)
+    if fresh:
         try:
-            return chosen.format(**kwargs)
+            return fresh.format(**kwargs)
         except Exception:
-            # A variant that broke its {placeholder} must not take the line
-            # down with it — fall through to the canonical below, which has
-            # its own fallback to the code default.
-            pass
+            pass      # fall through to the stored wording
 
     try:
-        return text.format(**kwargs)
+        return voice.format(**kwargs)
     except Exception:
         # a rewritten phrase that broke its {placeholder} shouldn't ever
         # crash a live conversation — fall back to the known-good default
