@@ -218,3 +218,51 @@ class PhraseSuppressor:
             return ""
         out, self._buf = self._buf, ""
         return _apply_bans(out, self.phrases) if out else ""
+
+
+# ---------------------------------------------------------------------------
+# MARKDOWN OUT OF SPEECH (2026-09-21)
+# ---------------------------------------------------------------------------
+# qwen3.5:9b writes markdown — "*do*", "**Founding:**", "*   bullet" — where
+# the 7b almost never did. Piper reads the asterisks aloud ("asterisk") and
+# Craig heard the markers instead of the words inside them. A spoken reply
+# has no bold, so the markers go and the words stay. Deterministic, applied
+# where text becomes speech or display (core/response_handler.py,
+# core/voice.py), never a prompt instruction — the same guarantee as
+# strip_emojis().
+_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.S)
+_MD_ITALIC_RE = re.compile(r"(?<!\w)\*(?!\s)(.+?)(?<!\s)\*(?!\w)", re.S)
+_MD_BULLET_RE = re.compile(r"^[ \t]*[\*\-\u2022][ \t]+", re.M)
+_MD_HEADER_RE = re.compile(r"^[ \t]*#{1,6}[ \t]+", re.M)
+_MD_CODE_RE = re.compile(r"`([^`]*)`")
+
+
+def strip_markdown(text: str) -> str:
+    """Removes markdown markers and keeps the words. Bold, italics, bullet
+    markers, headers and inline code spans; a stray asterisk that is not
+    part of a pair is dropped as well, since in speech it is noise."""
+    if not text:
+        return text
+    if not any(ch in text for ch in "*#`\u2022") and not _MD_BULLET_RE.search(text):
+        return text
+    out = _MD_BOLD_RE.sub(r"\1", text)
+    out = _MD_ITALIC_RE.sub(r"\1", out)
+    out = _MD_BULLET_RE.sub("", out)
+    out = _MD_HEADER_RE.sub("", out)
+    out = _MD_CODE_RE.sub(r"\1", out)
+    return out.replace("*", "")
+
+
+# Answers to a yes-or-no question she asked, shared by the search/retain
+# gate (systems/inquiry/system.py) and the keep-offer gate
+# (systems/llm/system.py). 2026-09-21: the retain gate accepted only
+# "yes"/"y"/"yeah"/"confirm", while the composed question that night said
+# "Fact or trash bin?" — so "keep it", "fact" and "sure" all counted as
+# "moved on" and the retain fell to the Controller. Broad on purpose: the
+# cost of a false yes is one kept answer he can delete; the cost of a
+# false "moved on" is a question he answered being ignored.
+YES_WORDS = {"yes", "y", "yeah", "yep", "yup", "confirm", "confirmed", "sure",
+             "ok", "okay", "keep", "save", "store", "please", "do", "go",
+             "affirmative", "correct", "right", "fact", "definitely", "absolutely"}
+NO_WORDS = {"no", "n", "nope", "nah", "don't", "dont", "skip", "forget",
+            "delete", "drop", "never", "trash", "bin", "discard", "negative"}

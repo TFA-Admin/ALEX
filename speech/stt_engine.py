@@ -17,7 +17,31 @@ from faster_whisper.audio import decode_audio
 # this model now shares a 10GB card with the LLM. English-only is not a
 # constraint ALEX hits today, but it IS one: supporting another language
 # means going back to a multilingual model (large-v3 or medium).
-MODEL_SIZE = os.getenv("ALEX_STT_MODEL", "distil-large-v3")
+def _stt_model_from_controller_settings() -> str:
+    """2026-09-21: config/controller_settings.json can name the STT model
+    too (key "alex_stt_model"), so the choice travels with the LLM choice
+    and holds however she is launched. ALEX_STT_MODEL in the environment
+    still wins. Why it exists: qwen3.5:9b plus distil-large-v3 fills the
+    card to 9961 of 10240 MiB (the 9b's K/V cache runs at ~1.3 GiB under
+    Ollama's new engine, which does not quantize it), and CPU
+    transcription is not an option — distil-large-v3 int8 measured ~9s
+    for 6s of speech on this CPU against 0.3s on the GPU. `base` costs
+    ~0.2 GiB on the card and produced identical text on every synthetic
+    test in the 2026-09-20 A/B; its confidence scale differs, which
+    ws/ws_audio.py accounts for."""
+    import json
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "config", "controller_settings.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return str(json.load(fh).get("alex_stt_model", "")).strip()
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+MODEL_SIZE = (os.getenv("ALEX_STT_MODEL") or _stt_model_from_controller_settings()
+              or "distil-large-v3")
+STT_DEVICE = os.getenv("ALEX_STT_DEVICE", "auto").strip().lower()
 MIN_AUDIO_BYTES = 6000
 
 
@@ -61,7 +85,14 @@ def load_model():
     # alongside the load, a print error is indistinguishable from a real
     # model-load error — which is exactly what went wrong before.
     try:
-        if torch.cuda.is_available():
+        # 2026-09-21: ALEX_STT_DEVICE=cpu keeps Whisper off the card. Not
+        # the old FORCE_STT_CPU (a Maxwell bug workaround, deleted); this
+        # is VRAM budgeting for a model comparison: qwen3.5:9b is 6.1 GiB
+        # against 4.4 for qwen2.5:7b, and with distil-large-v3 resident
+        # the two together sit at ~9.4 of 10 GiB. The harness drives her
+        # over text, so STT on the CPU during a comparison costs nothing
+        # it measures. Unset or "auto" keeps the GPU.
+        if torch.cuda.is_available() and STT_DEVICE != "cpu":
             model = WhisperModel(MODEL_SIZE, device="cuda", compute_type="float16")
             _announce(f"Using GPU for STT ({MODEL_SIZE}, float16)")
             return model

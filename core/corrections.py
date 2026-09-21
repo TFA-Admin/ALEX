@@ -116,26 +116,58 @@ _TARGET_TRAILERS = (
 )
 
 
-def named_target(text: str, speaker_name: str = None) -> str:
-    """What he explicitly told her to stop saying, or "".
+# What splits "X and Y" into two things he named. Deliberately not "also"
+# or "then": those introduce a second instruction, not a second phrase.
+_TARGET_SPLIT_RE = re.compile(r"\s*(?:,|\band\b|\bor\b)\s*")
+
+# Placeholders that name nothing — "stop saying that" — and, as the FIRST
+# part of a list, mean the rest is an instruction rather than a phrase
+# ("stop saying that and move on").
+_NAMES_NOTHING = {"that", "it", "this", "those", "these", "stuff", "things",
+                  "thing", "", "so much", "shit"}
+
+
+# A quoted phrase. Single quotes only count with a real boundary on each
+# side: 2026-09-21 the previous pattern read the apostrophes in
+# "i'm not trying to override you. i'm just trying to correct you. stop
+# saying hell so much." as quote marks and recorded the phrase
+# "m not trying to override you. i" — his actual words, mangled.
+_QUOTED_TARGET_RE = re.compile(
+    r'"([^"]{2,60})"'
+    r'|\u201c([^\u201d]{2,60})\u201d'
+    r"|(?:^|[\s:(])'([^']{2,60})'(?=$|[\s.!?,;:)])"
+    r"|(?:^|[\s:(])\u2018([^\u2019]{2,60})\u2019(?=$|[\s.!?,;:)])"
+)
+
+
+def named_targets(text: str, speaker_name: str = None) -> list:
+    """Everything he explicitly told her to stop saying, in the order he
+    said it, or [] if he named nothing.
+
+    2026-09-21: "stop saying hell and my name so much" names two things,
+    and the single-phrase version of this returned one, "hell and my
+    name" — a phrase she has never said. Splits on and/or/commas. A quoted
+    phrase is never split: quotes are how he says the phrase itself
+    contains an "and".
 
     Quoted text wins outright — "stop saying 'deal with it'" is as
     unambiguous as it gets. Otherwise the phrase after the instruction,
     trimmed of the qualifiers people tack on ("so much", "all the time").
 
-    `speaker_name` resolves "stop saying my name", which is a real
-    instruction and must work even though names are excluded from
-    automatic detection. Him naming it is the whole point — the exclusion
-    exists to stop her GUESSING at his name, not to overrule him.
+    `speaker_name` resolves "my name", which is a real instruction and
+    must work even though names are excluded from automatic detection.
+    Him naming it is the whole point — the exclusion exists to stop her
+    GUESSING at his name, not to overrule him.
     """
     if not text:
-        return ""
+        return []
 
     lowered = " ".join(text.lower().split())
 
-    quoted = re.search(r"""['"\u2018\u201c]([^'"\u2019\u201d]{2,60})['"\u2019\u201d]""", text)
+    quoted = _QUOTED_TARGET_RE.search(text)
     if quoted:
-        return " ".join(quoted.group(1).lower().split())
+        phrase = next(g for g in quoted.groups() if g)
+        return [" ".join(phrase.lower().split())]
 
     for pattern in _NAMED_TARGET_PATTERNS:
         m = re.search(pattern, lowered)
@@ -146,18 +178,36 @@ def named_target(text: str, speaker_name: str = None) -> str:
         for trailer in _TARGET_TRAILERS:
             target = re.sub(trailer, "", target).strip(" .!?,;:")
 
-        if target in ("name", "my name") and speaker_name:
-            return speaker_name.lower()
+        parts = [p.strip(" .!?,;:") for p in _TARGET_SPLIT_RE.split(target)]
 
-        # "stop saying that" names nothing — fall through to working it out.
-        if target in ("that", "it", "this", "those", "these", "stuff",
-                      "things", "thing", "", "so much", "shit"):
-            return ""
+        # "stop saying that and ..." — the first thing names nothing, so
+        # the whole sentence is one unnamed correction plus an instruction.
+        if not parts or parts[0] in _NAMES_NOTHING:
+            return []
 
-        if 2 <= len(target) <= 60:
-            return target
+        found = []
+        for part in parts:
+            for trailer in _TARGET_TRAILERS:
+                part = re.sub(trailer, "", part).strip(" .!?,;:")
+            if part in ("name", "my name", "your name"):
+                if speaker_name:
+                    part = speaker_name.lower()
+                else:
+                    continue
+            if part in _NAMES_NOTHING or not (2 <= len(part) <= 60):
+                continue
+            if part not in found:
+                found.append(part)
+        return found
 
-    return ""
+    return []
+
+
+def named_target(text: str, speaker_name: str = None) -> str:
+    """The first thing he named, or "". Kept for callers that want one;
+    see named_targets() for the list."""
+    found = named_targets(text, speaker_name=speaker_name)
+    return found[0] if found else ""
 
 
 # Words that repeat in ordinary English regardless of any verbal tic, so a

@@ -226,7 +226,18 @@ async def synthesize_speech(text: str):
     A clause containing "*stage directions*" is split around each one and
     synthesized in pieces, with real silence (_PAUSE_SILENCE) spliced in
     between — so a line like "Sure. *pauses* Fine, whatever." comes out
-    as speech-silence-speech, not the words "pauses" spoken aloud."""
+    as speech-silence-speech, not the words "pauses" spoken aloud.
+
+    2026-09-21: that path no longer fires in practice, on purpose. The 9b
+    writes markdown emphasis constantly ("*do*", "*done*"), and this rule
+    turned each such word into half a second of silence — Craig heard
+    "*done*" as nothing, twice. core/text_utils.strip_markdown() now
+    removes the asterisks before any text reaches this function
+    (core/response_handler.py, core/voice.py), so the word is spoken and
+    a stage direction, if she ever writes one, is spoken as its words. A
+    silent beat where a word should be is the worse failure. If dramatic
+    pauses are wanted back, give them their own marker that emphasis
+    cannot collide with; do not reinstate the asterisk rule."""
     text = _normalize_for_speech(text)
     if not text.strip():
         return None

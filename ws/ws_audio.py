@@ -33,7 +33,19 @@ SPEECH_DEBOUNCE = 1.8
 # cutoff (-1.0), and -0.5 is ~42% of the way from -0.14 to -1.0. Same
 # caveat as the original, now twice over: still never validated against a
 # genuinely ambiguous REAL recording, only clean synthetic speech.
-LOW_CONFIDENCE_THRESHOLD = -0.5
+# 2026-09-21: per model, since the STT model is now selectable. The two
+# reference points above: clear speech ~-0.31 on `base` (threshold -0.6),
+# ~-0.14 on distil-large-v3 (threshold -0.5). Anything else gets the
+# distil value and a log line, so a new model is visibly untuned rather
+# than silently wrong.
+# 2026-09-21, live on base: "Run a diagnostic." scored -0.63 and was
+# correct; "Alex Runnage System Diagnostic" scored -0.73 and was not. -0.6
+# re-asked the correct one. -0.7 separates those two; n=2, directional.
+_LOW_CONFIDENCE_BY_MODEL = {"base": -0.7, "distil-large-v3": -0.5}
+from speech.stt_engine import MODEL_SIZE as _STT_MODEL
+LOW_CONFIDENCE_THRESHOLD = _LOW_CONFIDENCE_BY_MODEL.get(_STT_MODEL, -0.5)
+if _STT_MODEL not in _LOW_CONFIDENCE_BY_MODEL:
+    logger.warning(f"[STT] no confidence threshold tuned for {_STT_MODEL!r}; using -0.5")
 
 # Reused both for the clarification follow-up below and nowhere else —
 # deliberately broader than a strict yes/no (a clarification answer is
@@ -49,6 +61,13 @@ class AudioProcessor:
         # The low-confidence transcript awaiting a yes/no (or a repeat) —
         # set by process_end() itself, consumed on the very next call.
         self.pending_clarification = None
+        # 2026-09-21: set when the utterance just returned was the answer
+        # to a clarification she asked. ws/ws_handlers.py reads and clears
+        # it: an answer to her own question is addressed to her by
+        # definition, wake word or not. Live, "Run a diagnostic." was
+        # re-asked, then his "Yes, yes, I did." was dropped as "not
+        # addressed" because the 45s window had lapsed while she asked.
+        self.answered_clarification = False
 
     def add_audio(self, chunk: bytes):
         self.audio_buffer += chunk
@@ -187,16 +206,20 @@ class AudioProcessor:
         # inherently easy to mishear on its own terms, and re-asking about
         # the confirmation would just loop forever).
         # -------------------------
+        answering = False
         if self.pending_clarification is not None:
             pending_text = self.pending_clarification
             self.pending_clarification = None
+            answering = True
 
             if first_word(clean) in CONFIRM_WORDS:
+                self.answered_clarification = True
                 return pending_text
 
             # Anything else — treat THIS utterance as the real, corrected
-            # one; falls through to the normal checks below rather than
-            # assuming it's automatically trustworthy.
+            # one. It is never re-clarified: a repeat that also scores low
+            # would loop ("did you say X?" / "X." / "did you say X?"),
+            # which is exactly what happened live on 2026-09-21.
 
         if clean in {"now", "no now", "um", "uh", "okay", "ok"}:
             await send_debug(websocket, f"⚠️ Filtered filler word: '{clean}'")
@@ -206,10 +229,12 @@ class AudioProcessor:
         # CONFIDENCE CHECK (2026-07-18) — see LOW_CONFIDENCE_THRESHOLD
         # above for where this number comes from.
         # -------------------------
-        if confidence is not None and confidence < LOW_CONFIDENCE_THRESHOLD:
+        if (not answering and confidence is not None
+                and confidence < LOW_CONFIDENCE_THRESHOLD):
             await send_debug(websocket, f"🤔 Low confidence ({confidence:.2f}), asking for clarification: {prompt_text!r}")
             self.pending_clarification = prompt_text
             await self._ask_clarification(websocket, prompt_text, user_id=user_id)
             return None
 
+        self.answered_clarification = answering
         return prompt_text

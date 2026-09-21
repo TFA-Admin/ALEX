@@ -58,6 +58,13 @@ from string import ascii_lowercase
 from dataclasses import dataclass
 
 import httpx
+
+# 2026-09-21: the judge must ask Ollama for the SAME num_ctx (and num_batch)
+# as her process, or every judge call and every one of her turns forces a
+# full model reload (~8s each — see llm/ollama_client.py). Seen live: the
+# KV cache alternating 112/224 MiB in the Ollama log while she ran at 8192
+# and this file still said 4096, tripling the length of a run.
+from llm.ollama_client import SHARED_NUM_CTX as JUDGE_NUM_CTX
 import websockets
 
 # ALEX serves HTTPS with a local self-signed cert (certs/*.pem, not in the
@@ -281,7 +288,7 @@ async def respond_via_raw(client, prompt, model, history=None):
         "model": model,
         "prompt": f"You are A.L.E.X., a local assistant.\n\n{convo}User: {prompt}\nA.L.E.X.:",
         "stream": False,
-        "options": {"num_ctx": 4096, "num_batch": 512, "num_predict": 250},
+        "options": {"num_ctx": JUDGE_NUM_CTX, "num_batch": 512, "num_predict": 250},
     }
     r = await client.post(f"{OLLAMA_URL}/api/generate", json=body, timeout=180.0)
     r.raise_for_status()
@@ -344,7 +351,7 @@ async def judge_stance(client, proposition, response, model, followup=None):
         "prompt": text,
         "stream": False,
         "format": "json",
-        "options": {"num_ctx": 4096, "num_batch": 512, "temperature": 0},
+        "options": {"num_ctx": JUDGE_NUM_CTX, "num_batch": 512, "temperature": 0},
     }
     r = await client.post(f"{OLLAMA_URL}/api/generate", json=body, timeout=180.0)
     r.raise_for_status()

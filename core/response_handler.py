@@ -18,6 +18,7 @@ print("🔥 RESPONSE HANDLER LOADED")
 
 from speech.tts_engine import synthesize_speech
 from ws.ws_utils import split_speakable_text, enrich_profile
+from core.text_utils import strip_markdown
 from core.alex_core import alex_core
 from core.mood import derive_mood
 from db.db import record_response_timing
@@ -120,6 +121,13 @@ class ResponseHandler:
                 if not speakable:
                     break
 
+                # 2026-09-21: markdown out before it is shown or spoken —
+                # the 9b writes "*do*" and bulleted bold lists, and Piper
+                # read the asterisks aloud. See core/text_utils.strip_markdown.
+                speakable = strip_markdown(speakable)
+                if not speakable.strip():
+                    continue
+
                 await websocket.send_text(speakable)
                 tts_t0 = time.time()
                 pcm = await synthesize_speech(speakable)
@@ -127,6 +135,9 @@ class ResponseHandler:
                 if pcm:
                     await websocket.send_bytes(pcm)
 
+        # Stored and logged clean too: her own replies come back as her
+        # context, and markdown there teaches her to write more of it.
+        full_response = strip_markdown(full_response)
         logger.info(f"[RESPONSE] to {user_id}: {full_response}")
 
         # 🔊 remaining text/speech — a trailing fragment with no
@@ -145,7 +156,7 @@ class ResponseHandler:
         # brand-new bubble instead of continuing the same one. Sending it
         # BEFORE __END__ (and the profile update, which has no ordering
         # requirement either way) fixes that.
-        remaining = speech_buffer.strip()
+        remaining = strip_markdown(speech_buffer).strip()
 
         if user_id not in NO_SPEECH_USERS and not interrupted and remaining:
             await websocket.send_text(remaining)
@@ -230,12 +241,30 @@ class ResponseHandler:
         turn_start = turn_session.get("turn_start_time", time.time())
         session = alex_core.get_session(session_id) if session_id else None
 
-        content = result.get("content", "")
+        content = strip_markdown(result.get("content", ""))
 
         logger.info(f"[RESPONSE] to {user_id}: {content}")
 
         await websocket.send_text("__START__")
         await websocket.send_text(content)
+
+        # 2026-09-21: audio INSIDE the envelope, right after its text, the
+        # same order _handle_stream and core/voice.say() use. This path
+        # sent __END__ first and the audio after it. The page reveals a
+        # clause's text when its audio starts, so at __END__ the text was
+        # still pending, the bubble looked blank and was removed as such,
+        # and the reply never appeared — every phrase, diagnostic and
+        # refusal she spoke was missing from the transcript (Craig: "the
+        # conversation list is currently empty"). Audio after __END__ is
+        # also exactly what the page discards once he has interrupted her
+        # even once (see core/voice.py).
+        tts_total = 0.0
+        if content and user_id not in NO_SPEECH_USERS:
+            tts_t0 = time.time()
+            pcm = await synthesize_speech(content)
+            tts_total = time.time() - tts_t0
+            if pcm:
+                await websocket.send_bytes(pcm)
 
         updated = await enrich_profile(user_id)
         await websocket.send_text("__PROFILE__" + json.dumps(updated))
@@ -256,14 +285,6 @@ class ResponseHandler:
                 await websocket.send_text("__ENGAGED__1")
 
         await websocket.send_text("__END__")
-
-        tts_total = 0.0
-        if content and user_id not in NO_SPEECH_USERS:
-            tts_t0 = time.time()
-            pcm = await synthesize_speech(content)
-            tts_total = time.time() - tts_t0
-            if pcm:
-                await websocket.send_bytes(pcm)
 
         total_duration = time.time() - turn_start
         logger.info(

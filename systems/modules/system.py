@@ -66,8 +66,21 @@ _MODULE_QUESTION_STARTS = (
 )
 
 
-def _looks_like_module_question(text):
+def _looks_like_module_question(text, module_name=None):
+    """A question ABOUT the module, as opposed to a question the module is
+    there to answer.
+
+    2026-09-21: this used to say any text ending in "?" was a question
+    about the module, so "What do you remember about NASCAR?" got the
+    recall module's description read out instead of an answer — twice in
+    one conversation. A question is about the module only if it names it
+    (or says "module"); a trigger word inside a question is the module's
+    job, not a request for its manual."""
     t = text.strip().lower()
+    names = ["module"] + ([module_name.lower(), module_name.lower().replace("_", " ")]
+                          if module_name else [])
+    if not any(n in t for n in names):
+        return False
     if t.endswith("?"):
         return True
     return t.startswith(_MODULE_QUESTION_STARTS)
@@ -139,7 +152,7 @@ class System(BaseSystem):
         # here just falls through to a description instead of running the
         # module, a low-cost failure, while the real bug (a genuine
         # question misrouted as a command) is the one actually observed.
-        if _looks_like_module_question(text):
+        if _looks_like_module_question(text, module_name):
             module_help = None
             try:
                 if hasattr(module, "help"):

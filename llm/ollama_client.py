@@ -27,7 +27,23 @@ pending_profile_changes = {}
 # produced unreliable JSON extraction (chat-template artifacts leaking into
 # extracted values) under Ollama's JSON-constrained decoding. Env var lets
 # this be changed without editing code.
-DEFAULT_MODEL = os.getenv("ALEX_LLM_MODEL", "qwen2.5:7b")
+def _model_from_controller_settings() -> str:
+    """2026-09-21: the Controller's model selector writes
+    config/controller_settings.json; read it here too, so the choice holds
+    however she is launched (an older Controller build, ALEX.py by hand,
+    the harness driver). ALEX_LLM_MODEL in the environment still wins."""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "config", "controller_settings.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            value = json.load(fh).get("alex_llm_model", "")
+        return str(value).strip()
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+DEFAULT_MODEL = (os.getenv("ALEX_LLM_MODEL") or _model_from_controller_settings()
+                 or "qwen2.5:7b")
 
 # All three methods below must share this same num_ctx — confirmed live
 # (2026-07-16) that Ollama fully reloads the model (~8s) any time num_ctx
@@ -40,7 +56,27 @@ DEFAULT_MODEL = os.getenv("ALEX_LLM_MODEL", "qwen2.5:7b")
 # sizes (the LLM system prompt alone runs ~957 tokens before any real
 # facts/memory content, self-reflection's real prompt measures 825) with
 # margin for growth, verified affordable against live free VRAM.
-SHARED_NUM_CTX = 4096
+# 2026-09-21 (Craig approved): 8192. The 4096 above was chosen with margin
+# for a ~960-token system prompt; the real prompt now measures ~2700 tokens
+# before memory, so two thirds of what she could see was instruction and
+# the 12-turn memory window had to be size-capped to keep the front of the
+# prompt from being truncated. K/V at q8_0 measured 119 MiB at 4096, so
+# this costs ~120 MiB more against ~2.6 GB of headroom with Whisper
+# resident. Prefill cost depends on tokens actually sent, not on num_ctx,
+# so an ordinary turn is not slower. Tool results (the next build) need
+# the room as well.
+# Per-model, because the K/V cache is not the same size per token across
+# models. Measured 2026-09-21 from Ollama's own load report, q8_0, 8192:
+# qwen2.5:7b K/V 224 MiB; qwen3.5:9b K/V 1.4 GiB plus a 767 MiB compute
+# graph, 8.3 GiB in all. With distil-large-v3 resident (2.2 GiB, and it
+# has to be: CPU int8 transcription measured ~9s for 6s of speech on this
+# CPU against 0.3s on the card) the 9b at 8192 left the card at 9975 of
+# 10240 MiB — everything offloaded, no headroom for Whisper's working
+# memory. 6144 keeps ~2000 tokens spare over the ~2700-token prompt, the
+# 1000-token memory window and a 300-token reply, and returns ~0.6 GiB.
+# ALEX_NUM_CTX in the environment overrides both.
+_NUM_CTX_BY_MODEL = {"qwen3.5:9b": 6144}
+SHARED_NUM_CTX = int(os.getenv("ALEX_NUM_CTX") or _NUM_CTX_BY_MODEL.get(DEFAULT_MODEL, 8192))
 
 # Pool-level default only. Every method still passes its own per-request
 # timeout, which is what actually applies — this just has to be large
@@ -68,6 +104,28 @@ DEFAULT_TIMEOUT_S = 300.0
 # picked as 64 for streaming's sake but only prefill throughput is
 # actually affected by it.
 SHARED_NUM_BATCH = 512
+
+# 2026-09-21: keep the model resident. Ollama's default keep_alive unloads a
+# model after five idle minutes, and the first request afterwards pays a
+# full reload. Measured in her own logs: after a ~30 minute pause the
+# runner restarted at 02:33:49, the 4.1 GiB of weights loaded again, and
+# the intent classification for that turn took 17.25s against its usual
+# ~0.7s — sixteen seconds of silence on the first thing said after a
+# break, every time. core/readiness.py already warms the model at startup
+# on exactly this reasoning; this stops it going cold again. -1 means
+# "indefinitely". It is sent per request, not set in the environment,
+# because OLLAMA_MAX_LOADED_MODELS taught us a machine-level variable can
+# silently outrank the Controller's. Model swaps still work: with one
+# model slot, loading another evicts this one regardless.
+KEEP_ALIVE = -1
+
+# Qwen3-family models default to thinking mode ON: hundreds of hidden
+# tokens before the first visible one, several seconds on a voice turn.
+# Off for every conversational call, so a model swap measures the model and
+# not its scratchpad; the deliberation pass (roadmap item 4) is where
+# thinking is switched on deliberately, per call. Sent only for models that
+# understand the parameter — Ollama rejects `think` on models that do not.
+_THINK_KW = {"think": False} if DEFAULT_MODEL.lower().startswith("qwen3") else {}
 
 
 class OllamaManager:
@@ -200,6 +258,7 @@ class OllamaManager:
                 "prompt": prompt,
                 "raw": True,
                 "stream": True,
+                "keep_alive": KEEP_ALIVE,
                 "options": {
                     "num_ctx": SHARED_NUM_CTX,
                     "num_batch": SHARED_NUM_BATCH,
@@ -215,6 +274,8 @@ class OllamaManager:
                     {"role": "user", "content": prompt}
                 ],
                 "stream": True,
+                "keep_alive": KEEP_ALIVE,
+                **_THINK_KW,
                 "options": {
                     "num_ctx": SHARED_NUM_CTX,
                     "num_batch": SHARED_NUM_BATCH,
@@ -296,6 +357,80 @@ class OllamaManager:
                 print(f"⚠️ Ollama stream connection dropped ({e}) — reconnecting once")
                 await self.aclose()
 
+    async def chat_stream(self, messages, tools=None, model: str = DEFAULT_MODEL):
+        """Streams a chat turn built from a real message list, optionally
+        with tools she may call. Yields ("text", str) for content and
+        ("tool_calls", list) when the model decides to call something.
+
+        2026-09-21, roadmap item 1. Kept separate from generate_stream():
+        that one takes a bare prompt and yields bare strings, and three
+        callers depend on it. This one is what systems/llm/system.py uses
+        for the tool loop — see core/tools.py for what she can call and
+        why the set is what it is. Same pooled client, same keep_alive,
+        same thinking switch, same reconnect-once rule."""
+        if not self.ready and not await self.init(timeout=self.READY_WAIT_S):
+            raise RuntimeError("Ollama is not reachable")
+
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "keep_alive": KEEP_ALIVE,
+            **_THINK_KW,
+            "options": {
+                "num_ctx": SHARED_NUM_CTX,
+                "num_batch": SHARED_NUM_BATCH,
+                "num_predict": 300,
+            },
+        }
+        if tools:
+            payload["tools"] = tools
+
+        attempt = 0
+        while True:
+            yielded = False
+            client = self._get_client()
+            try:
+                async with client.stream("POST", f"{self.host}/api/chat", json=payload,
+                                         timeout=300.0) as response:
+                    buffer = ""
+                    async for raw_chunk in response.aiter_raw():
+                        if not raw_chunk:
+                            await asyncio.sleep(0)
+                            continue
+                        try:
+                            buffer += raw_chunk.decode("utf-8")
+                        except Exception:
+                            continue
+                        while "\n" in buffer:
+                            line, buffer = buffer.split("\n", 1)
+                            if not line.strip():
+                                continue
+                            try:
+                                data = json.loads(line)
+                            except Exception:
+                                continue
+                            if data.get("error"):
+                                raise RuntimeError(str(data["error"]))
+                            msg = data.get("message") or {}
+                            calls = msg.get("tool_calls")
+                            if calls:
+                                yielded = True
+                                yield ("tool_calls", calls)
+                            content = msg.get("content", "")
+                            if content:
+                                yielded = True
+                                yield ("text", content)
+                        await asyncio.sleep(0)
+                return
+            except (httpx.RemoteProtocolError, httpx.ConnectError,
+                    httpx.ReadError, httpx.WriteError) as e:
+                if yielded or attempt >= 1:
+                    raise
+                attempt += 1
+                print(f"⚠️ Ollama chat stream connection dropped ({e}) — reconnecting once")
+                await self.aclose()
+
     async def generate_json(self, prompt: str, model: str = DEFAULT_MODEL, timeout: float = 15.0,
                              temperature: float = None):
         """
@@ -339,6 +474,8 @@ class OllamaManager:
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
+                    "keep_alive": KEEP_ALIVE,
+                    **_THINK_KW,
                     "format": "json",
                     "options": options
                 }
@@ -390,6 +527,8 @@ class OllamaManager:
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
+                    "keep_alive": KEEP_ALIVE,
+                    **_THINK_KW,
                     "options": options
                 }
             )

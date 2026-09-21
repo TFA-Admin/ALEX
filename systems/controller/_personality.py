@@ -17,6 +17,7 @@ from db.db import (
 )
 from core.intent_classifier import classify_personality_set, merge_personality_change
 from core.override_code import override_code_status, strip_override_code_mention
+from core import corrections as corr
 from config.logger_config import logger
 
 from systems.controller._role_gates import require_creator
@@ -148,6 +149,26 @@ async def handle(session, user_id: str, text: str, msg: str):
     # docstring for why this is a separate call, not folded into the
     # shared one — and why the current-personality merge below is its
     # own separate step, not part of this classification call).
+    # 2026-09-21: a correction is not a personality change. "Stop saying
+    # hell and my name so much" was classified as a personality set here
+    # (the classifier's own prompt lists "stop saying X" as one), gated
+    # behind the override code, and answered with an invented code
+    # ("CHANGEMYMODE123") — while the corrections system built for exactly
+    # that sentence (core/corrections.py: no code, escalating, his) sat at
+    # priority 100 and never saw it. Which system handled "stop saying X"
+    # was a 7B judgment call. Craig, to her: "No, I'm not trying to
+    # override you. I'm just trying to correct you."
+    #
+    # Deterministic: if it reads as a correction and carries no override
+    # code, it is a correction, and it falls through to
+    # systems/llm/system.py. The explicit forms — "set your personality
+    # to ...", the reset phrases, anything said WITH the code — are
+    # untouched, so a durable rule is still one sentence away when that is
+    # what he means.
+    if (new_desc is None and corr.is_correction(exact_phrase_input)
+            and await override_code_status(user_id, msg) == "absent"):
+        return None
+
     if new_desc is None and await get_user_role(user_id) == "creator":
         result = await classify_personality_set(exact_phrase_input)
         if result.get("personality_command") == "set":

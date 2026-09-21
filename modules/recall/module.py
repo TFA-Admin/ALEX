@@ -1,8 +1,22 @@
+import re
+
 from db.db import fetch_recent_memory, fetch_vector_memories
 
 
 def init():
     return "memory module ready — backed by real conversation history"
+
+
+def help():
+    """2026-09-21: she had no self-description, so asking her a question
+    that named the module produced "it refuses to introduce itself"."""
+    return ("I can tell you what I remember about a topic, or list our "
+            "recent conversations.")
+
+
+# "about" was the only word the topic parser knew; "recall information ON
+# NASCAR" dumped the last ten turns instead (2026-09-21, live).
+_TOPIC_WORDS = (" about ", " on ", " regarding ", " concerning ", " of ")
 
 
 async def diagnose():
@@ -33,8 +47,12 @@ async def handle(command, state, user_id=None):
     # tonight in the base generation scaffold, reproduced here by hand.
     cmd = command.lower().strip()
 
-    if "about" in cmd and ("recall" in cmd or "remember" in cmd):
-        topic = cmd.rsplit("about", 1)[1].strip()
+    padded = f" {cmd} "
+    topic_word = next((w for w in _TOPIC_WORDS if w in padded), None)
+    if topic_word and ("recall" in cmd or "remember" in cmd):
+        # Up to the first sentence break: "recall information on NASCAR.
+        # Do it." is about NASCAR, not about "nascar. do it".
+        topic = re.split(r"[.!?,;:]", padded.rsplit(topic_word, 1)[1])[0].strip()
 
         if not topic:
             return "What should I recall?", state

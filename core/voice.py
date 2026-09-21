@@ -143,6 +143,9 @@ async def say(websocket, text: str, *, user_id: str = None,
     if not text:
         return False
 
+    from core.text_utils import strip_markdown
+    text = strip_markdown(text)
+
     async with speech_lock:
         try:
             await websocket.send_text("__START__")

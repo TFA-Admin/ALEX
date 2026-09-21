@@ -20,7 +20,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from core.system_base import BaseSystem
-from core.text_utils import first_word, strip_trailing_punctuation
+from core.text_utils import first_word, strip_trailing_punctuation, YES_WORDS, NO_WORDS
 from core.embedding_engine import embed
 from core.phrasebook import get_phrase
 from module_runtime.module_loader import load_module
@@ -123,7 +123,9 @@ class System(BaseSystem):
 
             word = first_word(msg)
 
-            if word in ("yes", "y", "yeah", "confirm"):
+            # 2026-09-21: the shared sets — see core/text_utils.YES_WORDS
+            # for why "keep it" and "fact" have to count.
+            if word in YES_WORDS:
                 denial = await require_creator(user_id, session, text)
                 if denial:
                     del _pending[user_id]
@@ -133,7 +135,7 @@ class System(BaseSystem):
                     return await self._run_search_stage(user_id, pending)
                 return await self._run_retain_stage(user_id, pending)
 
-            if word in ("no", "n"):
+            if word in NO_WORDS:
                 report_id = pending["report_id"]
                 stage = pending["stage"]
                 del _pending[user_id]

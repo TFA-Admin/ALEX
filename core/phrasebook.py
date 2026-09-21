@@ -132,7 +132,11 @@ PHRASE_REGISTRY = {
         # language she then invents more of, so the instruction is now
         # phrased as speech.
         "Changing my personality that way needs your override code — say it along with what you want changed.",
-        "Tell the creator this specific personality action (set/reset personality, or reset phrases) now requires stating the override code in the same request, and give a short example of the phrasing."
+        # 2026-09-21: no example. "Give a short example of the phrasing"
+        # produced "state it like: 'Change to more polite, please123'" and
+        # "state it now: CHANGEMYMODE123" — codes that do not exist, in
+        # quotes, spoken to him as if they were his. See _teaches_a_syntax().
+        "Tell the creator this personality change needs his override code, stated in the same request. Do not invent, suggest, spell out or quote any code, example or phrasing — only that the code is needed."
     ),
     "cannot_change_creator_role": (
         "I can't change that user's role.",
@@ -308,7 +312,7 @@ PHRASE_REGISTRY = {
     ),
     "search_findings_ask_retain": (
         "{findings}\n\nWant me to remember this?",
-        "Report the real findings from a web search, then ask whether to keep them as stored knowledge. {findings} is a placeholder for the actual search result content — it MUST stay completely verbatim, never paraphrased, summarized, or altered, since it's factual content from a real source. Only the 'want me to remember this' framing around it is yours to phrase."
+        "Report the real findings from a web search, then ask whether to keep them as stored knowledge. {findings} is a placeholder for the actual search result content — it MUST stay completely verbatim, never paraphrased, summarized, or altered, since it's factual content from a real source. Only the 'want me to remember this' framing around it is yours to phrase — and ask it as a plain yes-or-no question, so that 'yes' or 'no' answers it. Do not offer two named choices of your own (2026-09-21: 'Fact or trash bin?' invited answers the code did not understand)."
     ),
     "search_report_not_found": (
         "I couldn't find that search request anymore.",
@@ -329,6 +333,12 @@ PHRASE_REGISTRY = {
     "disabled_systems_list": (
         "Disabled systems: {disabled_list}",
         "List which systems are currently disabled for this session. {disabled_list} is a placeholder for the actual list — keep it verbatim, don't paraphrase or drop any entries."
+    ),
+    # 2026-09-21: replaces the raw "No system handled the input." that
+    # core/system_manager.py used to return, and which was spoken to Craig.
+    "nothing_handled": (
+        "Something went wrong on my end with that one. Say it again?",
+        "Tell the person something went wrong on your side with what they just said, so you could not answer it, and ask them to say it again. Do not guess at what went wrong."
     ),
 }
 
@@ -387,6 +397,32 @@ Say it. Your words, this time, not a repeat.{extra}
 
 Respond with ONLY a JSON object:
 {{"line": "<what you say>"}}"""
+
+
+# Invented command syntax, caught structurally rather than by a better
+# prompt — the same rule core/self_reflection.py applies to re-voicing.
+_FAKE_TEMPLATE_RE = re.compile(r"\[[^\]]{1,30}\]")
+_QUOTED_RE = re.compile(r'["\u201c\u201d]|(?:^|[\s:(])[\'\u2018]')
+
+
+def _teaches_a_syntax(key: str, line: str) -> bool:
+    """True if a composed line would teach him a command language that
+    does not exist.
+
+    Any key: a [bracketed] token. That is how "Override [1] for a more
+    entertaining response" was seeded — a template placeholder in a
+    default, said aloud, remembered, generalised.
+
+    The override-code line specifically: a digit or a quoted string.
+    2026-09-21 it produced "state it like: 'Change to more polite,
+    please123'" and "state it now: CHANGEMYMODE123". The intent no longer
+    asks for an example; this catches the model giving one anyway."""
+    if _FAKE_TEMPLATE_RE.search(line or ""):
+        return True
+    if key == "personality_override_code_required":
+        if re.search(r"\d", line or "") or _QUOTED_RE.search(line or ""):
+            return True
+    return False
 
 
 async def _say_it_fresh(key: str, intent: str, voice: str,
@@ -458,6 +494,11 @@ async def _say_it_fresh(key: str, intent: str, voice: str,
 
     line = str(result.get("line", "")).strip()[:400]
     if not line:
+        return ""
+
+    if _teaches_a_syntax(key, line):
+        logger.info(f"[PHRASE] Rejected a composed '{key}' — it invents a "
+                    f"syntax or a code: {line!r}")
         return ""
 
     # Structural check, not a better prompt — the guarantee

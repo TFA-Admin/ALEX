@@ -1008,25 +1008,30 @@ ws.onmessage = (e)=>{
     }
 
     if(data === "__END__"){
-        // 2026-09-20 (Craig: "Why is it making these blank sqaures now?")
-        // __START__ always creates a bubble, and identity_manager._speak()
-        // sends an envelope carrying ONLY audio — its callers already sent
-        // their text separately. So every spoken handshake prompt left an
-        // empty box behind. Introduced this morning by wrapping that audio
-        // in the envelope, which was itself the fix for the audio being
-        // silently dropped. Drop the bubble if nothing was ever written to
-        // it; the audio has already played by now either way.
-        if(currentDiv && !currentMsg){
-            currentDiv.remove();
-            currentDiv = null;
-        }
-
-        // Safety net: reveal any text still waiting on audio that never
-        // arrived (e.g. synthesis failed for that clause) so it's never
-        // silently lost — everything else already got revealed in sync
-        // with its audio via scheduleAudioChunk() below.
+        // Safety net FIRST: reveal any text still waiting on audio that
+        // never arrived (synthesis failed for that clause, or the audio is
+        // still in flight) so it is never silently lost.
+        //
+        // 2026-09-21 (Craig: "the conversation list is currently empty").
+        // This used to run AFTER the empty-bubble check below, and every
+        // deterministic reply — a phrase, a diagnostic, the override-code
+        // line — vanished from the transcript: core/response_handler.py's
+        // simple path sent its audio AFTER __END__, so at __END__ the text
+        // was still pending, currentMsg was empty, the bubble was removed
+        // as "blank", and the flush then wrote into a div that no longer
+        // existed. The server order is fixed too; this makes the client
+        // correct regardless of it.
         while(pendingTexts.length){
             appendBotText(pendingTexts.shift());
+        }
+
+        // 2026-09-20 (Craig: "Why is it making these blank sqaures now?")
+        // __START__ always creates a bubble, and a handshake envelope can
+        // carry only audio because its caller already sent the text
+        // separately. Drop the bubble only if nothing was written to it,
+        // pending text included.
+        if(currentDiv && !currentMsg){
+            currentDiv.remove();
         }
         currentDiv = null;
         if(listening) setListenState("idle");
