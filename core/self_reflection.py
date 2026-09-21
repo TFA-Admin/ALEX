@@ -26,7 +26,7 @@ from db.db import (
 )
 from llm.ollama_client import ollama_manager
 from core.phrasebook import PHRASE_REGISTRY, SECURITY_SENSITIVE_PHRASES
-from core import self_model
+from core import self_model, skeptic
 from core.embedding_engine import embed, cosine_similarity
 from core.text_utils import strip_emojis
 from config.logger_config import logger
@@ -868,6 +868,7 @@ async def run_self_reflection():
             logger.info(f"[REFLECTION] Pass complete — {'; '.join(outcome)}")
             return
 
+        hard_rules = await get_personality_hard_rules()
         personality_change = await _reflect_on_personality(recent)
 
         if not personality_change:
@@ -876,6 +877,28 @@ async def run_self_reflection():
             return
 
         new_desc, reason = personality_change
+
+        # 2026-09-20 — the other half of the standing objective: "give her
+        # the capacity to disagree, and stop the reflection loop from
+        # sanding it off." personality_log shows the sanding happening —
+        # 13 of 27 self-initiated changes state their own reason as some
+        # form of "to better match what Craig wants", including #270, which
+        # reverted an explicit creator instruction 89 seconds after he gave
+        # it. See core/skeptic.py.
+        #
+        # Creator overrides never reach here; this is only her own
+        # unprompted edits to herself.
+        current_desc = await get_personality(raw=True)
+        allowed, why = await skeptic.permits(
+            current_desc, new_desc, reason, hard_rules=hard_rules)
+
+        if not allowed:
+            outcome.append(f"refused own personality change ({why})")
+            logger.info(
+                f"[PERSONALITY] Refused her own change — {why}. "
+                f"Proposed: {new_desc!r} (reason: {reason!r})")
+            logger.info(f"[REFLECTION] Pass complete — {'; '.join(outcome)}")
+            return
 
         await set_personality(new_desc)
         await log_personality_change(new_desc, reason, kind="personality")
