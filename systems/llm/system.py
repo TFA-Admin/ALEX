@@ -57,6 +57,7 @@ from db.db import (
     create_query_report, attach_search_findings, fetch_recent_memory,
     record_correction, fetch_corrections, get_user_role as _role,
     fetch_active_conclusions, record_decision, fetch_profile_names,
+    answer_curiosity_question, fetch_answered_curiosity,
     get_personality_hard_rules
 )
 from core.knowledge_filter import is_worth_keeping
@@ -285,6 +286,44 @@ class System(BaseSystem):
         keep_reply = await self._resolve_keep_offer(session, user_id, user_input)
         if keep_reply is not None:
             return keep_reply
+
+        # -------------------------
+        # THE ANSWER TO WHAT SHE ASKED (2026-09-20)
+        # -------------------------
+        # Craig: "does the curiosity queue retain my answers?" It did not —
+        # she asked, he answered, and the answer became an ordinary memory
+        # row with nothing tying it to the question. Four of the five
+        # questions on file were asked twice and then dropped, having been
+        # answered both times.
+        #
+        # Positional, like the awareness system's reason capture: the turn
+        # straight after her question is the answer often enough, and being
+        # wrong costs one stored answer that is merely irrelevant, against
+        # a question she asked twice and learned nothing from.
+        #
+        # Deliberately requires something substantial — "yeah" or "ok" is
+        # acknowledgement, not an answer, and storing it would close the
+        # question while teaching her nothing.
+        awaiting_topic = session.pop("awaiting_curiosity_answer", None)
+        if awaiting_topic and len(user_input.split()) >= 4:
+            try:
+                if await answer_curiosity_question(awaiting_topic, user_input):
+                    await record_decision(
+                        "curiosity",
+                        f"Got an answer about {awaiting_topic}",
+                        reasoning="She asked, and this is what he said back — "
+                                  "his words, not something she worked out.",
+                        evidence=user_input[:300],
+                        outcome="kept, and she will not ask again",
+                        actor=user_id)
+                    logger.info(
+                        f"[ACTION] Curiosity about {awaiting_topic!r} answered: "
+                        f"{user_input[:80]!r}")
+            except Exception as e:
+                logger.warning(f"⚠️ could not keep the answer: {e}")
+        elif awaiting_topic:
+            # Too short to be an answer — keep waiting one more turn.
+            session["awaiting_curiosity_answer"] = awaiting_topic
 
         # -------------------------
         # "STOP SAYING THAT" (2026-09-20)
@@ -528,6 +567,20 @@ class System(BaseSystem):
                 "\nUse these to understand what he means and what he is "
                 "after. Do NOT state them back to him as fact, do not bring "
                 "them up unprompted, and never claim he told you any of it.")
+
+        # What he asked about and was actually told. His words, about
+        # things she chose to be curious about — the best-grounded thing
+        # she has, and it was being discarded until now.
+        try:
+            learned = await fetch_answered_curiosity(limit=5)
+        except Exception:
+            learned = []
+
+        if learned:
+            context_blocks.append(
+                "THINGS YOU ASKED HIM ABOUT, AND WHAT HE TOLD YOU (his "
+                "words — you can rely on these):\n" + "\n".join(
+                    f"- {a['topic']}: {a['answer']}" for a in learned))
 
         # What he has told her to stop saying, and how many times.
         #

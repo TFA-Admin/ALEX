@@ -427,6 +427,11 @@ async def ws_text(websocket: WebSocket):
 
                     await mark_curiosity_question_asked(q["topic"])
 
+                    # She asked something; whatever he says next is very
+                    # likely the answer. See systems/llm/system.py for the
+                    # capture and why it is positional.
+                    alex_core.get_session(session_id)["awaiting_curiosity_answer"] = q["topic"]
+
         # -------------------------
         # MAIN LOOP
         # -------------------------

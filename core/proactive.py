@@ -62,6 +62,11 @@ async def _check_curiosity_delivery():
     # abrupt — that is what makes it unprompted.
     delivered = await push_to_creator(q["question"])
     if delivered:
+        # Same as the connect-time path: the next thing he says is
+        # probably the answer.
+        for session_id in get_active_creator_session_ids():
+            alex_core.get_session(session_id)["awaiting_curiosity_answer"] = q["topic"]
+
         logger.info(f"[ACTION] Proactively delivered curiosity question mid-session: {q['question']}")
         await mark_curiosity_question_asked(q["topic"])
 
