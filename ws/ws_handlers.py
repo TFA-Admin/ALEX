@@ -500,6 +500,11 @@ async def ws_text(websocket: WebSocket):
         # (e.g. disconnected mid-handshake).
         _active_connections.pop(session_id, None)
 
+        # 2026-09-20: and the session dict behind it, which nothing had
+        # ever removed. See alex_core.end_session() for the measurement and
+        # for why the race with a still-streaming response is fine.
+        alex_core.end_session(session_id)
+
 
 # -------------------------
 # MESSAGE PROCESSOR

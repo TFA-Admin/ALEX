@@ -51,6 +51,30 @@ class AlexCore:
             }
         return self.sessions[session_id]
 
+    def end_session(self, session_id: str):
+        """Drops a session when its WebSocket closes.
+
+        2026-09-20 (Craig): "connections don't seem to be closing out
+        entirely." Correct. `_active_connections` in ws/ws_handlers.py was
+        cleaned up in a finally block, but nothing ever removed the session
+        dict behind it — `get_session` creates on demand and there was no
+        matching delete anywhere in the codebase. Every browser reload,
+        every reconnect and every harness case left a permanent entry
+        holding that turn's fact context, memory context, intent and any
+        pending offers. One test run today opened about a hundred.
+
+        Not a correctness bug, because session_id is a fresh uuid per
+        connection so a stale entry is never read again — a pure memory
+        leak that grows for as long as the process lives.
+
+        **Race, accepted deliberately**: a response task spawned by the
+        last message can still be streaming when this runs. If it calls
+        get_session() afterwards it gets a fresh empty dict, so
+        after_response() finds no `_llm_match` and does nothing. That is
+        the right outcome — the connection is gone, so a queued
+        "want me to keep that?" offer has nobody to ask."""
+        self.sessions.pop(session_id, None)
+
     # -------------------------
     # MAIN ENTRY POINT
     # -------------------------
