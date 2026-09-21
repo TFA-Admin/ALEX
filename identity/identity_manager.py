@@ -21,6 +21,15 @@ ENROLL_TARGET_SAMPLES = 3
 ENROLL_MAX_ATTEMPTS = 6
 RECEIVE_TIMEOUT = 25.0  # a silent mic must never hang a connection forever
 
+# Raw PCM from Piper: 16-bit signed, mono. Imported rather than redefined so
+# it cannot drift away from what the engine actually produces.
+from speech.tts_engine import SAMPLE_RATE as TTS_SAMPLE_RATE
+
+# Breathing room after the audio ends before she starts listening — covers
+# the browser's own scheduling latency and stops the tail of her last word
+# being recorded as the start of his answer. Untuned starting point.
+SPEECH_SETTLE_S = 0.4
+
 
 async def _speak(websocket, text):
     """2026-07-16: speech now plays through the browser (Web Audio API),
@@ -49,6 +58,35 @@ async def _speak(websocket, text):
     await websocket.send_text("__START__")
     await websocket.send_bytes(pcm)
     await websocket.send_text("__END__")
+
+    # 2026-09-20 — and then WAIT for her to finish saying it.
+    #
+    # Craig, stuck in the login handshake: "She's still talking over
+    # herself... it's almost like there are 2 voices being sent
+    # simultaneously." Confirmed: one ALEX process, so not two servers —
+    # two utterances scheduled into the browser's audio graph at once.
+    #
+    # This function sent the audio and returned immediately, so the caller
+    # went straight on to listening or to speaking the next line. In
+    # verify_voice() that is a loop: prompt, listen, fail, prompt again.
+    # Because she was still audible when it started listening, **her own
+    # voice went into the microphone**, scored nothing like his, failed,
+    # and the next prompt was spoken on top of the one still playing. Three
+    # attempts, three overlapping voices, and a verification that could not
+    # succeed no matter what he did.
+    #
+    # The browser never says when playback ends — it only ever sends the
+    # handshake, text, audio, __END_AUDIO__ and __INTERRUPT__ — so there is
+    # no signal to wait on. But the duration is known exactly: this is raw
+    # 16-bit mono PCM at a fixed rate, so bytes / (rate * 2) is the length
+    # in seconds. Deterministic, no protocol change, no new client code.
+    #
+    # Only the identity/handshake path. The conversational path already
+    # handles this differently and correctly — the client mutes its own
+    # recorder during playback and supports barge-in, which is wanted there
+    # and is exactly what must NOT happen while she is asking who you are.
+    seconds = len(pcm) / (TTS_SAMPLE_RATE * 2)
+    await asyncio.sleep(seconds + SPEECH_SETTLE_S)
 
 
 class IdentityManager:
