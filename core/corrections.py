@@ -77,7 +77,19 @@ _FUNCTION_ONLY = {
     "no", "yes", "can", "will", "would", "should", "could", "just", "now",
 }
 
-MIN_PHRASE_WORDS = 2
+# 2026-09-20: 1, not 2. Craig said "stop referencing green." during the
+# emerald/chlorophyll loop and nothing was listening; with this live it
+# would have been caught — except that a bare "green" is one word, and a
+# two-word floor would only have found "emerald green" and "green screen"
+# while missing the word he actually objected to.
+#
+# Safe because of what each strength does. At advisory and standing a
+# correction is a line in her prompt, where a single word is exactly as
+# meaningful as a phrase. Only ENFORCED removes text, and it removes a
+# phrase only where it stands as its own sentence — a lone "green." rarely
+# is one, so enforcement of a single word is nearly a no-op rather than
+# something that shreds her sentences.
+MIN_PHRASE_WORDS = 1
 MAX_PHRASE_WORDS = 6
 MIN_OCCURRENCES = 2
 

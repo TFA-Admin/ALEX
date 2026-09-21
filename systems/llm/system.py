@@ -56,6 +56,7 @@ from db.db import (
     touch_learned_knowledge, get_user_role, resolve_retain_approval,
     create_query_report, attach_search_findings, fetch_recent_memory,
     record_correction, fetch_corrections, get_user_role as _role,
+    fetch_active_conclusions,
     get_personality_hard_rules
 )
 from core.knowledge_filter import is_worth_keeping
@@ -451,7 +452,60 @@ class System(BaseSystem):
         # dropped by the browser. Popped here rather than at the top of
         # handle() so it survives the early-return paths above, and is only
         # spent on a turn she actually speaks in her own voice.
+        # -------------------------
+        # WHAT SHE HAS WORKED OUT ABOUT HIM (2026-09-20)
+        # -------------------------
+        # Craig, on the conclusions layer: "that's excellent, but is it
+        # actually impacting anything?" It was not — she formed them, could
+        # revise them, and nothing ever read them. A belief that changes no
+        # behaviour cannot meaningfully be revised either.
+        #
+        # This is also the profile he asked for by name: "she would be
+        # building a profile of me and know me."
+        #
+        # **Why this is not the chlorophyll loop.** learned_knowledge was
+        # retrieved BY SIMILARITY to the question and restated AS FACT — ask
+        # something, a near-match comes back, she says it like it is true.
+        # These are different on both counts: they are not matched against
+        # the question at all, just the few most recent about this person,
+        # and they are labelled as her own inference that he never
+        # confirmed. "I think you are like this and I may be wrong" is not
+        # "the answer is X".
+        #
+        # The don't-volunteer rule is the Corvette lesson (2026-07-18): a
+        # stored thing surfacing unprompted reads as jarring, not attentive.
+        try:
+            beliefs = await fetch_active_conclusions(kind="craig", limit=4)
+        except Exception as e:
+            logger.warning(f"⚠️ could not read conclusions: {e}")
+            beliefs = []
+
+        if beliefs:
+            listed = "\n".join(f"- {b['statement']}" for b in beliefs)
+            context_blocks.append(
+                "WHAT YOU HAVE WORKED OUT ABOUT HIM YOURSELF (your own "
+                "conclusions from watching how he talks to you — he has "
+                "never confirmed any of it and you may simply be wrong):\n"
+                + listed +
+                "\nUse these to understand what he means and what he is "
+                "after. Do NOT state them back to him as fact, do not bring "
+                "them up unprompted, and never claim he told you any of it.")
+
         # What he has told her to stop saying, and how many times.
+        #
+        # 2026-09-20: named active_corrections, not `active`. The first
+        # version used `active`, which is already this function's
+        # fetch_active_knowledge() result 100 lines above — so this read
+        # learned_knowledge rows and died on KeyError: 'phrase' for every
+        # single turn, and she answered "No system handled the input." The
+        # fetch also sat below the block that used it. Two mistakes, one
+        # generic name.
+        try:
+            active_corrections = await fetch_corrections(user_id)
+        except Exception as e:
+            logger.warning(f"⚠️ could not read corrections: {e}")
+            active_corrections = []
+
         told = session.pop("just_corrected", None)
         if told:
             phrase, strength, binding = told
@@ -467,9 +521,10 @@ class System(BaseSystem):
                     f'Someone who is not your creator just asked you to stop '
                     f'saying "{phrase}". You do not have to agree. Decide, say '
                     f'what you decided and why, then carry on.')
-        elif active:
+        elif active_corrections:
             lines = "\n".join(
-                corr.context_line(c["phrase"], c["strength"]) for c in active[:3])
+                corr.context_line(c["phrase"], c["strength"])
+                for c in active_corrections[:3])
             context_blocks.append("THINGS HE HAS TOLD YOU TO STOP SAYING:\n" + lines)
 
         offer = session.get("pending_store_offer")
@@ -743,12 +798,7 @@ class System(BaseSystem):
         # are a line in her prompt she can still weigh — see
         # core/corrections.py for why the first one is deliberately not a
         # cage.
-        try:
-            active = await fetch_corrections(user_id)
-        except Exception:
-            active = []
-
-        for c in active:
+        for c in active_corrections:
             if c["strength"] >= corr.ENFORCED:
                 banned.append(c["phrase"])
 
