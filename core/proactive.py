@@ -35,6 +35,11 @@ PROACTIVE_CHECK_INTERVAL_S = 60
 # something measured against real usage yet.
 IDLE_CHECKIN_THRESHOLD_S = 900
 
+# How long the room has to be quiet before she raises a question of her
+# own mid-session. Starting point; the failure it prevents was measured
+# at 2s (2026-09-21 19:52:00, right after a 10s turn).
+CURIOSITY_QUIET_S = 120
+
 
 async def _check_curiosity_delivery():
     """Connect-time delivery (ws_handlers.py) already covers "just
@@ -43,6 +48,16 @@ async def _check_curiosity_delivery():
     even connected, since connect-time delivery will handle it whenever
     they do."""
     if not get_active_creator_session_ids():
+        return
+
+    # 2026-09-21 (Craig: "she jump over herself again"): this fired two
+    # seconds after she finished a reply, on the heels of her own voice,
+    # and his next words were taken as the answer and answered again. An
+    # unprompted question belongs in a lull. Nothing for CURIOSITY_QUIET_S
+    # since anyone last spoke to her, and she is not speaking now.
+    from core import idle_author
+    from core.voice import speech_lock
+    if idle_author.idle_for() < CURIOSITY_QUIET_S or speech_lock.locked():
         return
 
     questions = await fetch_undelivered_curiosity_questions()
