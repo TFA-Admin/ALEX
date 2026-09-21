@@ -483,7 +483,14 @@ class AlexController(QWidget):
         db_top.addWidget(self.db_table_selector)
 
         self.db_refresh_btn = QPushButton("🔄 Refresh")
-        self.db_refresh_btn.clicked.connect(self.load_db_table_data)
+        # 2026-09-20 (Craig: "I see no corrections table") — this was wired
+        # to load_db_table_data(), which reloads the ROWS of whatever table
+        # is already selected. The dropdown itself was filled once at
+        # startup from sqlite_master and never again, so any table created
+        # after the Controller launched was invisible until it restarted —
+        # exactly what happens when ALEX adds one on her next boot. Refresh
+        # now means refresh: the list, then the rows.
+        self.db_refresh_btn.clicked.connect(self.load_db_tables)
         db_top.addWidget(self.db_refresh_btn)
 
         db_layout.addLayout(db_top)
@@ -1230,9 +1237,16 @@ class AlexController(QWidget):
             self.alex_log.append(f"⚠️ Failed to list database tables: {e}")
             return
 
+        # Hold the current selection across the refresh — otherwise pressing
+        # Refresh silently jumps back to the first table alphabetically,
+        # which reads as the button having lost your place.
+        previous = self.db_table_selector.currentText()
+
         self.db_table_selector.blockSignals(True)
         self.db_table_selector.clear()
         self.db_table_selector.addItems(tables)
+        if previous in tables:
+            self.db_table_selector.setCurrentText(previous)
         self.db_table_selector.blockSignals(False)
 
         self.load_db_table_data()
