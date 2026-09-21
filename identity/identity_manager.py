@@ -16,6 +16,7 @@ from speech.voice_id_engine import embed_voice_bytes, best_match, identify_speak
 from ws.ws_utils import send_debug
 from llm.ollama_client import ollama_manager
 from core.phrasebook import get_phrase
+from core.voice import say
 from core.override_code import is_creator_override_code
 
 ENROLL_TARGET_SAMPLES = 3
@@ -33,70 +34,16 @@ SPEECH_SETTLE_S = 0.4
 
 
 async def _speak(websocket, text, user_id=None):
-    """2026-07-16: speech now plays through the browser (Web Audio API),
-    not a server-side speaker — every former speak(text) call site here
-    already sends the same text via websocket.send_text() right before
-    calling this, so the audio just needs to follow it over the same
-    connection."""
-    pcm = await synthesize_speech(text)
-    if not pcm:
-        return
+    """The handshake voice. 2026-09-20: now a thin wrapper over
+    core/voice.say(), which owns the lock, the envelope, waiting out the
+    playback and recording it.
 
-    # 2026-09-20: wrapped in the __START__/__END__ envelope. Craig, live:
-    # "she immediately prompted me upon hearing my voice but did not actually
-    # say anything." The text appeared, the audio never played.
-    #
-    # Cause: the browser sets clientInterrupted = true whenever he talks over
-    # her (stopAllPlayback), and scheduleAudioChunk() drops every chunk while
-    # that flag is set. It is cleared in exactly one place — the __START__
-    # handler. So any audio sent outside the envelope is silently discarded
-    # for the rest of the session once he has interrupted her even once, which
-    # in a voice-first assistant is immediately. Onboarding greetings were
-    # sent as bare text + bytes and hit this every time.
-    #
-    # The envelope is empty of text on purpose: callers already sent theirs,
-    # and __END__ only flushes pendingTexts, so nothing is displayed twice.
-    await websocket.send_text("__START__")
-    await websocket.send_bytes(pcm)
-    await websocket.send_text("__END__")
-
-    # 2026-09-20 — and then WAIT for her to finish saying it.
-    #
-    # Craig, stuck in the login handshake: "She's still talking over
-    # herself... it's almost like there are 2 voices being sent
-    # simultaneously." Confirmed: one ALEX process, so not two servers —
-    # two utterances scheduled into the browser's audio graph at once.
-    #
-    # This function sent the audio and returned immediately, so the caller
-    # went straight on to listening or to speaking the next line. In
-    # verify_voice() that is a loop: prompt, listen, fail, prompt again.
-    # Because she was still audible when it started listening, **her own
-    # voice went into the microphone**, scored nothing like his, failed,
-    # and the next prompt was spoken on top of the one still playing. Three
-    # attempts, three overlapping voices, and a verification that could not
-    # succeed no matter what he did.
-    #
-    # The browser never says when playback ends — it only ever sends the
-    # handshake, text, audio, __END_AUDIO__ and __INTERRUPT__ — so there is
-    # no signal to wait on. But the duration is known exactly: this is raw
-    # 16-bit mono PCM at a fixed rate, so bytes / (rate * 2) is the length
-    # in seconds. Deterministic, no protocol change, no new client code.
-    #
-    # Only the identity/handshake path. The conversational path already
-    # handles this differently and correctly — the client mutes its own
-    # recorder during playback and supports barge-in, which is wanted there
-    # and is exactly what must NOT happen while she is asking who you are.
-    seconds = len(pcm) / (TTS_SAMPLE_RATE * 2)
-    await asyncio.sleep(seconds + SPEECH_SETTLE_S)
-
-    # And remember that she said it. Without this her next turn has no
-    # record of the question she just asked — see
-    # db.remember_own_utterance() for the three faults that traces to.
-    if user_id:
-        try:
-            await remember_own_utterance(user_id, text)
-        except Exception:
-            pass
+    wait=True here and nowhere else: the conversational client mutes its
+    own recorder during playback and supports barge-in, which is wanted
+    there. Being interrupted — or recording her own voice as the reply —
+    while asking who you are is exactly what must not happen, and was the
+    reason Craig could not get through login at all."""
+    await say(websocket, text, user_id=user_id, remember=bool(user_id), wait=True)
 
 
 def _is_just_the_prompt(heard: str, prompt: str) -> bool:

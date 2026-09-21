@@ -13,6 +13,7 @@ from ws.ws_chat import handle_chat
 from llm.ollama_client import locked_fields
 from identity.identity_manager import identity_manager
 from core import readiness
+from core.voice import say
 from db.db import remember_own_utterance
 from config.logger_config import logger
 from core.alex_core import alex_core
@@ -22,7 +23,12 @@ from db.db import (
 )
 
 
-generation_lock = asyncio.Lock()
+# 2026-09-20: one lock for the whole process, and reentrant per task.
+# It used to be a plain asyncio.Lock here, which is why two of the four
+# speaking paths skipped it — the clarification path runs INSIDE it
+# (process_message holds it and calls down into AudioProcessor), so it
+# could not take it without deadlocking on itself. See core/voice.py.
+from core.voice import speech_lock as generation_lock
 
 MIN_AUDIO_BYTES = 6000
 SPEECH_DEBOUNCE = 1.8
@@ -62,12 +68,7 @@ async def push_to_creator(text: str, speak: bool = True) -> bool:
     from speech.tts_engine import synthesize_speech
 
 
-    # Serialised against real turns. generation_lock is what stops two
-    # responses overlapping everywhere else, and an unprompted one is not
-    # an exception to that — socially either: people do not talk over
-    # someone mid-sentence to change the subject.
-    async with generation_lock:
-        return await _push_now(text, speak, alex_core, synthesize_speech)
+    return await _push_now(text, speak, alex_core, synthesize_speech)
 
 
 async def _push_now(text, speak, alex_core, synthesize_speech) -> bool:
@@ -84,15 +85,14 @@ async def _push_now(text, speak, alex_core, synthesize_speech) -> bool:
         websocket = conn["websocket"]
 
         try:
-            await websocket.send_text("__START__")
-            await websocket.send_text(text)
+            # core/voice.say() owns the lock, the envelope and the memory
+            # record. This path used to do two of those and forget the
+            # third, which is how she came to ask a question and then not
+            # know she had asked it.
+            if not await say(websocket, text, user_id=conn.get("user_id"),
+                             speak=speak):
+                continue
 
-            if speak:
-                pcm = await synthesize_speech(text)
-                if pcm:
-                    await websocket.send_bytes(pcm)
-
-            await websocket.send_text("__END__")
             session["last_addressed_at"] = time.time()
             # Keeps the client's "engaged" indicator honest — without
             # this, the server would correctly accept an unaddressed
@@ -102,12 +102,6 @@ async def _push_now(text, speak, alex_core, synthesize_speech) -> bool:
             await websocket.send_text("__ENGAGED__1")
             delivered = True
 
-            # She just spoke. Record it, or her next turn has no idea she
-            # did — see db.remember_own_utterance().
-            try:
-                await remember_own_utterance(conn.get("user_id") or "craig", text)
-            except Exception as e:
-                logger.warning(f"⚠️ could not record her own utterance: {e}")
         except Exception as e:
             logger.warning(f"⚠️ push_to_creator failed for session {session_id}: {e}")
 
@@ -425,9 +419,11 @@ async def ws_text(websocket: WebSocket):
                     # fix and the reasoning.
                     logger.info(f"[ACTION] Delivered curiosity question: {q['question']}")
 
-                    await websocket.send_text("__START__")
-                    await websocket.send_text(q["question"])
-                    await websocket.send_text("__END__")
+                    # Through say() like everything else — this sent a bare
+                    # envelope with no lock and no memory record, so she
+                    # could open a session by asking something and then not
+                    # know she had asked it.
+                    await say(websocket, q["question"], user_id=user_id)
 
                     await mark_curiosity_questions_delivered()
 

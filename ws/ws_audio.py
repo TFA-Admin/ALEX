@@ -3,6 +3,7 @@ import re
 
 from speech.stt_engine import transcribe_audio
 from speech.voice_id_engine import is_foreign_speaker
+from core.voice import say
 from db.db import fetch_voice_samples
 from config.logger_config import logger
 from speech.tts_engine import synthesize_speech
@@ -79,22 +80,14 @@ class AudioProcessor:
         self.audio_buffer = b""
         return buf
 
-    async def _ask_clarification(self, websocket, prompt_text):
+    async def _ask_clarification(self, websocket, prompt_text, user_id=None):
+        """2026-09-20: goes through core/voice.say() like everything else
+        she says. This path previously sent its own envelope, took no lock
+        (it could not — it runs inside the one process_message holds, which
+        was not reentrant until SpeechLock) and recorded nothing, so she
+        could ask "did you say X?" and have no memory of asking."""
         question = f'Did you say "{prompt_text}"?'
-        await websocket.send_text(question)
-
-        # 2026-09-20: same envelope fix as identity_manager._speak(). Craig
-        # saw this exact prompt appear as text with no speech — the browser
-        # drops every audio chunk while clientInterrupted is set, and that
-        # flag is only ever cleared by __START__. A clarification is the worst
-        # possible place to lose the audio: she is asking whether she heard
-        # him correctly, so a silent question invites no answer and she then
-        # looks like she is ignoring him.
-        pcm = await synthesize_speech(question)
-        if pcm:
-            await websocket.send_text("__START__")
-            await websocket.send_bytes(pcm)
-            await websocket.send_text("__END__")
+        await say(websocket, question, user_id=user_id)
 
     async def process_end(self, audio_bytes: bytes, websocket, send_debug,
                           user_id: str = None):
@@ -204,7 +197,7 @@ class AudioProcessor:
         if confidence is not None and confidence < LOW_CONFIDENCE_THRESHOLD:
             await send_debug(websocket, f"🤔 Low confidence ({confidence:.2f}), asking for clarification: {prompt_text!r}")
             self.pending_clarification = prompt_text
-            await self._ask_clarification(websocket, prompt_text)
+            await self._ask_clarification(websocket, prompt_text, user_id=user_id)
             return None
 
         return prompt_text
