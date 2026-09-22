@@ -58,10 +58,10 @@ from db.db import (
     record_correction, fetch_corrections, get_user_role as _role,
     fetch_active_conclusions, record_decision, fetch_profile_names,
     answer_curiosity_question, fetch_answered_curiosity,
-    get_personality_hard_rules, list_module_registry
+    get_personality_hard_rules, list_module_registry, fetch_decisions
 )
 from core.knowledge_filter import is_worth_keeping
-from core import self_model, corrections as corr, tools as her_tools, deliberation
+from core import self_model, corrections as corr, tools as her_tools, deliberation, claims as her_claims
 from systems.controller._role_gates import require_creator
 from core.phrasebook import get_phrase
 from config.logger_config import logger
@@ -549,12 +549,15 @@ class System(BaseSystem):
         #
         # Skipped for content-free utterances ("okay", "it's me"): there
         # is nothing to look up for them, and the pass costs ~2s.
+        needs_seen = None      # the turn's need scores, kept for core/claims.py
+        evidence_ran = False   # did the deliberation pass look anything up
         if has_content:
             try:
                 # Scores usually arrive from systems/intent/system.py on the
                 # same call as the intent (session["needs"]); only when they
                 # did not does this assess on its own.
                 needs = session.pop("needs", None)
+                needs_seen = dict(needs) if isinstance(needs, dict) else None
                 if isinstance(needs, dict) and session.get("diagnostic_context"):
                     # the diagnostics system already measured this turn —
                     # do not run it twice
@@ -573,6 +576,23 @@ class System(BaseSystem):
                 looked = ""
             if looked:
                 context_blocks.append(looked)
+                evidence_ran = her_claims.real_evidence(looked)
+
+        # 2026-09-21 (evening): her recent slips, as facts. core/claims.py
+        # records a 'fabrication' decision when a reply claimed work she had
+        # not done; the last few sit here as data about herself, which she
+        # handles far better than a rule telling her not to.
+        try:
+            slips = [d for d in await fetch_decisions(limit=6, kind="fabrication")]
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
+            slips = [d for d in slips if str(d.get("created_at") or "") >= cutoff][:3]
+            if slips:
+                context_blocks.append(
+                    "YOUR RECENT SLIPS (real, recorded by code): "
+                    + " | ".join(f"{str(d['created_at'])[11:16]} UTC — {d['summary']}" for d in slips)
+                    + ". Say what you looked up and what you did not; never claim a check you did not make.")
+        except Exception as e:
+            logger.warning(f"⚠️ could not read her slips: {e}")
 
         if fact_action_context:
             context_blocks.append(f"WHAT JUST HAPPENED (state this truthfully, nothing else):\n{fact_action_context}")
@@ -1076,7 +1096,10 @@ class System(BaseSystem):
         # then this is exactly the old single-stream path.
         chat_stream = getattr(ollama_manager, "chat_stream", None)
 
-        async def stream():
+        evidence = {"lookups": evidence_ran, "tools": []}
+        user_tail = prompt[len(system_prompt):]
+
+        async def _generate(sys_prompt, allow_tools=True):
             gen_start = time.time()
             first_chunk_at = None
             bans = PhraseSuppressor(banned)
@@ -1087,7 +1110,7 @@ class System(BaseSystem):
                 return bans.feed(chunk) if bans.active else chunk
 
             if chat_stream is None:
-                async for chunk in ollama_manager.generate_stream(prompt):
+                async for chunk in ollama_manager.generate_stream(sys_prompt + user_tail):
                     if first_chunk_at is None:
                         first_chunk_at = time.time()
                         logger.info(f"[TIMING] generation time-to-first-chunk: {first_chunk_at - gen_start:.2f}s")
@@ -1095,13 +1118,13 @@ class System(BaseSystem):
                     if out:
                         yield out
             else:
-                messages = [{"role": "system", "content": system_prompt},
+                messages = [{"role": "system", "content": sys_prompt},
                             {"role": "user", "content": user_input}]
                 rounds = 0
                 while True:
                     calls = []
                     said = ""
-                    offer_tools = her_tools.TOOLS if rounds < her_tools.MAX_CALLS_PER_TURN else None
+                    offer_tools = her_tools.TOOLS if (allow_tools and rounds < her_tools.MAX_CALLS_PER_TURN) else None
                     async for kind, payload in chat_stream(messages, tools=offer_tools):
                         if kind == "tool_calls":
                             calls.extend(payload)
@@ -1123,6 +1146,7 @@ class System(BaseSystem):
                         fn = call.get("function") or {}
                         name = fn.get("name", "")
                         result = await her_tools.run_tool(name, fn.get("arguments"), user_id)
+                        evidence["tools"].append(name)
                         messages.append({"role": "tool", "tool_name": name, "content": result})
 
             tail = bans.flush()
@@ -1130,6 +1154,57 @@ class System(BaseSystem):
                 yield tail
 
             logger.info(f"[TIMING] generation total (prompt eval + full output): {time.time() - gen_start:.2f}s")
+
+        async def stream():
+            """A claim needs evidence (core/claims.py, 2026-09-21). The
+            first clause is held until it is complete and scanned for a
+            claim of work — "I checked", "the list shows" — that nothing
+            this turn backs. Clean: it flows on as before. Caught: it is
+            never spoken; the lookups the question called for are run, the
+            slip is recorded, and she answers again with the real thing in
+            front of her, tools off so the second answer cannot wander."""
+            buf = ""
+            checked = False
+            gen = _generate(system_prompt)
+            async for chunk in gen:
+                if checked:
+                    yield chunk
+                    continue
+                buf += chunk
+                clause, rest = her_claims.first_clause(buf)
+                if clause is None:
+                    continue
+                checked = True
+                found = her_claims.unbacked(clause, evidence)
+                if not found:
+                    yield buf
+                    buf = ""
+                    continue
+                await gen.aclose()
+                logger.info(f"[CLAIM] unbacked {found} in {clause.strip()!r} — not spoken; looking first")
+                block = await her_claims.gather_evidence(user_input, user_id, needs_seen, clause)
+                try:
+                    await record_decision(
+                        "fabrication", f"She said {clause.strip()[:110]!r} without having looked",
+                        reasoning="Code compared the claim with this turn's lookups and tool calls: there were none.",
+                        evidence=block[:400],
+                        outcome="not spoken, not stored; she answered again with the lookups in front of her",
+                        actor="alex")
+                except Exception as e:
+                    logger.warning(f"⚠️ could not record the slip: {e}")
+                second = (system_prompt + "\n\n" + block
+                          + "\n\nThat is everything you have looked at this turn. Answer from it. If it "
+                            "does not contain what he asked about, say you do not have it. Do not say "
+                            "you checked, read or ran anything beyond it.")
+                async for chunk in _generate(second, allow_tools=False):
+                    yield chunk
+                return
+            if buf:
+                if not checked:
+                    found = her_claims.unbacked(buf, evidence)
+                    if found:
+                        logger.info(f"[CLAIM] unbacked {found} in the whole reply {buf.strip()[:80]!r} — spoken as is (no clause boundary)")
+                yield buf
 
         return {
             "type": "stream",

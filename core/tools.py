@@ -342,7 +342,15 @@ async def _my_projects() -> str:
             return str(ts or "")[:10]
 
     labels = {"in_progress": "in progress", "planned": "planned", "done": "done", "backlog": "backlog"}
-    lines = ["His projects for you, by number, as he keeps them (his labels, his notes — not yours to reclassify):"]
+    counts = {}
+    for r in rows:
+        counts[r["status"]] = counts.get(r["status"], 0) + 1
+    # the counts stated, so the model never has to count (it said four
+    # when there were six, with the list in front of it)
+    lines = [f"His projects for you, by number, as he keeps them (his labels, his notes — not yours to reclassify). "
+             f"{len(rows)} in all: "
+             + ", ".join(f"{counts.get(k, 0)} {labels[k]}" for k in ("done", "in_progress", "planned", "backlog"))
+             + "."]
     for r in rows:
         line = f"#{r['id']} {r['title']} — {labels.get(r['status'], r['status'])} (last moved {_local(r['updated_at'])})"
         if r.get("notes"):

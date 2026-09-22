@@ -233,6 +233,17 @@ async def init_db():
         except Exception:
             pass
 
+        # 🚫 RETRACTED MEMORY (2026-09-21). A reply of hers that turned out
+        # to be invented ("I checked", when she had not) stays in the table
+        # for Craig to see but never reaches her context or her memory
+        # search again — otherwise one invented sentence becomes her
+        # position for the rest of the night. See core/claims.py and
+        # retract_memories().
+        try:
+            await db.execute("ALTER TABLE memory ADD COLUMN retracted INTEGER DEFAULT 0")
+        except Exception:
+            pass
+
         # 🗂️ PROJECTS (2026-09-21). Craig: "She also claims to want to know
         # what projects we have in store for her, and I say we give them to
         # her... whether or not she will be able to track the progress as
@@ -946,12 +957,33 @@ async def remember_own_utterance(user: str, text: str):
 async def fetch_recent_memory(user, limit=5):
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "SELECT prompt, response, created_at FROM memory WHERE user=? ORDER BY id DESC LIMIT ?",
+            "SELECT prompt, response, created_at FROM memory WHERE user=? "
+            "AND COALESCE(retracted, 0)=0 ORDER BY id DESC LIMIT ?",
             (user, limit)
         )
         rows = await cursor.fetchall()
 
     return [{"prompt": r[0], "response": r[1], "created_at": r[2]} for r in reversed(rows)]
+
+
+async def retract_memories(ids, reason: str) -> int:
+    """Marks rows retracted (kept, never read back by her). Records one
+    decisions row naming them so the retraction itself is visible."""
+    ids = [int(i) for i in ids]
+    if not ids:
+        return 0
+    marks = ",".join("?" for _ in ids)
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            f"UPDATE memory SET retracted=1 WHERE id IN ({marks}) AND COALESCE(retracted,0)=0", ids)
+        await db.commit()
+        n = cursor.rowcount
+    if n:
+        await record_decision(
+            "retraction", f"{n} of her replies retracted from her memory",
+            reasoning=reason, evidence="memory ids " + ", ".join(map(str, ids)),
+            outcome="kept in the table; never in her context or her search again", actor="craig")
+    return n
 
 
 # -------------------------
@@ -1576,7 +1608,8 @@ async def fetch_recent_memory_all(limit=20, since_id=0):
     other caller."""
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "SELECT id, user, prompt, response FROM memory WHERE id > ? ORDER BY id DESC LIMIT ?",
+            "SELECT id, user, prompt, response FROM memory WHERE id > ? "
+            "AND COALESCE(retracted, 0)=0 ORDER BY id DESC LIMIT ?",
             (since_id, limit)
         )
         rows = await cursor.fetchall()
@@ -1678,7 +1711,8 @@ async def get_preferred_model(user):
 async def fetch_vector_memories(user):
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "SELECT prompt,response,embedding,created_at FROM memory WHERE user=? AND embedding IS NOT NULL",
+            "SELECT prompt,response,embedding,created_at FROM memory WHERE user=? AND embedding IS NOT NULL "
+            "AND COALESCE(retracted, 0)=0",
             (user,)
         )
         rows = await cursor.fetchall()

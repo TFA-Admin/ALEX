@@ -1420,10 +1420,15 @@ const MOOD_COLORS = {
 let displayColor = MOOD_COLORS.calm.slice();
 let targetColor = MOOD_COLORS.calm.slice();
 
+// 2026-09-21 (Craig: "change her mood Edge to say Irritation in the
+// webUI"). The name in code and in her prompt stays "edge" (core/mood.py);
+// only what the page prints changes.
+const MOOD_LABELS = { edge: "irritation" };
+
 function setMoodTarget(key){
     const c = MOOD_COLORS[key] || MOOD_COLORS.calm;
     targetColor = c.slice();
-    if(moodNameEl){ moodNameEl.textContent = key; }
+    if(moodNameEl){ moodNameEl.textContent = MOOD_LABELS[key] || key; }
 }
 
 // 2026-07-17 (Craig: "when idle the orb is showing as focused... unless
