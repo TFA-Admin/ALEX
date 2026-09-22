@@ -1196,8 +1196,32 @@ class System(BaseSystem):
                           + "\n\nThat is everything you have looked at this turn. Answer from it. If it "
                             "does not contain what he asked about, say you do not have it. Do not say "
                             "you checked, read or ran anything beyond it.")
+                # The second attempt is held the same way. If she claims a
+                # check AGAIN with a refusal or nothing in front of her (seen
+                # on the first live test), the claim sentences are dropped and
+                # code writes the truth from the lookup results in their place.
+                backed = {"lookups": her_claims.real_evidence(block), "tools": []}
+                buf2, checked2 = "", False
                 async for chunk in _generate(second, allow_tools=False):
-                    yield chunk
+                    if checked2:
+                        yield chunk
+                        continue
+                    buf2 += chunk
+                    head, _rest = her_claims.first_clause(buf2)
+                    if head is None:
+                        continue
+                    checked2 = True
+                    again = her_claims.unbacked(head, backed)
+                    if again:
+                        honest = her_claims.honest_lines(block)
+                        logger.info(f"[CLAIM] persisted {again} — replaced with: {honest!r}")
+                        buf2 = (honest + " " + her_claims.drop_claims(buf2)).strip()
+                    yield buf2
+                    buf2 = ""
+                if buf2:
+                    if her_claims.unbacked(buf2, backed):
+                        buf2 = (her_claims.honest_lines(block) + " " + her_claims.drop_claims(buf2)).strip()
+                    yield buf2
                 return
             if buf:
                 if not checked:

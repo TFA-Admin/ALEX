@@ -147,6 +147,47 @@ def lookups_after_claim(user_input: str, clause: str, needs: dict = None, max_lo
     return picked[:max_lookups]
 
 
+_TOOL_NOUN = {"read_log": "my log", "read_my_source": "my source code", "my_state": "my own state",
+              "search_memory": "our earlier conversations", "recent_turns": "our recent exchanges",
+              "list_modules": "my modules", "run_diagnostics": "my diagnostics",
+              "my_projects": "his projects", "my_scores": "my scores"}
+
+
+def honest_lines(block: str) -> str:
+    """The truth, written by code from what the lookups returned — for
+    the case (seen on the first live test, 2026-09-21) where the second
+    attempt STILL says "I accessed the system logs" with a refusal in
+    front of it. One sentence per refused or empty lookup; nothing for a
+    real result, because a real result backs the claim."""
+    out = []
+    for line in (block or "").splitlines():
+        if not line.startswith("[") or "]" not in line:
+            continue
+        name = line[1:line.index("]")]
+        result = line[line.index("]") + 1:].strip()
+        low = result.lower()
+        noun = _TOOL_NOUN.get(name, name)
+        if low.startswith("that is for my creator"):
+            out.append(f"I have not read {noun}; that is for my creator to see.")
+        elif not result or " failed: " in low or low.startswith(("nothing stored", "no matches", "nothing found", "there is no tool")):
+            out.append(f"I looked for {noun} on this and found nothing.")
+    return " ".join(out)
+
+
+def drop_claims(text: str) -> str:
+    """The text without its claim sentences."""
+    kept, start = [], 0
+    for m in _SENTENCE_END_RE.finditer(text):
+        sentence = text[start:m.end()]
+        start = m.end()
+        if not _CLAIM_RE.search(sentence):
+            kept.append(sentence)
+    tail = text[start:]
+    if tail and not _CLAIM_RE.search(tail):
+        kept.append(tail)
+    return "".join(kept).strip()
+
+
 async def gather_evidence(user_input: str, user_id: str, needs: dict, clause: str) -> str:
     """Runs the lookups and returns the context block for the second
     attempt. Never raises."""
