@@ -1062,6 +1062,27 @@ DEFAULT_PERSONALITY = (
 )
 
 
+async def get_personality_locked() -> bool:
+    """2026-09-21 (Craig, after writing her personality himself and finding
+    it overwritten within the hour by a spoken sentence the classifier read
+    as a 'set your personality' command): while locked, nothing rewrites
+    the description — not reflection, not a voice command with the code,
+    not a Controller nudge. Only the Controller's own editor, which is
+    where he unlocks it."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT value FROM system_learning WHERE key='personality_locked'")
+        row = await cursor.fetchone()
+    return bool(row and str(row[0]).strip() in ("1", "true", "True"))
+
+
+async def set_personality_locked(locked: bool):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO system_learning(key, value) VALUES('personality_locked', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value", ("1" if locked else "0",))
+        await db.commit()
+
+
 async def get_personality(raw: bool = False):
     """raw=True returns what is actually STORED, ignoring the persona switch.
 

@@ -21,6 +21,7 @@ from db.db import (
     get_personality, set_personality, DEFAULT_PERSONALITY,
     log_personality_change, reset_all_phrases, add_personality_hard_rule,
     get_personality_hard_rules, remove_personality_hard_rule,
+    get_personality_locked, set_personality_locked,
     fetch_recent_personality_changes,
     fetch_active_conclusions, fetch_decisions, fetch_curiosity_queue, fetch_eval_runs,
     fetch_projects, create_project, update_project, PROJECT_STATUSES, record_decision,
@@ -78,6 +79,18 @@ class HerView(QWidget):
         self.save_personality_btn = QPushButton("💾 Save description as written")
         self.save_personality_btn.clicked.connect(self.save_personality_text)
         btns.addWidget(self.save_personality_btn)
+        # 2026-09-21: his text was overwritten within the hour by a spoken
+        # sentence the classifier took for a "set your personality" command.
+        # Saving here locks it; while locked, reflection, voice commands
+        # (even with the code) and the nudge box below cannot rewrite it.
+        from PySide6.QtWidgets import QCheckBox
+        self.personality_lock_box = QCheckBox("🔒 Locked — only this editor may change it")
+        self.personality_lock_box.setToolTip(
+            "While locked: reflection will not rewrite her personality, a spoken 'set your "
+            "personality' is refused even with the override code, and the nudge box is off. "
+            "Saving the description locks it; untick to allow her to evolve it again.")
+        self.personality_lock_box.stateChanged.connect(self._lock_changed)
+        btns.addWidget(self.personality_lock_box)
         self.reset_personality_btn = QPushButton("♻️ Reset personality to default")
         self.reset_personality_btn.clicked.connect(self.reset_personality)
         self.reset_phrases_btn = QPushButton("♻️ Reset all phrases to default")
@@ -174,6 +187,13 @@ class HerView(QWidget):
             self.personality_view.setPlainText(current or "")
         except Exception as e:
             self.personality_view.setPlainText(f"⚠️ Failed to load personality: {e}")
+        try:
+            self._refreshing_lock = True
+            self.personality_lock_box.setChecked(asyncio.run(get_personality_locked()))
+        except Exception:
+            pass
+        finally:
+            self._refreshing_lock = False
         self._refresh_persona_button()
         self.refresh_hard_rules()
 
@@ -263,6 +283,12 @@ class HerView(QWidget):
         instruction = self.personality_override_input.text().strip()
         if not instruction:
             return
+        try:
+            if asyncio.run(get_personality_locked()):
+                QMessageBox.information(self, "Personality", "The description is locked. Edit it above, or untick the lock to nudge it.")
+                return
+        except Exception:
+            pass
 
         try:
             current = asyncio.run(get_personality())
@@ -291,11 +317,23 @@ class HerView(QWidget):
             return
         try:
             asyncio.run(set_personality(text))
-            asyncio.run(log_personality_change(text, "creator wrote it directly at the Controller", kind="personality"))
-            self.note("[SYSTEM] Personality description saved as written")
+            asyncio.run(set_personality_locked(True))
+            asyncio.run(log_personality_change(text, "creator wrote it directly at the Controller (locked)", kind="personality"))
+            self.note("[SYSTEM] Personality description saved as written and locked")
         except Exception as e:
             self.note(f"⚠️ Failed to save the description: {e}")
         self.refresh_personality()
+
+    def _lock_changed(self, _state):
+        if getattr(self, "_refreshing_lock", False):
+            return
+        locked = bool(self.personality_lock_box.isChecked())
+        try:
+            asyncio.run(set_personality_locked(locked))
+            self.note("[SYSTEM] Personality " + ("LOCKED — only this editor changes it" if locked
+                                                 else "unlocked — reflection and voice commands may change it again"))
+        except Exception as e:
+            self.note(f"⚠️ Failed to change the lock: {e}")
 
     def add_hard_rule(self):
         from PySide6.QtWidgets import QInputDialog

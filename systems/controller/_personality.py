@@ -10,6 +10,7 @@ deliberate, narrow path that can touch it, and only ever to/from
 """
 
 from db.db import (
+    get_personality_locked,
     get_user_role, set_personality, get_personality, DEFAULT_PERSONALITY,
     log_personality_change, reset_all_phrases, fetch_user_facts, update_fact,
     profile_exists, find_profile_by_prefix, add_personality_hard_rule,
@@ -116,6 +117,9 @@ async def handle(session, user_id: str, text: str, msg: str):
         if status == "invalid":
             return {"type": "response", "content": await get_phrase("invalid_override_code")}
 
+        if await get_personality_locked():
+            return {"type": "response", "content": await get_phrase("personality_locked")}
+
         await set_personality(DEFAULT_PERSONALITY)
         await clear_personality_hard_rules()
         await log_personality_change(DEFAULT_PERSONALITY, "creator reset to default", kind="personality")
@@ -194,6 +198,11 @@ async def handle(session, user_id: str, text: str, msg: str):
             return {"type": "response", "content": await get_phrase("personality_override_code_required")}
         if status == "invalid":
             return {"type": "response", "content": await get_phrase("invalid_override_code")}
+
+        # 2026-09-21: his written description stays his. See
+        # db.get_personality_locked().
+        if await get_personality_locked():
+            return {"type": "response", "content": await get_phrase("personality_locked")}
 
         await set_personality(new_desc)
 

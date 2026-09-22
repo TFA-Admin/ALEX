@@ -14,7 +14,7 @@ import random
 from datetime import datetime, timedelta
 
 from db.db import (
-    fetch_recent_memory_all, get_personality, set_personality,
+    fetch_recent_memory_all, get_personality, set_personality, get_personality_locked,
     log_personality_change, get_learned_phrase, set_learned_phrase,
     queue_curiosity_question, get_personality_hard_rules,
     fetch_undelivered_curiosity_questions, curiosity_topic_seen,
@@ -934,6 +934,15 @@ async def run_self_reflection():
         # since it is downstream of a personality change that cannot happen.
         if persona_disabled():
             outcome.append("personality reflection skipped (persona switch on)")
+            logger.info(f"[REFLECTION] Pass complete — {'; '.join(outcome)}")
+            return
+
+        # 2026-09-21: he wrote it himself and locked it. Her own edits to
+        # her personality wait until he unlocks it at the Controller;
+        # phrase re-voicing goes with them, being downstream of a change
+        # that cannot happen.
+        if await get_personality_locked():
+            outcome.append("personality locked by Craig — not rewritten")
             logger.info(f"[REFLECTION] Pass complete — {'; '.join(outcome)}")
             return
 

@@ -158,6 +158,10 @@ PHRASE_REGISTRY = {
         "Tell me what you'd like my personality to be.",
         "Ask the person to describe what they want your personality to become, since they asked to change it but didn't say what to."
     ),
+    "personality_locked": (
+        "He wrote my personality himself and locked it. It changes at the Controller, not by asking.",
+        "Tell the person that your creator wrote your personality directly and locked it, so it cannot be changed by asking — only at his Controller."
+    ),
     "personality_updated": (
         "Personality updated: {new_desc}",
         "Confirm your personality was just updated to a new description. {new_desc} is a placeholder for the new personality text — keep it in the phrase, verbatim (don't paraphrase what was actually set)."
