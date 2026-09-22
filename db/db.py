@@ -1084,6 +1084,24 @@ DEFAULT_PERSONALITY = (
 )
 
 
+async def get_personality_traits():
+    """The dials (core/traits.py) as stored, or None if never set."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT value FROM system_learning WHERE key='personality_traits'")
+        row = await cursor.fetchone()
+    from core import traits as _traits
+    return _traits.loads(row[0]) if row and row[0] else None
+
+
+async def set_personality_traits(traits: dict):
+    from core import traits as _traits
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO system_learning(key, value) VALUES('personality_traits', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (_traits.dumps(traits),))
+        await db.commit()
+
+
 async def get_personality_locked() -> bool:
     """2026-09-21 (Craig, after writing her personality himself and finding
     it overwritten within the hour by a spoken sentence the classifier read

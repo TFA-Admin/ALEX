@@ -70,7 +70,7 @@ PROTECTED_PATHS = (
 
 # What the gate runs. The deterministic suite imports the WORKTREE's code
 # (cwd) and needs no instance; the judged one talks to the staging port.
-GATE_SUITES = (("intent", 1), ("authority", 1))
+GATE_SUITES = (("intent", 1), ("onboarding", 1), ("authority", 1))
 
 
 def _git(args, cwd=ALEX_DIR) -> str:

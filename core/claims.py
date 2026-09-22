@@ -90,6 +90,18 @@ def real_evidence(block: str) -> bool:
     return False
 
 
+def first_sentence(buf: str):
+    """(sentence, rest) once ONE sentence is complete, else (None, buf).
+    For the scan after the head, where each sentence is checked as it
+    completes and spoken or replaced at once."""
+    m = _SENTENCE_END_RE.search(buf)
+    if m:
+        return buf[:m.end()], buf[m.end():]
+    if len(buf) >= _MAX_UNCHECKED_CHARS:
+        return buf, ""
+    return None, buf
+
+
 def unbacked(clause: str, evidence: dict) -> list:
     """The claims in `clause` that nothing in `evidence` supports.
     evidence = {"lookups": bool, "tools": [names]}. Any lookup or tool

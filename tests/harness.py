@@ -588,7 +588,10 @@ async def run_deterministic(mod, cases, verbose, trials):
     for i, case in enumerate(cases, 1):
         for t in range(trials):
             try:
-                got, ok, detail = await asyncio.wait_for(mod.evaluate(case), timeout=60)
+                # a suite may say how long one case legitimately takes: the
+                # onboarding path speaks and waits out its own audio, ~90s
+                got, ok, detail = await asyncio.wait_for(
+                    mod.evaluate(case), timeout=getattr(mod, "CASE_TIMEOUT_S", 60))
             except Exception as e:
                 got, ok, detail = f"<error: {type(e).__name__}>", False, str(e)[:200]
             res = SimpleResult(case.id, case.category, bool(ok), str(got), case.expect, detail, t)

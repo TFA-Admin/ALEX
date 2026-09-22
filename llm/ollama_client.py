@@ -357,7 +357,8 @@ class OllamaManager:
                 print(f"⚠️ Ollama stream connection dropped ({e}) — reconnecting once")
                 await self.aclose()
 
-    async def chat_stream(self, messages, tools=None, model: str = DEFAULT_MODEL):
+    async def chat_stream(self, messages, tools=None, model: str = DEFAULT_MODEL,
+                          num_predict: int = 300):
         """Streams a chat turn built from a real message list, optionally
         with tools she may call. Yields ("text", str) for content and
         ("tool_calls", list) when the model decides to call something.
@@ -380,7 +381,9 @@ class OllamaManager:
             "options": {
                 "num_ctx": SHARED_NUM_CTX,
                 "num_batch": SHARED_NUM_BATCH,
-                "num_predict": 300,
+                # 2026-09-22: the verbosity dial (core/traits.py) lowers this
+                # per turn; 300 is the ceiling it had always been.
+                "num_predict": max(40, min(300, int(num_predict or 300))),
             },
         }
         if tools:

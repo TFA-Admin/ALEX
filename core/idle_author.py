@@ -82,8 +82,19 @@ def enabled() -> bool:
 
 
 def author_model():
-    """None means her own model, with thinking on (see propose())."""
-    return os.getenv("ALEX_AUTHOR_MODEL") or None
+    """None means her own model, with thinking on (see propose()). The
+    environment wins; otherwise `author_model` in
+    config/controller_settings.json (Run view), read each time so a
+    change applies without a restart."""
+    env = os.getenv("ALEX_AUTHOR_MODEL")
+    if env:
+        return env
+    try:
+        with open(_SETTINGS, encoding="utf-8") as fh:
+            value = (json.load(fh).get("author_model") or "").strip()
+        return value or None
+    except (OSError, ValueError):
+        return None
 
 
 async def _pick_target():

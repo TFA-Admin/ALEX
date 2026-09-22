@@ -98,6 +98,24 @@ class RunView(QWidget):
         model_row.addWidget(self.idle_author_box)
         layout.addLayout(model_row)
 
+        # 2026-09-22: which model her author thinks with when she is idle.
+        # Her own model with thinking on needs no reload; a larger one
+        # evicts hers and costs a reload (~5-10s) on the first reply after.
+        author_row = QHBoxLayout()
+        author_row.addWidget(QLabel("Her author's model (idle work; applies within a minute):"))
+        self.author_selector = QComboBox()
+        self.author_selector.addItem("(her own model, thinking)")
+        for name in installed:
+            self.author_selector.addItem(name)
+        current_author = (load_controller_settings().get("author_model") or "").strip()
+        if current_author and current_author not in installed:
+            self.author_selector.addItem(current_author)
+        self.author_selector.setCurrentText(current_author or "(her own model, thinking)")
+        self.author_selector.currentTextChanged.connect(self._author_choice_changed)
+        author_row.addWidget(self.author_selector)
+        author_row.addStretch(1)
+        layout.addLayout(author_row)
+
         # ---------------- CONSOLES ----------------
         self.consoles = QTabWidget()
         self.alex_console = QTextEdit()
@@ -159,6 +177,13 @@ class RunView(QWidget):
         save_controller_settings(settings)
         self.log("[SYSTEM] Her idle author is " + ("ON" if settings["idle_author"] else "OFF")
                  + " — she reads this within a minute")
+
+    def _author_choice_changed(self, text: str):
+        text = (text or "").strip()
+        settings = load_controller_settings()
+        settings["author_model"] = "" if text.startswith("(") else text
+        save_controller_settings(settings)
+        self.log("[SYSTEM] Her author's model: " + (settings["author_model"] or "her own, thinking"))
 
     def _model_choice_changed(self, text: str):
         text = (text or "").strip()

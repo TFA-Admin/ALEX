@@ -15,13 +15,17 @@ from datetime import datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget,
     QTableWidget, QAbstractItemView, QTextEdit, QLineEdit, QMessageBox,
+    QSlider, QGridLayout,
 )
+from PySide6.QtCore import Qt
+from core import traits as her_traits
 
 from db.db import (
     get_personality, set_personality, DEFAULT_PERSONALITY,
     log_personality_change, reset_all_phrases, add_personality_hard_rule,
     get_personality_hard_rules, remove_personality_hard_rule,
     get_personality_locked, set_personality_locked,
+    get_personality_traits, set_personality_traits,
     fetch_recent_personality_changes,
     fetch_active_conclusions, fetch_decisions, fetch_curiosity_queue, fetch_eval_runs,
     fetch_projects, create_project, update_project, PROJECT_STATUSES, record_decision,
@@ -113,6 +117,44 @@ class HerView(QWidget):
         self._refresh_persona_button()
 
         # -------------------------
+        # DIALS (2026-09-22)
+        # -------------------------
+        # Craig: "would it be possible to link her persona to slider bars?"
+        # Seven dials, rendered into her prompt as words each turn
+        # (core/traits.py); verbosity also caps the reply in code.
+        lay.addWidget(QLabel("Dials — they shape how the description comes out; Verbosity also caps her reply length in code:"))
+        grid = QGridLayout()
+        self.dial_sliders = {}
+        self.dial_values = {}
+        for row_i, (key, label, _phrases) in enumerate(her_traits.TRAITS):
+            grid.addWidget(QLabel(label), row_i, 0)
+            slider = QSlider(Qt.Horizontal)
+            slider.setRange(0, 10)
+            slider.setValue(her_traits.DEFAULTS[key])
+            slider.setTickInterval(1)
+            value_lbl = QLabel(str(her_traits.DEFAULTS[key]))
+            value_lbl.setMinimumWidth(24)
+            slider.valueChanged.connect(lambda v, k=key: self._dial_moved(k, v))
+            grid.addWidget(slider, row_i, 1)
+            grid.addWidget(value_lbl, row_i, 2)
+            self.dial_sliders[key] = slider
+            self.dial_values[key] = value_lbl
+        lay.addLayout(grid)
+        self.dial_preview = QLabel()
+        self.dial_preview.setWordWrap(True)
+        self.dial_preview.setStyleSheet("color: gray;")
+        lay.addWidget(self.dial_preview)
+        dial_btns = QHBoxLayout()
+        self.apply_dials_btn = QPushButton("✅ Apply dials")
+        self.apply_dials_btn.clicked.connect(self.apply_dials)
+        dial_btns.addWidget(self.apply_dials_btn)
+        self.reset_dials_btn = QPushButton("♻️ Defaults")
+        self.reset_dials_btn.clicked.connect(self.reset_dials)
+        dial_btns.addWidget(self.reset_dials_btn)
+        dial_btns.addStretch(1)
+        lay.addLayout(dial_btns)
+
+        # -------------------------
         # STANDING RULES (2026-09-20)
         # -------------------------
         # Craig: "but it's still in her hard rules - I must not be able to
@@ -196,6 +238,7 @@ class HerView(QWidget):
             self._refreshing_lock = False
         self._refresh_persona_button()
         self.refresh_hard_rules()
+        self.load_dials()
 
         try:
             changes = asyncio.run(fetch_recent_personality_changes(limit=10))
@@ -207,6 +250,47 @@ class HerView(QWidget):
             fill_row(self.personality_changes_table, row, [
                 to_local(c.get("created_at")), c.get("kind"), c.get("new_value"), c.get("reason")])
         self.personality_changes_table.resizeRowsToContents()
+
+    def _dial_moved(self, key, value):
+        self.dial_values[key].setText(str(value))
+        self._preview_dials()
+
+    def _current_dials(self) -> dict:
+        return {k: s.value() for k, s in self.dial_sliders.items()}
+
+    def _preview_dials(self):
+        cap = her_traits.word_cap(self._current_dials())
+        phrases = []
+        for key, label, phr in her_traits.TRAITS:
+            phrases.append(phr[her_traits.band(self.dial_sliders[key].value())])
+        self.dial_preview.setText(" ".join(phrases) + (f" Reply length: about {cap} words." if cap else ""))
+
+    def load_dials(self):
+        try:
+            traits = asyncio.run(get_personality_traits())
+        except Exception as e:
+            self.note(f"⚠️ Failed to load her dials: {e}")
+            traits = None
+        traits = her_traits.normalize(traits)
+        for key, slider in self.dial_sliders.items():
+            slider.blockSignals(True)
+            slider.setValue(traits[key])
+            slider.blockSignals(False)
+            self.dial_values[key].setText(str(traits[key]))
+        self._preview_dials()
+
+    def apply_dials(self):
+        traits = self._current_dials()
+        try:
+            asyncio.run(set_personality_traits(traits))
+            asyncio.run(log_personality_change(her_traits.dumps(traits), "creator set the dials at the Controller", kind="dials"))
+            self.note("[SYSTEM] Dials applied: " + ", ".join(f"{k}={v}" for k, v in traits.items()))
+        except Exception as e:
+            self.note(f"⚠️ Failed to apply the dials: {e}")
+
+    def reset_dials(self):
+        for key, slider in self.dial_sliders.items():
+            slider.setValue(her_traits.DEFAULTS[key])
 
     def _refresh_persona_button(self):
         if persona_disabled():
