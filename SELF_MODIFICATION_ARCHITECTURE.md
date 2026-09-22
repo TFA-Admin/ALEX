@@ -1194,6 +1194,44 @@ asked — the same measurement as every other tool.
 Restarted headlessly from `controller.procs.ProcessManager` five times
 tonight; the environment is fine for that.
 
+**21:00-21:20 — a claim needs evidence (Craig: "is there a way for her
+to understand she is wrong and self correct so we're not constantly
+chasing things she's made up?").** `core/claims.py`, wired into the
+reply stream in `systems/llm/system.py`. The first two sentences of a
+reply are held (nothing the listener notices: a clause was never spoken
+before it was complete) and scanned for a claim of work — checked,
+looked, read the, accessed, reviewed, ran, "the list shows", "there are
+no completed" — that nothing this turn backs. Evidence = a deliberation
+lookup with a REAL result or a tool call; a refusal ("that is for my
+creator"), an error or an empty search is not evidence (both found on
+the first tests). Caught: not spoken; the lookups the question called
+for run (`lookups_after_claim`: the turn's need scores ≥3, then what the
+words point at); a `fabrication` decision is recorded; she answers again
+with the results in front of her, tools off. If the second attempt
+claims again, the claim sentences are dropped and code writes one true
+sentence per refused/empty lookup from the result itself. Her last three
+slips (24h) sit in her context as data. Memory rows can be `retracted`
+(kept for him, never read back — three read paths filter it); tonight's
+eight "I checked" replies are.
+
+Live, throwaway user, "Did you check your log today?": attempt one "I
+have accessed the most recent entries of my operational record" —
+caught; read_log refused (not the creator), memory empty; attempt two
+"I accessed…" — replaced with "I have not read my log; that is for my
+creator to see. I looked for our earlier conversations on this and
+found nothing." followed by the rest of her reply. What it does not
+catch: a wrong fact stated without claiming a check ("there are no
+anomalies recorded" still followed), and a wrong opinion. That is the
+model's ceiling and the harness's job.
+
+Found while wiring it: an edit anchor left the original "generation
+total" timing line inside the new wrapper, where its variable does not
+exist; every reply raised at its end, the end marker never went out, and
+a one-word answer took 195 s to time out. The undefined-name sweep did
+not see it (the name existed in an enclosing scope). Also: the page now
+prints her "edge" mood as "irritation"; `my_projects` states the counts
+so she does not count (she said four of six).
+
 **Then, 20:21-20:26: "Doesn't seem like she is able to actually see
 them."** She did not. Asked five ways whether she could see the project
 list, she said "I checked" every time and had called nothing — the
