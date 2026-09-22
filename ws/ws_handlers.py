@@ -178,7 +178,7 @@ CONVERSATION_WINDOW_S = 45
 # along as what he is probably referring to. Either way she is told
 # which it was — see systems/llm/system.py.
 UNADDRESSED_RECALL_S = 60
-_ATTENTION_ONLY_MAX_WORDS = 3
+_ATTENTION_ONLY_MAX_WORDS = 4   # "hey alex, are you there" is attention, not a question
 
 # 2026-07-17 (Craig: "she continues to respond to obvious end of
 # discussion statements") — an unaddressed closing remark ("that's all
