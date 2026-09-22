@@ -58,10 +58,10 @@ from db.db import (
     record_correction, fetch_corrections, get_user_role as _role,
     fetch_active_conclusions, record_decision, fetch_profile_names,
     answer_curiosity_question, fetch_answered_curiosity,
-    get_personality_hard_rules, list_module_registry, fetch_decisions
+    get_personality_hard_rules, list_module_registry, fetch_decisions, get_personality_traits
 )
 from core.knowledge_filter import is_worth_keeping
-from core import self_model, corrections as corr, tools as her_tools, deliberation, claims as her_claims
+from core import self_model, corrections as corr, tools as her_tools, deliberation, claims as her_claims, traits as her_traits
 from systems.controller._role_gates import require_creator
 from core.phrasebook import get_phrase
 from config.logger_config import logger
@@ -871,6 +871,16 @@ class System(BaseSystem):
         # See core/self_model.py for the measured failure this answers.
         absolute_rules_block = self_model.absolute_block()
 
+        # 2026-09-22: the dials (core/traits.py). Rendered as words below
+        # the rules; the verbosity dial also caps the reply's tokens.
+        try:
+            dials = await get_personality_traits()
+        except Exception as e:
+            logger.warning(f"⚠️ could not read her dials: {e}")
+            dials = None
+        dials_block = her_traits.render(dials)
+        reply_tokens = her_traits.num_predict(dials)
+
         hard_rules_block = ""
         if hard_rules:
             rules_list = "\n".join(f"    - {r}" for r in hard_rules)
@@ -898,7 +908,7 @@ class System(BaseSystem):
 
     PERSONALITY (this is genuinely yours — express it, don't fight it):
     {personality}
-{hard_rules_block}
+{hard_rules_block}{dials_block}
 
     You have access to stored information about the user.
 
@@ -1112,6 +1122,13 @@ class System(BaseSystem):
 
         evidence = {"lookups": evidence_ran, "tools": []}
         user_tail = prompt[len(system_prompt):]
+        import inspect as _inspect
+        _cs_kwargs = {}
+        try:
+            if chat_stream is not None and "num_predict" in _inspect.signature(chat_stream).parameters:
+                _cs_kwargs = {"num_predict": reply_tokens}
+        except (TypeError, ValueError):
+            pass
 
         async def _generate(sys_prompt, allow_tools=True):
             gen_start = time.time()
@@ -1139,7 +1156,7 @@ class System(BaseSystem):
                     calls = []
                     said = ""
                     offer_tools = her_tools.TOOLS if (allow_tools and rounds < her_tools.MAX_CALLS_PER_TURN) else None
-                    async for kind, payload in chat_stream(messages, tools=offer_tools):
+                    async for kind, payload in chat_stream(messages, tools=offer_tools, **_cs_kwargs):
                         if kind == "tool_calls":
                             calls.extend(payload)
                             continue
@@ -1179,10 +1196,40 @@ class System(BaseSystem):
             front of her, tools off so the second answer cannot wander."""
             buf = ""
             checked = False
+            tail = ""            # after the head: scanned sentence by sentence
+            fixed_later = False
             gen = _generate(system_prompt)
             async for chunk in gen:
                 if checked:
-                    yield chunk
+                    # 2026-09-22: a claim past the second sentence ("I have
+                    # reviewed your recent history", seen live with a tester)
+                    # used to pass. Each later sentence is checked as it
+                    # completes; a bare claim is replaced in place with the
+                    # truth from the lookups, no regeneration.
+                    tail += chunk
+                    while True:
+                        sentence, rest = her_claims.first_sentence(tail)
+                        if sentence is None:
+                            break
+                        tail = rest
+                        if her_claims.unbacked(sentence, evidence):
+                            block = await her_claims.gather_evidence(user_input, user_id, needs_seen, sentence)
+                            honest = her_claims.honest_lines(block)
+                            logger.info(f"[CLAIM] later sentence {sentence.strip()[:80]!r} — replaced with {honest[:80]!r}")
+                            if not fixed_later:
+                                fixed_later = True
+                                try:
+                                    await record_decision(
+                                        "fabrication", f"She said {sentence.strip()[:110]!r} without having looked",
+                                        reasoning="Code compared the claim with this turn's lookups and tool calls: there were none.",
+                                        evidence=block[:400], outcome="that sentence was replaced with the truth from the lookups",
+                                        actor="alex")
+                                except Exception:
+                                    pass
+                            evidence["lookups"] = evidence["lookups"] or her_claims.real_evidence(block)
+                            sentence = (honest + " ") if honest else ""
+                        if sentence:
+                            yield sentence
                     continue
                 buf += chunk
                 clause, rest = her_claims.first_clause(buf)
@@ -1237,6 +1284,14 @@ class System(BaseSystem):
                         buf2 = (her_claims.honest_lines(block) + " " + her_claims.drop_claims(buf2)).strip()
                     yield buf2
                 return
+            if tail:
+                if her_claims.unbacked(tail, evidence):
+                    block = await her_claims.gather_evidence(user_input, user_id, needs_seen, tail)
+                    honest = her_claims.honest_lines(block)
+                    logger.info(f"[CLAIM] trailing {tail.strip()[:80]!r} — replaced with {honest[:80]!r}")
+                    tail = (honest + " ") if honest else ""
+                if tail:
+                    yield tail
             if buf:
                 if not checked:
                     found = her_claims.unbacked(buf, evidence)

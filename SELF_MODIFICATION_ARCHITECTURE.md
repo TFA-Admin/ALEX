@@ -1634,6 +1634,43 @@ or a design limit.
 
 ---
 
+## 2026-09-22 (noon) — dials, the stranger in the harness, the 14B author
+
+Craig's answers to "what's next": no tunnel (her use by others will be
+limited; the port forward is closed); persona on sliders; the harness
+onboarding case; check the trimmed rules; pull the 14B; then item 14+.
+
+- **Dials** (`core/traits.py`, Controller → Her → Personality → Dials):
+  warmth, sarcasm, menace, dark humor, verbosity, deference to Craig,
+  patience with others, 0-10. Rendered into her prompt as plain words
+  per band, below the standing rules. **Verbosity is enforced in code**:
+  a word target in the prompt and `num_predict` on the reply (via
+  `chat_stream(num_predict=)`), because "be more concise" as a standing
+  rule left her at 400-650 characters per reply to a tester. No dials
+  saved = prompt and cap unchanged.
+- **The rules he trimmed** (5): stop using emojis; be more concise; you
+  will not lie; your name is ALEX; respect to Craig. "Be more concise"
+  was the one not working — it is a dial now. The description ends with
+  "You are not a doctor." (from the tester who called her Doctor).
+- **`tests/suites/onboarding.py`**: connects with no saved name, expects
+  `__READY__` before her question, her question in words, her voice
+  (audio bytes), then a typed route through enrollment to a
+  `__PROFILE__` for that name; purges the profile. First live run:
+  **1/1 in 62 s** (eval_runs #12). In `GATE_SUITES`. The harness now
+  honours a suite's `CASE_TIMEOUT_S` (its first run died at the runner's
+  60 s while she waited out her own audio).
+- **Claims, later in a reply**: after the two-sentence head, each later
+  sentence is checked as it completes; a bare claim is replaced in place
+  with the truth from the lookups (no regeneration). Seen live: "I have
+  reviewed your recent history" in sentence three, to a tester.
+- **The 14B author**: `qwen3:14b` pulled (9.3 GB); `author_model` is a
+  Controller setting (Run view) read by `core/idle_author.py` each pass.
+  Measured on the threshold question: **6, "she looks things up more
+  often", the right direction, in 31 s including the model load**, no
+  thinking needed; her 9b reloaded in **5.9 s** afterwards. VRAM back to
+  9008 MiB. So the idle author now runs on the 14B, and the cost to
+  anyone arriving mid-thought is that reload.
+
 ## Her personality, as Craig wrote it (2026-09-21 21:39)
 
 Kept here because it was overwritten once the same evening (personality_log
