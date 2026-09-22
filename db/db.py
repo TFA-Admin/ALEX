@@ -755,6 +755,28 @@ async def fetch_proposals(status: str = None, limit: int = 50):
 
 
 # -------------------------
+# LIVE TRANSCRIPT (2026-09-21). Craig: "is there a way for me to drop in
+# on their conversation and see it first hand rather than through the
+# logs?" Every completed turn is already a memory row; this reads the
+# newest ones across everyone, including her unprompted lines, for the
+# Controller's People → Conversation view.
+# -------------------------
+async def fetch_conversation_tail(limit: int = 40, user: str = None, after_id: int = 0):
+    sql = "SELECT id, user, prompt, response, created_at FROM memory WHERE id > ?"
+    params = [after_id]
+    if user:
+        sql += " AND user=?"
+        params.append(user)
+    sql += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(sql, params)
+        rows = await cursor.fetchall()
+    keys = ["id", "user", "prompt", "response", "created_at"]
+    return [dict(zip(keys, r)) for r in reversed(rows)]
+
+
+# -------------------------
 # PROJECTS (2026-09-21) — see the table comment in init_db()
 # -------------------------
 PROJECT_STATUSES = ("in_progress", "planned", "done", "backlog")

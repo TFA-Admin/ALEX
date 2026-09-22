@@ -16,11 +16,11 @@ reads — it never depends on her answering."""
 import asyncio
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QTableWidget, QAbstractItemView, QCheckBox, QMessageBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget,
+    QTableWidget, QAbstractItemView, QCheckBox, QMessageBox, QComboBox,
 )
 
-from db.db import fetch_sessions, session_closed, fetch_profiles_overview
+from db.db import fetch_sessions, session_closed, fetch_profiles_overview, fetch_conversation_tail
 from controller.common import make_readable, fill_row, selected_rows, to_local, ago
 
 
@@ -30,8 +30,11 @@ class PeopleView(QWidget):
         self.note = note
         self._sessions = []
 
+        outer = QVBoxLayout()
+        outer.setContentsMargins(0, 4, 0, 0)
+        self.inner = QTabWidget()
+        who = QWidget()
         layout = QVBoxLayout()
-        layout.setContentsMargins(0, 4, 0, 0)
 
         # ---------------- TALKING TO HER NOW ----------------
         self.live_label = QLabel("Talking to her now:")
@@ -80,8 +83,85 @@ class PeopleView(QWidget):
         layout.addWidget(QLabel(
             "Roles and voice samples are hers to change through conversation "
             "(see Commands); this view reads them."))
+        who.setLayout(layout)
+        self.inner.addTab(who, "Who")
+        self.inner.addTab(self._build_conversation(), "Conversation")
+        outer.addWidget(self.inner)
+        self.setLayout(outer)
 
-        self.setLayout(layout)
+    # =====================================================================
+    # CONVERSATION (2026-09-21)
+    # =====================================================================
+    # Craig, watching a tester through the log: "is there a way for me to
+    # drop in on their conversation and see it first hand?" Each turn is a
+    # memory row the moment it completes; this shows the newest ones as
+    # they land, everyone or one person, her unprompted lines included.
+    # Read-only: watching is not joining.
+    def _build_conversation(self):
+        page = QWidget()
+        lay = QVBoxLayout()
+        top = QHBoxLayout()
+        top.addWidget(QLabel("Live — refreshes every few seconds. Show:"))
+        self.conv_filter = QComboBox()
+        self.conv_filter.addItem("everyone")
+        self.conv_filter.currentTextChanged.connect(lambda _: self.refresh_conversation(full=True))
+        top.addWidget(self.conv_filter)
+        top.addStretch(1)
+        self.conv_refresh_btn = QPushButton("🔄 Refresh")
+        self.conv_refresh_btn.clicked.connect(lambda: self.refresh_conversation(full=True))
+        top.addWidget(self.conv_refresh_btn)
+        lay.addLayout(top)
+
+        self.conv_table = QTableWidget()
+        self.conv_table.setColumnCount(4)
+        self.conv_table.setHorizontalHeaderLabels(["When", "Who", "They said", "She replied"])
+        self.conv_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.conv_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        make_readable(self.conv_table, wrap_column=3)
+        self.conv_table.horizontalHeader().setSectionResizeMode(2, self.conv_table.horizontalHeader().sectionResizeMode(3))
+        lay.addWidget(self.conv_table)
+        self._conv_last_id = 0
+        page.setLayout(lay)
+        return page
+
+    def refresh_conversation(self, full: bool = False):
+        user = self.conv_filter.currentText()
+        user = None if user in ("", "everyone") else user
+        try:
+            if full:
+                rows = asyncio.run(fetch_conversation_tail(limit=40, user=user))
+                self.conv_table.setRowCount(0)
+                self._conv_last_id = 0
+            else:
+                rows = asyncio.run(fetch_conversation_tail(limit=40, user=user, after_id=self._conv_last_id))
+        except Exception as e:
+            self.note(f"⚠️ Failed to read the conversation: {e}")
+            return
+        if not rows:
+            return
+        for r in rows:
+            row = self.conv_table.rowCount()
+            self.conv_table.insertRow(row)
+            said = r.get("prompt") or ""
+            if said.startswith("(unprompted"):
+                said = "(she spoke first)"
+            fill_row(self.conv_table, row, [
+                to_local(r.get("created_at"))[11:], r.get("user") or "?", said, r.get("response") or ""])
+            self._conv_last_id = max(self._conv_last_id, int(r["id"]))
+        # keep the last 60 rows so a long night does not grow the table forever
+        while self.conv_table.rowCount() > 60:
+            self.conv_table.removeRow(0)
+        self.conv_table.resizeRowsToContents()
+        self.conv_table.scrollToBottom()
+
+    def _refresh_conv_filter(self, names):
+        current = self.conv_filter.currentText()
+        have = [self.conv_filter.itemText(i) for i in range(self.conv_filter.count())]
+        for n in names:
+            if n and n not in have:
+                self.conv_filter.addItem(n)
+        if current and self.conv_filter.currentText() != current:
+            self.conv_filter.setCurrentText(current)
 
     def live_count(self) -> int:
         return sum(1 for s in self._sessions if not s.get("disconnected_at"))
@@ -128,6 +208,8 @@ class PeopleView(QWidget):
                 to_local(p.get("created_at")),
                 (ago(p["last_heard_at"]) + " ago") if p.get("last_heard_at") else "never"])
         self.profiles_table.resizeRowsToContents()
+        self._refresh_conv_filter([p["user"] for p in profiles])
+        self.refresh_conversation()
 
     def close_selected_session(self):
         rows = selected_rows(self.sessions_table)
