@@ -63,13 +63,21 @@ class HerView(QWidget):
         page = QWidget()
         lay = QVBoxLayout()
 
-        lay.addWidget(QLabel("Her personality, as she reads it on every turn:"))
+        # 2026-09-21 (Craig: "The other section does not permit me to make
+        # direct changes"). The description is his to write as one piece:
+        # edited here and saved exactly as typed — no model merge, no rule
+        # added. The nudge box further down still does the merge for the
+        # "be a bit more X" case, and says so.
+        lay.addWidget(QLabel("Her personality, as she reads it on every turn — edit it here and save; "
+                             "it is kept exactly as written:"))
         self.personality_view = QTextEdit()
-        self.personality_view.setReadOnly(True)
-        self.personality_view.setMaximumHeight(110)
+        self.personality_view.setMaximumHeight(140)
         lay.addWidget(self.personality_view)
 
         btns = QHBoxLayout()
+        self.save_personality_btn = QPushButton("💾 Save description as written")
+        self.save_personality_btn.clicked.connect(self.save_personality_text)
+        btns.addWidget(self.save_personality_btn)
         self.reset_personality_btn = QPushButton("♻️ Reset personality to default")
         self.reset_personality_btn.clicked.connect(self.reset_personality)
         self.reset_phrases_btn = QPushButton("♻️ Reset all phrases to default")
@@ -113,6 +121,12 @@ class HerView(QWidget):
         lay.addWidget(self.hard_rules_list)
 
         rule_btns = QHBoxLayout()
+        self.add_hard_rule_btn = QPushButton("➕ Add rule (verbatim)")
+        self.add_hard_rule_btn.clicked.connect(self.add_hard_rule)
+        rule_btns.addWidget(self.add_hard_rule_btn)
+        self.edit_hard_rule_btn = QPushButton("✏️ Edit selected rule")
+        self.edit_hard_rule_btn.clicked.connect(self.edit_selected_hard_rule)
+        rule_btns.addWidget(self.edit_hard_rule_btn)
         self.remove_hard_rule_btn = QPushButton("🗑️ Remove selected rule")
         self.remove_hard_rule_btn.clicked.connect(self.remove_selected_hard_rule)
         rule_btns.addWidget(self.remove_hard_rule_btn)
@@ -129,7 +143,8 @@ class HerView(QWidget):
         # depending on a classifier to first recognize intent. Takes
         # effect immediately, no restart — systems/llm/system.py reads
         # personality/hard rules fresh from the DB on every single turn.
-        lay.addWidget(QLabel("Personality override (typed instruction, e.g. \"be more direct and stop using emojis\"):"))
+        lay.addWidget(QLabel("Nudge her (the model merges this into the description above AND keeps it as a "
+                             "standing rule — for \"be a bit more X\"; to write the voice yourself, edit above):"))
         override_row = QHBoxLayout()
         self.personality_override_input = QLineEdit()
         self.personality_override_input.setPlaceholderText("Type an instruction and click Apply...")
@@ -267,6 +282,55 @@ class HerView(QWidget):
         except Exception as e:
             self.note(f"⚠️ Failed to apply personality override: {e}")
         self.refresh_personality()
+
+    def save_personality_text(self):
+        """The description exactly as he typed it. No merge, no rule."""
+        text = self.personality_view.toPlainText().strip()
+        if not text:
+            QMessageBox.information(self, "Personality", "The description cannot be empty. Use Reset for the default.")
+            return
+        try:
+            asyncio.run(set_personality(text))
+            asyncio.run(log_personality_change(text, "creator wrote it directly at the Controller", kind="personality"))
+            self.note("[SYSTEM] Personality description saved as written")
+        except Exception as e:
+            self.note(f"⚠️ Failed to save the description: {e}")
+        self.refresh_personality()
+
+    def add_hard_rule(self):
+        from PySide6.QtWidgets import QInputDialog
+        rule, ok = QInputDialog.getMultiLineText(
+            self, "Add standing rule", "Kept word for word, never rewritten, above her personality:", "")
+        rule = (rule or "").strip()
+        if not ok or not rule:
+            return
+        try:
+            asyncio.run(add_personality_hard_rule(rule))
+            asyncio.run(log_personality_change(rule, "creator added a standing rule at the Controller", kind="hard_rule"))
+            self.note(f"[SYSTEM] Standing rule added: {rule}")
+        except Exception as e:
+            self.note(f"⚠️ Failed to add the rule: {e}")
+        self.refresh_hard_rules()
+
+    def edit_selected_hard_rule(self):
+        from PySide6.QtWidgets import QInputDialog
+        items = self.hard_rules_list.selectedItems()
+        if not items:
+            self.note("⚠️ Select a rule to edit first.")
+            return
+        old = items[0].text()
+        new, ok = QInputDialog.getMultiLineText(self, "Edit standing rule", "Replaces the selected rule, word for word:", old)
+        new = (new or "").strip()
+        if not ok or not new or new == old:
+            return
+        try:
+            asyncio.run(remove_personality_hard_rule(old))
+            asyncio.run(add_personality_hard_rule(new))
+            asyncio.run(log_personality_change(new, f"creator edited a standing rule at the Controller (was: {old[:80]})", kind="hard_rule"))
+            self.note(f"[SYSTEM] Standing rule edited: {new}")
+        except Exception as e:
+            self.note(f"⚠️ Failed to edit the rule: {e}")
+        self.refresh_hard_rules()
 
     def refresh_hard_rules(self):
         try:
