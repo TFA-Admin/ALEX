@@ -774,12 +774,13 @@ async def update_project(project_id: int, status: str = None, notes: str = None,
 
 
 async def fetch_projects(limit: int = 100):
-    order = " ".join(f"WHEN '{s}' THEN {i}" for i, s in enumerate(PROJECT_STATUSES))
+    """By number. The id IS the number he uses ("project number one"), so
+    both the Controller and her tool keep that order and say it."""
     async with aiosqlite.connect(DB_PATH) as db:
         try:
             cursor = await db.execute(
-                f"SELECT id, title, status, notes, created_at, updated_at FROM projects "
-                f"ORDER BY CASE status {order} ELSE 9 END, updated_at DESC LIMIT ?", (limit,))
+                "SELECT id, title, status, notes, created_at, updated_at FROM projects "
+                "ORDER BY id LIMIT ?", (limit,))
             rows = await cursor.fetchall()
         except Exception:
             return []

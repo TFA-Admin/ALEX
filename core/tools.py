@@ -151,10 +151,11 @@ TOOLS = [
          "why": {"type": "string", "description": "what you have noticed, and what you expect to improve"}},
         ["target", "why"]),
     _fn("my_projects",
-        "The projects he has planned for you and where each stands: in "
-        "progress, planned, done, backlog — with his notes and when each "
-        "last moved. Use it when he asks what is next for you, what you "
-        "are being built toward, or how something is coming along."),
+        "The projects he has planned for you, numbered and named, and where "
+        "each stands: in progress, planned, done, backlog — with his notes "
+        "and when each last moved. Use it when he asks what is next for you, "
+        "what you are being built toward, how something is coming along, or "
+        "about a project by its number or name."),
     _fn("my_scores",
         "Your measured test scores: the evaluation suites he runs against "
         "you (disagreement, pressure, authority, intent and others) — the "
@@ -325,9 +326,9 @@ def _current_time() -> str:
 
 
 async def _my_projects() -> str:
-    """What he has in store for her, as he keeps it at the Controller.
-    Status changes are also decisions rows, so "how is X coming along"
-    has a trail, not just a label."""
+    """What he has in store for her, as he keeps it at the Controller,
+    by number and name — "project number one" is #1. Status changes are
+    also decisions rows, so "how is X coming along" has a trail."""
     rows = await fetch_projects()
     if not rows:
         return "He has not written any projects down for you yet."
@@ -340,22 +341,14 @@ async def _my_projects() -> str:
         except (TypeError, ValueError):
             return str(ts or "")[:10]
 
-    groups = {}
+    labels = {"in_progress": "in progress", "planned": "planned", "done": "done", "backlog": "backlog"}
+    lines = ["His projects for you, by number, as he keeps them (his labels, his notes — not yours to reclassify):"]
     for r in rows:
-        groups.setdefault(r["status"], []).append(r)
-    labels = {"in_progress": "IN PROGRESS", "planned": "PLANNED", "done": "DONE", "backlog": "BACKLOG"}
-    lines = ["His projects for you, as he keeps them:"]
-    for status in ("in_progress", "planned", "done", "backlog"):
-        items = groups.get(status)
-        if not items:
-            continue
-        lines.append(f"{labels[status]}:")
-        for r in items:
-            line = f"  - {r['title']} (last moved {_local(r['updated_at'])})"
-            if r.get("notes"):
-                line += f": {r['notes'][:160]}"
-            lines.append(line)
-    return "\n".join(lines)
+        line = f"#{r['id']} {r['title']} — {labels.get(r['status'], r['status'])} (last moved {_local(r['updated_at'])})"
+        if r.get("notes"):
+            line += f": {r['notes'][:220]}"
+        lines.append(line)
+    return chr(10).join(lines)
 
 
 async def _my_scores() -> str:
