@@ -67,8 +67,8 @@ def first_clause(buf: str):
     return None, buf
 
 
-_NO_EVIDENCE_STARTS = ("That is for my creator", "There is no tool", "nothing found", "no matches",
-                       "no stored conversations", "search_memory needs")
+_NO_EVIDENCE_STARTS = ("That is for my creator", "There is no tool", "nothing found", "nothing stored",
+                       "no matches", "no stored conversations", "search_memory needs")
 
 
 def real_evidence(block: str) -> bool:
