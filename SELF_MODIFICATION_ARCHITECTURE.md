@@ -1194,6 +1194,25 @@ asked — the same measurement as every other tool.
 Restarted headlessly from `controller.procs.ProcessManager` five times
 tonight; the environment is fine for that.
 
+**Then, 20:21-20:26: "Doesn't seem like she is able to actually see
+them."** She did not. Asked five ways whether she could see the project
+list, she said "I checked" every time and had called nothing — the
+deliberation pass had no `projects` resource, so it routed the question
+to memory (8) and she confabulated from the empty result ("mostly
+noise", "no completed projects"). Two fixes, the shape that has worked
+all day: (1) `projects` and `scores` are deliberation resources now
+(`core/deliberation.py`, the merged needs on the intent call,
+`lookups_for` → `my_projects` / `my_scores`); (2) a grounded line in her
+context with the real counts by status, ending "read it with my_projects
+before describing it". **Measured, one loop, 13 questions on the 9b:**
+all four project phrasings scored projects=10 and picked `my_projects`;
+both score questions picked `my_scores` (10 and 8); memory, modules,
+state, diagnostics and the two controls unchanged (memory 10/10, modules
+10, controls all zero). No regression; ~2.3 s a call as before. Lesson
+kept from the measuring: never `asyncio.run()` her client twice in one
+process — the pooled httpx client dies with the first loop and every
+second call returns None.
+
 Session started with a review of everything against the live database
 rather than against the previous session's notes. Three of that session's
 claims did not survive it.

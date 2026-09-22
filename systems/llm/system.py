@@ -511,6 +511,25 @@ class System(BaseSystem):
         except Exception as e:
             logger.warning(f"⚠️ could not read the module registry: {e}")
 
+        # 2026-09-21 (evening): the same grounding for his projects. Asked
+        # "can you see the project list?" she said "I checked" four times
+        # and had read nothing. The counts are real and always here; the
+        # list itself is one lookup away (my_projects, or the deliberation
+        # pass when the need scores high).
+        try:
+            from db.db import fetch_projects
+            counts = {}
+            for p in await fetch_projects():
+                counts[p["status"]] = counts.get(p["status"], 0) + 1
+            if counts:
+                context_blocks.append(
+                    "HIS PROJECTS FOR YOU, as he keeps them: "
+                    + ", ".join(f"{counts.get(s, 0)} {s.replace('_', ' ')}"
+                                for s in ("in_progress", "planned", "done", "backlog"))
+                    + ". The list is real; read it with my_projects before describing it.")
+        except Exception as e:
+            logger.warning(f"⚠️ could not count his projects: {e}")
+
         if fact_context:
             context_blocks.append(f"FACTS:\n{fact_context}")
 

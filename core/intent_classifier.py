@@ -75,7 +75,11 @@ Respond with ONLY a JSON object, matching the category exactly:
 # extra keys on the same object, never a new category — adding categories
 # to this prompt collapsed the 7b twice, and this was measured against real
 # utterances before being wired (roadmap item 4).
-NEEDS_RESOURCES = ("memory", "modules", "state", "log", "code", "diagnostics")
+# 2026-09-21 (evening): "projects" and "scores" added after she told
+# Craig four times that she had "checked" a project list she never read
+# — the resource did not exist, so the pass routed to memory and she
+# invented the rest. Measured before wiring: see the roadmap.
+NEEDS_RESOURCES = ("memory", "modules", "state", "log", "code", "diagnostics", "projects", "scores")
 
 NEEDS_SUFFIX = """
 
@@ -86,7 +90,9 @@ Separately, before A.L.E.X. answers, decide what she needs to look at to answer 
   log — her own recent log: actions, warnings, errors
   code — a file of her own source code or documentation
   diagnostics — a fresh check of whether her systems are working
-Add these keys to the SAME JSON object as the category above: "memory", "modules", "state", "log", "code", "diagnostics" (each an integer 0-10), "search" (a few words to search his memory for), "path" (the file path if code is needed, else "")."""
+  projects — the list of projects he has planned for her and where each stands: use when he asks what is next for her, what she is being built toward, whether she can see his list, or how some piece of work is coming along
+  scores — her measured test scores: use when he asks how she is doing on her tests, what she is bad at, or whether a change helped
+Add these keys to the SAME JSON object as the category above: "memory", "modules", "state", "log", "code", "diagnostics", "projects", "scores" (each an integer 0-10), "search" (a few words to search his memory for), "path" (the file path if code is needed, else "")."""
 
 
 async def classify_intent(text: str, with_needs: bool = False, recent_lines=None) -> dict:
