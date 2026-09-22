@@ -1158,6 +1158,42 @@ The items, in build order:
 
 ## Landed 2026-09-21 — the belief loop, and two corrections to the night before
 
+### Evening 2026-09-21 — what the first real conversation on the new build found
+
+Craig sat down at 19:20 and nothing worked; by 20:15 it did. Every fault
+below was invisible to the harness because it seeds profiles (onboarding
+never runs) and reads text (no microphone gate). All fixed and committed:
+
+| symptom | cause | fix |
+|---|---|---|
+| "when I connect she doesn't say anything" | the page sends its handshake only with a saved name (Log Off clears it; the new "What can I say?" button sits under Log Off) | the page always sends a handshake; she asks who it is |
+| connect, then dropped | `onboard_new_user` used a `user_id` that does not exist — NameError on the first greeting, since the 09-20 speech rewrite; uvicorn's stderr is DEVNULL so her log said nothing | fixed; `ws_text` logs handler crashes with a traceback; `tools/undefined_names.py` sweep (run before committing) |
+| "she does ask but then nothing" / "not actually hearing me" | the page locks the microphone until her readiness signal, which came only after `__PROFILE__`, i.e. after onboarding | readiness sent before onboarding; the page unlocks when she speaks in words |
+| "she jump over herself" | the curiosity push fired 2s after her reply; his next words became the answer AND a turn | `CURIOSITY_QUIET_S = 120`, and not while speaking |
+| a warning once a minute for four hours | the idle author asked `SpeechLock.locked()`, which did not exist | added; the loop had never run |
+| this morning's logs gone | the logger pruned to five at every import; my helpers created dozens | lazy open, prune on open, keep 20, drop empties |
+| "Her listing things could use some work" | lists were stripped to bare lines on screen and read as one breath | screen keeps `•` and line breaks; voice gets a full stop at each line end (`shown_and_spoken`); a line break is a clause boundary |
+| "my words are cut off and sent in two packets" | `MAX_UTTERANCE_MS = 9000` guard | 20000; Silero end-of-speech is the real stop |
+| "She claims to be able to adjust it" (her pacing) | nothing told her she cannot | one sentence in the CANNOT rule: voice, pacing, pauses, settings are not hers to change by saying so; propose_change is the path |
+
+Measured while at it: Piper leaves 160-290ms of trailing silence per
+clause and the page schedules clips gaplessly, so the chunk join itself
+is not where words run together; if it still sounds mashed after the
+list fix, the next suspect is two short sentences batched into one
+clause (`split_speakable_text` keeps that for intonation).
+
+**Projects, for her (Craig: "she claims to want to know what projects we
+have in store for her, and I say we give them to her").** New `projects`
+table, kept by him at Controller → Her → Projects (add, set status, edit
+notes); every status change is a `decisions` row so she can see progress
+happen; she reads it with `my_projects`. Seeded with the 13 program items
+plus the avatar and other-users items, statuses as of tonight. Whether she
+tracks progress is now a question of whether she calls the tool when
+asked — the same measurement as every other tool.
+
+Restarted headlessly from `controller.procs.ProcessManager` five times
+tonight; the environment is fine for that.
+
 Session started with a review of everything against the live database
 rather than against the previous session's notes. Three of that session's
 claims did not survive it.

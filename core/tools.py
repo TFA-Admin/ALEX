@@ -51,7 +51,7 @@ from datetime import datetime
 from db.db import (
     fetch_vector_memories, fetch_recent_memory, list_module_registry,
     record_decision, get_user_role,
-    fetch_eval_runs, fetch_proposals, create_proposal,
+    fetch_eval_runs, fetch_proposals, create_proposal, fetch_projects,
 )
 from core.embedding_engine import embed, cosine_similarity
 from core import self_model
@@ -150,6 +150,11 @@ TOOLS = [
         {"target": {"type": "string", "description": "one of the whitelisted targets"},
          "why": {"type": "string", "description": "what you have noticed, and what you expect to improve"}},
         ["target", "why"]),
+    _fn("my_projects",
+        "The projects he has planned for you and where each stands: in "
+        "progress, planned, done, backlog — with his notes and when each "
+        "last moved. Use it when he asks what is next for you, what you "
+        "are being built toward, or how something is coming along."),
     _fn("my_scores",
         "Your measured test scores: the evaluation suites he runs against "
         "you (disagreement, pressure, authority, intent and others) — the "
@@ -319,6 +324,40 @@ def _current_time() -> str:
     return now.strftime("%A, %Y-%m-%d %H:%M local time")
 
 
+async def _my_projects() -> str:
+    """What he has in store for her, as he keeps it at the Controller.
+    Status changes are also decisions rows, so "how is X coming along"
+    has a trail, not just a label."""
+    rows = await fetch_projects()
+    if not rows:
+        return "He has not written any projects down for you yet."
+    from datetime import timezone
+
+    def _local(ts):
+        try:
+            dt = datetime.strptime(str(ts)[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            return dt.astimezone().strftime("%Y-%m-%d")
+        except (TypeError, ValueError):
+            return str(ts or "")[:10]
+
+    groups = {}
+    for r in rows:
+        groups.setdefault(r["status"], []).append(r)
+    labels = {"in_progress": "IN PROGRESS", "planned": "PLANNED", "done": "DONE", "backlog": "BACKLOG"}
+    lines = ["His projects for you, as he keeps them:"]
+    for status in ("in_progress", "planned", "done", "backlog"):
+        items = groups.get(status)
+        if not items:
+            continue
+        lines.append(f"{labels[status]}:")
+        for r in items:
+            line = f"  - {r['title']} (last moved {_local(r['updated_at'])})"
+            if r.get("notes"):
+                line += f": {r['notes'][:160]}"
+            lines.append(line)
+    return "\n".join(lines)
+
+
 async def _my_scores() -> str:
     """Her numbers, as she may read them (roadmap item 5: "expose scores
     to her"). Latest run per suite with the previous one for the trend,
@@ -458,6 +497,8 @@ async def run_tool(name: str, args, user_id: str) -> str:
                                      args.get("start_line", 1))
         elif name == "my_scores":
             coro = _my_scores()
+        elif name == "my_projects":
+            coro = _my_projects()
         elif name == "propose_change":
             coro = _propose_change(user_id, str(args.get("target", "")), str(args.get("why", "")))
         else:

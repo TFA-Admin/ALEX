@@ -865,7 +865,13 @@ let stopping = false;
 // since a code-plus-instruction sentence can genuinely run long.
 const SILENCE_MS = 1400; // was 800
 const MIN_SPEECH_MS = 450;
-const MAX_UTTERANCE_MS = 9000; // was 6500
+// 2026-09-21 (Craig: "when I talk for too long my words are cut off and
+// sent in two packets so the first response immediately gets overwritten
+// by the next one"). Silero's end-of-speech is the real stop; this is only
+// the guard for a model that never fires it. 9s was short enough to bite
+// a normal long sentence. 20s at 16kHz/16-bit is ~640KB, well inside what
+// the server accepts.
+const MAX_UTTERANCE_MS = 20000; // was 9000, was 6500
 
 ws.onopen = () => {
     teleSocketVal.textContent = "connected";

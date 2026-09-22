@@ -23,6 +23,7 @@ from db.db import (
     get_personality_hard_rules, remove_personality_hard_rule,
     fetch_recent_personality_changes,
     fetch_active_conclusions, fetch_decisions, fetch_curiosity_queue, fetch_eval_runs,
+    fetch_projects, create_project, update_project, PROJECT_STATUSES, record_decision,
     list_module_registry, fetch_module_versions, get_module_version_code,
     get_module_registry_entry, register_module_version,
     persona_disabled, PERSONA_FLAG_PATH,
@@ -51,6 +52,7 @@ class HerView(QWidget):
         self.inner.addTab(self._build_modules(), "Modules")
         self.inner.addTab(self._build_health(), "Health")
         self.inner.addTab(self._build_scores(), "Scores")
+        self.inner.addTab(self._build_projects(), "Projects")
         layout.addWidget(self.inner)
         self.setLayout(layout)
 
@@ -735,6 +737,118 @@ class HerView(QWidget):
                 commit, detail])
         self.scores_table.resizeRowsToContents()
 
+    # =====================================================================
+    # PROJECTS (2026-09-21)
+    # =====================================================================
+    # Craig: "She also claims to want to know what projects we have in
+    # store for her, and I say we give them to her." What he writes here
+    # she reads with my_projects; every status change is also a decisions
+    # row, so she can see progress happen.
+    def _build_projects(self):
+        page = QWidget()
+        lay = QVBoxLayout()
+        lay.addWidget(QLabel(
+            "What you have in store for her. She reads this list herself (my_projects); "
+            "moving a status is recorded so she can see progress."))
+        self.projects_table = QTableWidget()
+        self.projects_table.setColumnCount(5)
+        self.projects_table.setHorizontalHeaderLabels(["#", "Status", "Project", "Notes", "Last moved"])
+        self.projects_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.projects_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.projects_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        make_readable(self.projects_table, wrap_column=3)
+        lay.addWidget(self.projects_table)
+        btns = QHBoxLayout()
+        self.project_add_btn = QPushButton("➕ Add project")
+        self.project_add_btn.clicked.connect(self.add_project)
+        self.project_status_btn = QPushButton("▸ Set status")
+        self.project_status_btn.clicked.connect(self.set_project_status)
+        self.project_notes_btn = QPushButton("✏️ Edit notes")
+        self.project_notes_btn.clicked.connect(self.edit_project_notes)
+        for b in (self.project_add_btn, self.project_status_btn, self.project_notes_btn):
+            btns.addWidget(b)
+        btns.addStretch(1)
+        self.projects_refresh_btn = QPushButton("🔄 Refresh")
+        self.projects_refresh_btn.clicked.connect(self.refresh_projects)
+        btns.addWidget(self.projects_refresh_btn)
+        lay.addLayout(btns)
+        self._projects = []
+        page.setLayout(lay)
+        return page
+
+    def refresh_projects(self):
+        try:
+            self._projects = asyncio.run(fetch_projects())
+        except Exception as e:
+            self.note(f"⚠️ Failed to load projects: {e}")
+            self._projects = []
+        self.projects_table.setRowCount(len(self._projects))
+        for row, p in enumerate(self._projects):
+            fill_row(self.projects_table, row, [
+                p["id"], p["status"], p["title"], p.get("notes") or "", to_local(p.get("updated_at"))])
+        self.projects_table.resizeRowsToContents()
+
+    def _selected_project(self):
+        rows = selected_rows(self.projects_table)
+        if not rows or rows[0] >= len(self._projects):
+            QMessageBox.information(self, "Projects", "Select a project first.")
+            return None
+        return self._projects[rows[0]]
+
+    def add_project(self):
+        from PySide6.QtWidgets import QInputDialog
+        title, ok = QInputDialog.getText(self, "Add project", "What is it? One line, in her terms.")
+        if not ok or not title.strip():
+            return
+        status, ok = QInputDialog.getItem(self, "Add project", "Status:", list(PROJECT_STATUSES), 1, False)
+        if not ok:
+            return
+        try:
+            pid = asyncio.run(create_project(title.strip(), status))
+            asyncio.run(record_decision(
+                "project", f"He added a project for her: {title.strip()}",
+                reasoning="His plan, written at the Controller.", outcome=f"status {status}",
+                actor="craig", ref=f"projects#{pid}"))
+            self.note(f"[SYSTEM] Project #{pid} added: {title.strip()} ({status})")
+        except Exception as e:
+            self.note(f"⚠️ Failed to add project: {e}")
+        self.refresh_projects()
+
+    def set_project_status(self):
+        from PySide6.QtWidgets import QInputDialog
+        p = self._selected_project()
+        if not p:
+            return
+        current = list(PROJECT_STATUSES).index(p["status"]) if p["status"] in PROJECT_STATUSES else 0
+        status, ok = QInputDialog.getItem(self, "Set status", p["title"], list(PROJECT_STATUSES), current, False)
+        if not ok or status == p["status"]:
+            return
+        try:
+            asyncio.run(update_project(p["id"], status=status))
+            asyncio.run(record_decision(
+                "project", f"He moved '{p['title']}' from {p['status']} to {status}",
+                reasoning="His call, at the Controller.", evidence=p.get("notes") or "",
+                outcome=f"now {status}", actor="craig", ref=f"projects#{p['id']}"))
+            self.note(f"[SYSTEM] Project #{p['id']} -> {status}")
+        except Exception as e:
+            self.note(f"⚠️ Failed to set status: {e}")
+        self.refresh_projects()
+
+    def edit_project_notes(self):
+        from PySide6.QtWidgets import QInputDialog
+        p = self._selected_project()
+        if not p:
+            return
+        notes, ok = QInputDialog.getMultiLineText(self, "Edit notes", p["title"], p.get("notes") or "")
+        if not ok:
+            return
+        try:
+            asyncio.run(update_project(p["id"], notes=notes.strip()))
+            self.note(f"[SYSTEM] Project #{p['id']} notes updated")
+        except Exception as e:
+            self.note(f"⚠️ Failed to update notes: {e}")
+        self.refresh_projects()
+
     def refresh_all(self):
         self.refresh_personality()
         self.refresh_beliefs()
@@ -742,3 +856,4 @@ class HerView(QWidget):
         self.refresh_curiosity()
         self.refresh_module_status()
         self.refresh_scores()
+        self.refresh_projects()

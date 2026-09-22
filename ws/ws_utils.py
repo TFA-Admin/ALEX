@@ -42,13 +42,18 @@ async def send_debug(websocket, message: str):
 
 
 def split_speakable_text(buffer: str):
-    # Each speak() call spawns a fresh piper.exe process (~0.6-0.8s model
-    # reload) — chunking too eagerly turns that into an audible gap between
-    # every couple of sentences. Batching more text per chunk trades a
-    # little more delay before the first words play for far fewer of these
-    # gaps overall. (A persistent Piper process would remove the gap
-    # entirely — bigger change, deferred, see roadmap.)
-    matches = list(re.finditer(r".+?[.!?](?=\s+|$)", buffer, re.S))
+    # Batching two short sentences per chunk dates from when every chunk
+    # spawned a fresh piper.exe (~0.6-0.8s); Piper has been one persistent
+    # process since 2026-07-18, so the batching now only buys intonation
+    # continuity across a pair of short sentences. Kept for that.
+    #
+    # 2026-09-21 (Craig: "Her listing things could use some work"): a line
+    # break is a boundary too. A bulleted list has no sentence punctuation
+    # until its last item, so the whole list used to arrive as one chunk
+    # and be read as a single run-on breath. Each line is now its own
+    # clause; core/response_handler.py turns the break into a pause when
+    # it is spoken and keeps it as a line on the screen.
+    matches = list(re.finditer(r".+?(?:[.!?](?=\s+|$)|(?=\n))", buffer, re.S))
 
     if not matches:
         return None, buffer

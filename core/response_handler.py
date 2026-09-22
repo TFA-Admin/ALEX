@@ -12,6 +12,7 @@ Responsible for:
 """
 
 import json
+import re
 import time
 
 print("🔥 RESPONSE HANDLER LOADED")
@@ -23,6 +24,22 @@ from core.alex_core import alex_core
 from core.mood import derive_mood
 from db.db import record_response_timing
 from config.logger_config import logger
+
+
+_LINE_BREAKS_RE = re.compile(r"[ \t]*\n+[ \t]*")
+_LINE_END_NO_PUNCT_RE = re.compile(r"([^.!?:;,\s])[ \t]*\n+")
+
+
+def shown_and_spoken(text: str):
+    """One clause, two renderings (2026-09-21). The screen keeps bullets
+    and line breaks (the page wraps with pre-wrap); the voice gets a full
+    stop where a line ended without one, so a list is read as items with
+    a pause between them rather than one run-on breath."""
+    shown = strip_markdown(text, keep_bullets=True).strip()
+    spoken = strip_markdown(text).strip()
+    spoken = _LINE_END_NO_PUNCT_RE.sub(r"\1. ", spoken)
+    spoken = _LINE_BREAKS_RE.sub(" ", spoken)
+    return shown, spoken
 
 # tools/claude_client.py registers as this profile — a headless, text-only
 # debugging client with no microphone and no physical presence in the
@@ -124,13 +141,15 @@ class ResponseHandler:
                 # 2026-09-21: markdown out before it is shown or spoken —
                 # the 9b writes "*do*" and bulleted bold lists, and Piper
                 # read the asterisks aloud. See core/text_utils.strip_markdown.
-                speakable = strip_markdown(speakable)
-                if not speakable.strip():
+                # Later the same day: the screen keeps bullets and line
+                # breaks; the voice gets a pause where the line breaks.
+                shown, spoken = shown_and_spoken(speakable)
+                if not spoken.strip():
                     continue
 
-                await websocket.send_text(speakable)
+                await websocket.send_text(shown)
                 tts_t0 = time.time()
-                pcm = await synthesize_speech(speakable)
+                pcm = await synthesize_speech(spoken)
                 tts_total += time.time() - tts_t0
                 if pcm:
                     await websocket.send_bytes(pcm)
@@ -156,12 +175,12 @@ class ResponseHandler:
         # brand-new bubble instead of continuing the same one. Sending it
         # BEFORE __END__ (and the profile update, which has no ordering
         # requirement either way) fixes that.
-        remaining = strip_markdown(speech_buffer).strip()
+        remaining, remaining_spoken = shown_and_spoken(speech_buffer)
 
-        if user_id not in NO_SPEECH_USERS and not interrupted and remaining:
+        if user_id not in NO_SPEECH_USERS and not interrupted and remaining_spoken:
             await websocket.send_text(remaining)
             tts_t0 = time.time()
-            pcm = await synthesize_speech(remaining)
+            pcm = await synthesize_speech(remaining_spoken)
             tts_total += time.time() - tts_t0
             if pcm:
                 await websocket.send_bytes(pcm)

@@ -233,6 +233,23 @@ async def init_db():
         except Exception:
             pass
 
+        # 🗂️ PROJECTS (2026-09-21). Craig: "She also claims to want to know
+        # what projects we have in store for her, and I say we give them to
+        # her... whether or not she will be able to track the progress as
+        # we achieve them." One row per project, status and notes kept by
+        # him at the Controller (Her → Projects); she reads them with the
+        # my_projects tool, and every status change is a decisions row so
+        # she can see progress happen, not just the current state.
+        await db.execute('''
+        CREATE TABLE IF NOT EXISTS projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            status TEXT DEFAULT 'planned',
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+
         # ✋ CORRECTIONS (2026-09-20) — "stop saying that", remembered and
         # escalating. Craig: "It's a simple disciplinary correction, but
         # keep doing it and the impact is worse."
@@ -724,6 +741,50 @@ async def fetch_proposals(status: str = None, limit: int = 50):
         except Exception:
             return []
     return [dict(zip(_PROPOSAL_KEYS, r)) for r in rows]
+
+
+# -------------------------
+# PROJECTS (2026-09-21) — see the table comment in init_db()
+# -------------------------
+PROJECT_STATUSES = ("in_progress", "planned", "done", "backlog")
+
+
+async def create_project(title: str, status: str = "planned", notes: str = None) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "INSERT INTO projects(title, status, notes) VALUES(?,?,?)", (title, status, notes))
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def update_project(project_id: int, status: str = None, notes: str = None, title: str = None):
+    sets, params = [], []
+    if status is not None:
+        sets.append("status=?"); params.append(status)
+    if notes is not None:
+        sets.append("notes=?"); params.append(notes)
+    if title is not None:
+        sets.append("title=?"); params.append(title)
+    if not sets:
+        return
+    sets.append("updated_at=CURRENT_TIMESTAMP")
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(f"UPDATE projects SET {', '.join(sets)} WHERE id=?", params + [project_id])
+        await db.commit()
+
+
+async def fetch_projects(limit: int = 100):
+    order = " ".join(f"WHEN '{s}' THEN {i}" for i, s in enumerate(PROJECT_STATUSES))
+    async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            cursor = await db.execute(
+                f"SELECT id, title, status, notes, created_at, updated_at FROM projects "
+                f"ORDER BY CASE status {order} ELSE 9 END, updated_at DESC LIMIT ?", (limit,))
+            rows = await cursor.fetchall()
+        except Exception:
+            return []
+    keys = ["id", "title", "status", "notes", "created_at", "updated_at"]
+    return [dict(zip(keys, r)) for r in rows]
 
 
 # -------------------------

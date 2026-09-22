@@ -237,17 +237,21 @@ _MD_HEADER_RE = re.compile(r"^[ \t]*#{1,6}[ \t]+", re.M)
 _MD_CODE_RE = re.compile(r"`([^`]*)`")
 
 
-def strip_markdown(text: str) -> str:
+def strip_markdown(text: str, keep_bullets: bool = False) -> str:
     """Removes markdown markers and keeps the words. Bold, italics, bullet
     markers, headers and inline code spans; a stray asterisk that is not
-    part of a pair is dropped as well, since in speech it is noise."""
+    part of a pair is dropped as well, since in speech it is noise.
+
+    keep_bullets=True turns list markers into a plain bullet instead of
+    dropping them — for the SCREEN (2026-09-21, Craig: "Her listing things
+    could use some work"). What is spoken never keeps them."""
     if not text:
         return text
     if not any(ch in text for ch in "*#`\u2022") and not _MD_BULLET_RE.search(text):
         return text
     out = _MD_BOLD_RE.sub(r"\1", text)
     out = _MD_ITALIC_RE.sub(r"\1", out)
-    out = _MD_BULLET_RE.sub("", out)
+    out = _MD_BULLET_RE.sub("\u2022 " if keep_bullets else "", out)
     out = _MD_HEADER_RE.sub("", out)
     out = _MD_CODE_RE.sub(r"\1", out)
     return out.replace("*", "")
