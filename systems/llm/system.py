@@ -594,6 +594,20 @@ class System(BaseSystem):
         except Exception as e:
             logger.warning(f"⚠️ could not read her slips: {e}")
 
+        # 2026-09-21: a sentence she dropped (window lapsed), brought back by
+        # her name. See ws/ws_handlers.py UNADDRESSED_RECALL_S.
+        recalled = session.pop("recalled_unaddressed", None)
+        if isinstance(recalled, dict) and recalled.get("text"):
+            if recalled.get("mode") == "is_the_question":
+                context_blocks.append(
+                    "WHAT HE WANTS ANSWERED: a moment ago, while you were not listening, he said "
+                    f"\"{recalled['text']}\". Then he said your name to get you to answer it. "
+                    "Answer THAT; do not remark on having missed it unless it matters.")
+            else:
+                context_blocks.append(
+                    "JUST BEFORE THIS, while you were not listening, he said "
+                    f"\"{recalled['text']}\". He is probably referring to it now.")
+
         if fact_action_context:
             context_blocks.append(f"WHAT JUST HAPPENED (state this truthfully, nothing else):\n{fact_action_context}")
 

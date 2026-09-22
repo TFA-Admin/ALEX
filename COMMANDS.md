@@ -26,7 +26,8 @@ database row" is worse than a rephrase.
 | To | Say | Notes |
 |---|---|---|
 | Address her | her name, **"Alex"**, anywhere in the sentence | As its own word, in any position. |
-| Keep talking without her name | nothing extra, within **45 seconds** of her finishing a reply | The window restarts every time she finishes speaking. Past it, the page shows the dropped sentence as "not addressed" and you say her name again. |
+| Keep talking without her name | nothing extra, within **45 seconds** of her finishing a reply | The window restarts every time she finishes speaking. Past it, the page shows the dropped sentence as "not addressed". |
+| Bring back what she just ignored | her name, within **60 seconds** of the dropped sentence | **"Alex."** alone (or with a word or two) makes her answer the dropped sentence. **"Alex, what do you think?"** answers that, with the dropped sentence as what you are probably referring to. |
 | Answer "Did you say ...?" | **yes / yeah / yep / yup / y / correct / right / affirmative / okay / ok / mhm** to confirm, or just repeat or correct it | Either counts as addressed, wake word or not. Your correction is never itself re-asked. |
 | Pass her voice check at connect | anything, in your own words | She compares the speaker, not the words. She will never give you a phrase to repeat; if she does, that is a bug. |
 | End the conversation | **"stop listening"** / **"quit listening"** (anywhere in the sentence) | Closes the window at once, no reply. |

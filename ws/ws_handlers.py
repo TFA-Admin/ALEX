@@ -168,6 +168,18 @@ WAKE_WORD_RE = re.compile(r"\balex\b", re.IGNORECASE)
 # Starting point, not tuned — can't be verified without live use.
 CONVERSATION_WINDOW_S = 45
 
+# 2026-09-21 (Craig, watching a tester: "sometimes she's reached her
+# listening cutoff but people don't know that until after the fact,
+# saying ALEX at that point does not pull in that previously ignored but
+# otherwise heard statement"). A dropped sentence is kept for this long;
+# her name said within it brings the sentence back. If the name comes
+# alone (or with only a word or two), the dropped sentence IS the
+# question; if it comes with a real question, the dropped sentence rides
+# along as what he is probably referring to. Either way she is told
+# which it was — see systems/llm/system.py.
+UNADDRESSED_RECALL_S = 60
+_ATTENTION_ONLY_MAX_WORDS = 3
+
 # 2026-07-17 (Craig: "she continues to respond to obvious end of
 # discussion statements") — an unaddressed closing remark ("that's all
 # for now") still passes the in-window check above and gets a real
@@ -650,6 +662,13 @@ async def process_message(websocket, msg, user_id, session_id, audio, audio_byte
                 # identical — and the natural response is to keep talking,
                 # which never re-engages her.
                 await websocket.send_text("__UNADDRESSED__" + prompt_text)
+                # Kept, so her name a moment later can bring it back.
+                earlier = session.get("last_unaddressed")
+                if earlier and now - earlier.get("at", 0) < UNADDRESSED_RECALL_S:
+                    text_kept = (earlier["text"].rstrip() + " " + prompt_text.strip())[-600:]
+                else:
+                    text_kept = prompt_text.strip()
+                session["last_unaddressed"] = {"text": text_kept, "at": now}
                 # 2026-07-18 (Craig: "her presence in the UI still says
                 # listening" after "stop listening" worked server-side) —
                 # the mic staying armed (continuous VAD, needed to catch
@@ -671,6 +690,22 @@ async def process_message(websocket, msg, user_id, session_id, audio, audio_byte
             session["conversation_closing"] = closing
             await websocket.send_text("__ENGAGED__0" if closing else "__ENGAGED__1")
             msg = prompt_text
+
+            # The name after a dropped sentence brings the sentence back.
+            dropped = session.pop("last_unaddressed", None)
+            if (dropped and not closing and WAKE_WORD_RE.search(prompt_text)
+                    and now - dropped.get("at", 0) < UNADDRESSED_RECALL_S):
+                without_name = WAKE_WORD_RE.sub(" ", prompt_text)
+                words = [w for w in re.sub(r"[^a-z' ]", " ", without_name.lower()).split() if w]
+                if len(words) <= _ATTENTION_ONLY_MAX_WORDS:
+                    # "Alex." / "Alex, hello?" — the dropped sentence is the question
+                    msg = dropped["text"]
+                    session["recalled_unaddressed"] = {"text": dropped["text"], "mode": "is_the_question"}
+                    await send_debug(websocket, f"↩️ Picking up what you said before: {dropped['text'][:80]!r}")
+                    logger.info(f"[ACTION] Name after a dropped sentence — answering it: {dropped['text'][:80]!r}")
+                else:
+                    session["recalled_unaddressed"] = {"text": dropped["text"], "mode": "probably_referring"}
+                    logger.info(f"[ACTION] Name after a dropped sentence — carrying it as context: {dropped['text'][:80]!r}")
 
         # -------------------------
         # NORMALIZATION
