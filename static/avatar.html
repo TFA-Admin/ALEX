@@ -1280,10 +1280,14 @@ function stopListening(){
     clearResponseTimeout();
     setListenState("off");
     setEngaged(false);
-    // Start locked. The server sends the real state on connect, so the only
-    // window this covers is page-load before the socket is up — but that is
-    // precisely when someone types their first message.
-    setReadiness("starting");
+    // 2026-09-21 (Craig: "The connection seems to be getting dropped
+    // whenever the auto listen button is clicked off or on"). This used to
+    // call setReadiness("starting") here, which showed the startup banner,
+    // disabled the text box and the send button, and set alexReady=false —
+    // so the next spoken sentence after toggling was silently dropped by
+    // the microphone gate. Nothing about the socket had changed; it only
+    // looked dropped, and people reloaded the page. Readiness is the
+    // server's to say (__READY__), never a side effect of the mic button.
     try{ recorder.stop(); }catch{}
     // micVad now persists across listen/stop cycles (real VAD models want
     // to keep their internal state warm) instead of being torn down and
