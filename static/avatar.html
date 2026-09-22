@@ -521,6 +521,10 @@ body.chat-collapsed .panel-toggle-right{ transform: rotate(180deg); }
     <div class="chat-input">
       <!-- 2026-09-20: startup state. Hidden once ready, so the normal case
            costs no space. See core/readiness.py for why this exists. -->
+      <!-- 2026-09-21: a first visitor who has not clicked anything hears
+           nothing — the browser keeps the audio context suspended until a
+           gesture. Shown when her voice arrives while it is suspended. -->
+      <div class="readiness" id="soundGate" hidden>🔈 Click or tap anywhere to hear her.</div>
       <div class="readiness" id="readiness" hidden>
         <span class="readiness-dot"></span><span id="readinessText">Starting up…</span>
       </div>
@@ -781,10 +785,34 @@ function pcmInt16ToAudioBuffer(ctx, arrayBuffer, sampleRate){
     return buffer;
 }
 
+// 2026-09-21 (Craig, on the first remote tester: "She is not talking to
+// them however, but there is text on the right side"). Sound was only
+// ever unlocked by the Auto Listen click. A visitor who reads and does not
+// click gets her words on screen and silence. Any gesture now unlocks it,
+// and a banner says so while her voice is waiting.
+function unlockAudio(){
+    const ctx = getPlayCtx();
+    const gate = document.getElementById("soundGate");
+    if(ctx.state === "suspended"){
+        ctx.resume().then(() => {
+            nextStartTime = ctx.currentTime;
+            if(gate) gate.hidden = true;
+        });
+    } else if(gate){
+        gate.hidden = true;
+    }
+}
+document.addEventListener("pointerdown", unlockAudio);
+document.addEventListener("keydown", unlockAudio);
+
 function scheduleAudioChunk(arrayBuffer){
     if(clientInterrupted) return;
 
     const ctx = getPlayCtx();
+    if(ctx.state === "suspended"){
+        const gate = document.getElementById("soundGate");
+        if(gate) gate.hidden = false;
+    }
     // Piper's --output-raw convention (speech/tts_engine.py's SAMPLE_RATE):
     // 16-bit signed PCM, mono, 22050 Hz.
     const buffer = pcmInt16ToAudioBuffer(ctx, arrayBuffer, 22050);
