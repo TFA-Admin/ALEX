@@ -444,7 +444,7 @@ _SCOPE_WORDS = (
 MAX_CONCLUSIONS_PER_PASS = 1
 
 
-async def _form_conclusion(recent, snap):
+async def _form_conclusion(recent, snap, about: str = None):
     """Notice something and write it down, with what it is based on.
 
     Given her own state as well as the transcript, so "notice a pattern
@@ -474,12 +474,12 @@ What you know about your own current state:
 Recent conversations:
 {convo_text}
 
-What is one thing you have worked out from this — about yourself, about Craig, or about the world? Not a summary of what was said. Something you now think is true that you had not put into words before.
+{"What is one thing you have worked out from this — about yourself, about Craig, or about the world?" if about else "The people in this conversation are NOT Craig; nothing here is about him. What is one thing you have worked out from this — about yourself, or about the world?"} Not a summary of what was said. Something you now think is true that you had not put into words before.
 
 Say what it is based on, specifically, from the state or the conversation above.
 
 Respond with ONLY a JSON object:
-{{"statement": "<what you now think, one or two sentences>", "kind": "<self, craig, or world>", "evidence": "<what in the above led you there>"}}"""
+{{"statement": "<what you now think, one or two sentences>", "kind": "<{"self, craig, or world" if about else "self or world"}>", "evidence": "<what in the above led you there>"}}"""
 
     result = await ollama_manager.generate_json(prompt, timeout=30.0)
     if not result:
@@ -492,12 +492,23 @@ Respond with ONLY a JSON object:
     if kind not in ("self", "craig", "world"):
         kind = "self"
 
+    # 2026-09-21 (Craig: "the last interaction was incorrectly directed at
+    # me instead of the user ALEX was interacting with"): belief #16 about
+    # Craig was formed from a tester's conversation. A belief about him
+    # comes only from turns that were his; a window with no turn of his
+    # cannot produce one, whatever the model labels it.
+    if kind == "craig" and not about:
+        return None
     # Evidence is required, not decorative. A conclusion with nothing
     # behind it is a guess wearing a conclusion's clothes, and Design
     # Principle 1 says that is the one thing she does not get to do.
     if not statement or not evidence:
         return None
 
+    if about is None:
+        speakers = sorted({r["user"] for r in recent if r.get("user")})
+        if speakers:
+            evidence = f"(with {', '.join(speakers)}) " + evidence
     return {"statement": statement, "kind": kind, "evidence": evidence}
 
 
@@ -733,6 +744,13 @@ async def run_self_reflection():
 
     await set_last_reflection_memory_id(recent[-1]["id"])
 
+    # 2026-09-21: whose turns these are. Beliefs about Craig come only
+    # from Craig's turns; another person's conversation can teach her
+    # about herself or the world, never about him.
+    creator = await get_creator_name()
+    craig_turns = [r for r in recent if r.get("user") == creator]
+    other_turns = [r for r in recent if r.get("user") != creator]
+
     # 2026-07-18 (Craig: "if she's working on something in the background
     # like tuning herself would it show that?") — everything from here to
     # the end of this function is the actual "work" (multiple real LLM
@@ -801,8 +819,10 @@ async def run_self_reflection():
         # them.
         revised = 0
         for conclusion in random.sample(existing, min(BELIEFS_CHECKED_PER_PASS, len(existing))):
+            if conclusion.get("kind") == "craig" and not craig_turns:
+                continue    # nothing he said this pass; a stranger's words cannot revise a belief about him
             try:
-                revision = await _revise_belief(recent, conclusion)
+                revision = await _revise_belief(craig_turns if conclusion.get("kind") == "craig" else recent, conclusion)
             except Exception as e:
                 logger.warning(f"⚠️ Belief revision failed: {e}")
                 continue
@@ -840,7 +860,8 @@ async def run_self_reflection():
             outcome.append("no revision")
 
         try:
-            conclusion = await _form_conclusion(recent, snap)
+            conclusion = (await _form_conclusion(craig_turns, snap, about=creator) if craig_turns
+                          else await _form_conclusion(other_turns, snap, about=None))
         except Exception as e:
             logger.warning(f"⚠️ Conclusion forming failed: {e}")
             conclusion = None
