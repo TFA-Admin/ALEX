@@ -303,6 +303,15 @@ async def ws_text(websocket: WebSocket):
 
         session = alex_core.get_session(session_id)
 
+        # 2026-09-23 (Craig: "add a A.L.E.X. Version number in the webui").
+        # The commit she was started from, first thing after the handshake
+        # so the rail can show it even while onboarding or loading.
+        try:
+            from core import version as _version
+            await websocket.send_text("__VERSION__" + json.dumps(_version.describe()))
+        except Exception:
+            pass
+
         user_id = await identity_manager.resolve_user_passive(
             claimed_name,
             session_id

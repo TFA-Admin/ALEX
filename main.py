@@ -242,3 +242,8 @@ async def commands_page(user: str = ""):
 # -------------------------
 LAN_IP = get_lan_ip()
 logger.info(f"🌐 A.L.E.X running on {LAN_IP}:{os.getenv('ALEX_PORT', '5000')}")
+try:
+    from core import version as _version
+    logger.info(f"🏷️ A.L.E.X. version {_version.label()}")
+except Exception as _e:
+    logger.warning(f"⚠️ could not read her version: {_e}")

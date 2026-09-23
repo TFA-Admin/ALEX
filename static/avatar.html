@@ -315,6 +315,32 @@ body.chat-collapsed .panel-toggle-right{ transform: rotate(180deg); }
     0 0 26px 2px var(--orb-glow-a),
     0 0 52px 10px var(--orb-glow-b);
   transform: scale(var(--orb-scale));
+  /* 2026-09-23 (Craig: "have her avatar start small or as a line until
+     she's booted where it balloons or opens like an eyeball to symbolize
+     she is now present and ready"). The orb is a closed eye — a thin
+     horizontal line, dim, no glow — until the page hears __READY__ready
+     (or the socket is lost), then the lids open. clip-path is used so it
+     composes with the transform animateOrb() writes every frame and clips
+     the glow along with the body. */
+  clip-path: ellipse(50% 50% at 50% 50%);
+  transition: clip-path 900ms cubic-bezier(.2, .8, .2, 1), filter 900ms ease;
+}
+.orb.asleep{
+  clip-path: ellipse(46% 1.2% at 50% 50%);
+  filter: saturate(.25) brightness(.55);
+  transition: clip-path 500ms ease-in, filter 500ms ease-in;
+}
+.orb.waking{
+  animation: orb-open 1100ms cubic-bezier(.2, .8, .2, 1) both;
+}
+@keyframes orb-open{
+  0%   { clip-path: ellipse(46% 1.2% at 50% 50%); filter: saturate(.25) brightness(.55); }
+  55%  { clip-path: ellipse(50% 50% at 50% 50%); filter: saturate(1.15) brightness(1.25); }
+  100% { clip-path: ellipse(50% 50% at 50% 50%); filter: none; }
+}
+@media (prefers-reduced-motion: reduce){
+  .orb, .orb.asleep{ transition: none; }
+  .orb.waking{ animation: none; }
 }
 
 .mood-tag{
@@ -453,7 +479,7 @@ body.chat-collapsed .panel-toggle-right{ transform: rotate(180deg); }
   <div class="rail">
     <button class="panel-toggle" id="railToggle" onclick="toggleRail()" title="Collapse panel">&#10094;</button>
     <div class="rail-content" id="railContent">
-    <div class="rail-brand"><b>A.L.E.X.</b><br/>interface</div>
+    <div class="rail-brand"><b>A.L.E.X.</b><br/><span id="version" title="the commit she was started from">interface</span></div>
 
     <div class="tele-group">
       <div class="tele-label">Link</div>
@@ -495,7 +521,7 @@ body.chat-collapsed .panel-toggle-right{ transform: rotate(180deg); }
   </div>
 
   <div class="stage">
-    <div class="orb" id="orb"></div>
+    <div class="orb asleep" id="orb"></div>
     <div class="mood-tag">
       current disposition
       <span class="name" id="moodName">calm</span>
@@ -733,6 +759,33 @@ function setReadiness(state){
     // disabled, not narrated.
     if(input) input.disabled = !usable;
     if(sendBtn) sendBtn.disabled = !usable;
+    setOrbPresent(usable);
+}
+
+// 2026-09-23: the eye. Closed (a line) while she is starting or gone,
+// opened once when she becomes present — the one-shot "waking" animation
+// carries the bloom, the class carries the resting state after it.
+let orbPresent = null;
+function setOrbPresent(present){
+    const orb = document.getElementById("orb");
+    if(!orb || orbPresent === present) return;
+    orbPresent = present;
+    if(present){
+        orb.classList.remove("asleep");
+        orb.classList.add("waking");
+        setTimeout(() => orb.classList.remove("waking"), 1200);
+    }else{
+        orb.classList.remove("waking");
+        orb.classList.add("asleep");
+    }
+}
+
+function setVersion(info){
+    const el = document.getElementById("version");
+    if(!el) return;
+    const label = (info && info.label) ? info.label : "";
+    el.textContent = label ? ("v" + label) : "interface";
+    if(info && info.branch) el.title = "the commit she was started from — branch " + info.branch;
 }
 
 /* ✅ DEBUG HELPER */
@@ -949,6 +1002,7 @@ ws.onopen = () => {
 
 ws.onclose = () => {
     teleSocketVal.textContent = "disconnected";
+    setOrbPresent(false);
     teleSocket.classList.remove("on");
     teleSocket.classList.add("warn");
 };
@@ -1028,6 +1082,12 @@ ws.onmessage = (e)=>{
 
     if(typeof data === "string" && data.startsWith("__READY__")){
         setReadiness(data.replace("__READY__", ""));
+        return;
+    }
+
+    if(typeof data === "string" && data.startsWith("__VERSION__")){
+        try { setVersion(JSON.parse(data.replace("__VERSION__", ""))); }
+        catch(e){ console.warn("bad __VERSION__", e); }
         return;
     }
 

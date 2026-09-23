@@ -1730,12 +1730,18 @@ game; you will not lie; your name is ALEX.
 
 ## Backlog — measured, not yet built
 
-- **Her avatar shows readiness (Craig, 2026-09-21 19:45):** "have her avatar
-  start small or as a line until she's booted where it balloons or opens
-  like an eyeball to symbolize she is now present and ready." The page
-  already has the states (`setReadiness("loading"/"ready")`, the
-  `__READY__` signal after `__PROFILE__`); this is the drawing. Came from
-  the night she said nothing on connect and he assumed she was warming up.
+- **Her avatar shows readiness (Craig, 2026-09-21 19:45) — landed
+  2026-09-23:** "have her avatar start small or as a line until she's
+  booted where it balloons or opens like an eyeball to symbolize she is
+  now present and ready." The orb starts as a closed eye (a dim horizontal
+  line, `.orb.asleep`, clip-path so it composes with the per-frame
+  transform and clips the glow), opens with a bloom on `__READY__ready`
+  (`.orb.waking`, one shot), and closes again when the socket is lost.
+  With it, the version number he asked for: the rail shows
+  `v2026-09-23 · b16bb6a` from `__VERSION__` sent first thing after the
+  handshake; `core/version.py` reads it from .git without running git
+  (works in a staging worktree), and the startup log carries the same
+  line.
 - **`model_usage` table is dead:** `log_model_usage()` has no caller (2
   rows, never written since). Drop it with a migration when the schema is
   next touched; `tests/harness.py` still lists it in USER_SCOPED_TABLES.
