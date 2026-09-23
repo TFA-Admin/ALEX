@@ -119,6 +119,14 @@ class AlexController(QWidget):
         # Silent unless it finds something — no need to nag on a clean start.
         self.procs.check_for_orphans(prompt_if_none=False)
 
+        # 2026-09-23: launched from the network share, every worktree and
+        # staging copy inherits the UNC path and a staged copy took 113s
+        # to come up instead of 11. Say so where it will be seen.
+        from controller.common import ALEX_DIR
+        if ALEX_DIR.startswith("\\\\") or ALEX_DIR.startswith("//"):
+            self.log(f"[SYSTEM] ⚠️ Running from a network path ({ALEX_DIR}). Launch from D:\\project_ALEX\\ALEX "
+                     "(Launch_Controller.bat) — staging copies started from a share are ten times slower.")
+
     def _selected_model(self) -> str:
         return self.run.selected_model()
 

@@ -46,6 +46,10 @@ IDLE_AFTER_S = int(os.getenv("ALEX_IDLE_AUTHOR_AFTER_S", str(15 * 60)))
 CHECK_EVERY_S = 60
 COOLDOWN_DAYS = 7
 OPEN_STATUSES = ("requested", "authored", "proposed", "gated")
+# 2026-09-23 (Craig: "she's already built out another proposal?" — #4 came
+# two minutes after he rejected #2). A decision is a signal; she waits
+# this long after any decision before looking at the next target.
+PAUSE_AFTER_DECISION_S = 6 * 3600
 
 _ALEX_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SETTINGS = os.path.join(_ALEX_DIR, "config", "controller_settings.json")
@@ -54,6 +58,8 @@ _last_activity = time.time()
 _task = None            # the proposal in progress, if any
 _busy = False
 _attempted = {}         # target -> time of the last attempt that left no row
+_last_outcome = None    # for the log: say "nothing due" once, not every minute
+_last_outcome_at = 0.0
 RETRY_AFTER_S = 30 * 60
 
 
@@ -107,6 +113,15 @@ async def _pick_target():
     rows = await fetch_proposals(limit=200)
     if any(r.get("status") in OPEN_STATUSES for r in rows):
         return None
+    now_utc = datetime.now(timezone.utc)
+    for r in rows:
+        if r.get("status") in ("rejected", "merged", "declined"):
+            try:
+                when = datetime.strptime(str(r.get("updated_at"))[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+            if (now_utc - when).total_seconds() < PAUSE_AFTER_DECISION_S:
+                return None
     cutoff = datetime.now(timezone.utc) - timedelta(days=COOLDOWN_DAYS)
     last = {}
     for r in rows:
@@ -197,7 +212,14 @@ async def run():
                     _task = asyncio.create_task(run_once())
                     try:
                         outcome = await _task
-                        logger.info(f"[IDLE AUTHOR] {outcome}")
+                        # 2026-09-23 (Craig: "her logs get sort of spammed when
+                        # she has a proposal already in place"): 702 lines of
+                        # "nothing due" in one night. Say it once, and again
+                        # only when it changes or an hour has passed.
+                        global _last_outcome, _last_outcome_at
+                        if outcome != _last_outcome or time.time() - _last_outcome_at > 3600:
+                            logger.info(f"[IDLE AUTHOR] {outcome}")
+                            _last_outcome, _last_outcome_at = outcome, time.time()
                     except asyncio.CancelledError:
                         pass
                     finally:

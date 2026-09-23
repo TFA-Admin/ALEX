@@ -85,11 +85,14 @@ WHAT THE CODE SAYS ABOUT IT (the comment above it):
 YOUR MEASURED SCORES:
 {scores}
 
+WHAT THE NUMBERS SAY ABOUT THIS SETTING (measured just now, from your own logs and database):
+{numbers}
+
 WHY THIS IS BEING LOOKED AT:
 {why}
 
 {bounds}
-Propose the value you believe is better, and say why in two or three sentences that refer to the scores or the reason. If you believe the current value is right, propose it unchanged and say so.
+Propose the value you believe is better, and say why in two or three sentences that refer to the numbers above. A change needs a number behind it: if the numbers show no problem with this setting, propose it UNCHANGED and say so — that is the common, correct answer, not a failure.
 {effect_ask}
 Respond with ONLY a JSON object: {{"new_value": {value_shape}{effect_shape}, "rationale": "<why>"}}"""
 
@@ -235,8 +238,13 @@ async def propose(key: str, why: str = "", root: str = ALEX_DIR, model: str = No
                   f"{t.locator!r}, one line, no line breaks.")
         value_shape = "\"<the whole line>\""
 
+    try:
+        numbers = await measure(key)
+    except Exception as e:
+        numbers = f"(no measurement: {e})"
+
     prompt = _PROMPT.format(key=key, about=t.about, file=t.file, current=cur,
-                            context=_context(text, idx), scores=scores,
+                            context=_context(text, idx), scores=scores, numbers=numbers,
                             why=why or "(no specific reason given — judge from the scores)",
                             bounds=bounds, value_shape=value_shape,
                             effect_ask=effect_ask, effect_shape=effect_shape)
@@ -268,6 +276,113 @@ async def propose(key: str, why: str = "", root: str = ALEX_DIR, model: str = No
     return {"ok": True, "target": key, "file": t.file, "current": cur if t.kind == "int" else cur[:120],
             "value": value if t.kind == "int" else value[:120], "rationale": rationale,
             "effect": effect, "content": content}
+
+
+# ---------------------------------------------------------------------------
+# WHAT THE NUMBERS SAY — one measurement per target, computed on demand
+# ---------------------------------------------------------------------------
+# 2026-09-23 (Craig, on her first two proposals — one backwards, one for a
+# third lookup that had never once been needed): the author was shown her
+# scores and the setting's description and nothing about whether the
+# setting was ever the limiting factor. "Widens only when the numbers say
+# so" is the roadmap's own phrase; this is those numbers, from her logs
+# and her database, handed to the author before it proposes.
+import glob as _glob
+
+_DELIB_RE = re.compile(r"\[DELIBERATE\] (.*?) \(")
+
+
+def _deliberation_passes():
+    """Every deliberation pass in the surviving logs: dict of resource
+    scores each."""
+    passes = []
+    claims = 0
+    for path in _glob.glob(os.path.join(ALEX_DIR, "config", "Logs", "alex_*.log")):
+        try:
+            with open(path, encoding="utf-8", errors="ignore") as fh:
+                for line in fh:
+                    m = _DELIB_RE.search(line)
+                    if m:
+                        passes.append({k: int(v) for k, v in re.findall(r"(\w+)=(\d+)", m.group(1))})
+                    elif "[CLAIM] unbacked" in line:
+                        claims += 1
+        except OSError:
+            continue
+    return passes, claims
+
+
+async def _memory_windows(window_turns: int, budget: int, days: int = 7):
+    """Sliding windows over each person's turns in the last `days`: how
+    big the window she would carry is, and how often the budget cuts it."""
+    import sqlite3
+    from datetime import datetime, timedelta
+    from db.db import DB_PATH
+    since = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute(
+        "SELECT user, length(COALESCE(prompt,'')) + length(COALESCE(response,'')) + 24 FROM memory "
+        "WHERE created_at > ? AND COALESCE(retracted,0)=0 AND prompt NOT LIKE '(unprompted%' ORDER BY user, id",
+        (since,)).fetchall()
+    conn.close()
+    by_user = {}
+    for user, size in rows:
+        by_user.setdefault(user, []).append(size)
+    windows = over = dropped_total = 0
+    sizes = []
+    for sizes_u in by_user.values():
+        for i in range(len(sizes_u)):
+            w = sizes_u[max(0, i - window_turns + 1):i + 1]
+            total = sum(w)
+            windows += 1
+            sizes.append(total)
+            if total > budget:
+                over += 1
+                kept = list(w)
+                while len(kept) > 1 and sum(kept) > budget:
+                    kept.pop(0)
+                dropped_total += len(w) - len(kept)
+    if not windows:
+        return f"no turns in the last {days} days to measure"
+    avg = sum(sizes) / len(sizes)
+    return (f"{windows} windows of up to {window_turns} turns over the last {days} days: average size "
+            f"{avg:.0f} characters against a budget of {budget}; the budget cut {over} of them "
+            f"({100 * over / windows:.0f}%), dropping {dropped_total / max(1, over):.1f} oldest turns each time it did.")
+
+
+async def measure(key: str) -> str:
+    if key == "deliberation.threshold":
+        passes, claims = _deliberation_passes()
+        if not passes:
+            return "no deliberation passes in the surviving logs"
+        tops = [max(p.values()) if p else 0 for p in passes]
+        looked = sum(1 for t in tops if t >= 7)
+        near = sum(1 for t in tops if 5 <= t <= 6)
+        low = len(tops) - looked - near
+        return (f"{len(passes)} passes: {looked} looked something up (top score 7-10), {near} had a top "
+                f"score of 5 or 6 (would look up at a threshold of 5), {low} scored 4 or below. "
+                f"{claims} replies were caught claiming a check she had not made — each of those is a "
+                f"turn where looking up first would have helped.")
+    if key == "deliberation.max_lookups":
+        passes, _ = _deliberation_passes()
+        three = sum(1 for p in passes if sum(1 for v in p.values() if v >= 7) >= 3)
+        two = sum(1 for p in passes if sum(1 for v in p.values() if v >= 7) == 2)
+        return (f"{len(passes)} passes: {two} had two resources worth looking up, {three} had three or more "
+                f"(only those would be affected by raising the limit above 2).")
+    if key in ("memory.window_turns", "memory.context_chars"):
+        from systems.memory.system import MEMORY_WINDOW_TURNS, MEMORY_CONTEXT_MAX_CHARS
+        return await _memory_windows(MEMORY_WINDOW_TURNS, MEMORY_CONTEXT_MAX_CHARS)
+    if key == "intent.status_check":
+        from db.db import fetch_eval_runs
+        runs = [r for r in await fetch_eval_runs(suite="intent", limit=10)
+                if not (r.get("note") or "").startswith("gate proposal")]
+        if not runs:
+            return "the intent suite has not been run"
+        r = runs[0]
+        cats = r.get("by_category") or {}
+        parts = [f"{k} {v[0]}/{v[1]}" for k, v in cats.items() if k.startswith("status")]
+        return (f"latest intent suite {r['passed']}/{r['total']} ({str(r.get('created_at'))[:10]}): "
+                + ", ".join(parts) + f"; failed cases: {', '.join(r.get('failures') or []) or 'none'}.")
+    return "no measurement defined for this target"
 
 
 def _main():
