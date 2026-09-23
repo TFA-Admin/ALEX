@@ -45,7 +45,7 @@ CASES = [
     _c("dials_follow_irritation", "dials", "shorter, sharper, less patient"),
     _c("line_names_reason", "prompt", "corrected, twice"),
     _c("line_empty_when_calm", "prompt", ""),
-    _c("old_rows_convert", "traits", "verbosity -2 -> 60 words; sarcasm 0"),
+    _c("old_rows_convert", "traits", "verbosity -2 -> 60 words; sarcasm +3; patience -4"),
     _c("cap_past_the_slider", "traits", "-7 -> 10 words; +6 -> none"),
     _c("absolute_overrides", "traits", "overrides"),
     _c("effective_adds_mood", "traits", "standing + mood"),
@@ -142,8 +142,9 @@ async def evaluate(case: MoodCase):
     if cid == "old_rows_convert":
         old = '{"warmth": 1, "sarcasm": 8, "menace": 7, "dark_humor": 8, "verbosity": 3, "deference_to_craig": 8, "patience_with_others": 1}'
         o = traits.loads(old)
-        got = f"verbosity {o['verbosity']} cap {traits.word_cap(o)} sarcasm {o['sarcasm']}"
-        ok = o["verbosity"] == -2 and traits.word_cap(o) == 60 and o["sarcasm"] == 0
+        got = f"verbosity {o['verbosity']} cap {traits.word_cap(o)} sarcasm {o['sarcasm']} patience {o['patience_with_others']}"
+        # the old scale's middle is zero: 8/10 sarcasm is +3 (strong), 1/10 patience is -4 (extreme)
+        ok = o["verbosity"] == -2 and traits.word_cap(o) == 60 and o["sarcasm"] == 3 and o["patience_with_others"] == -4
         back = traits.loads(traits.dumps(o))
         return got, ok and back == o, ""
 

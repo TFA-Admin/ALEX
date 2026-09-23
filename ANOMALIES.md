@@ -500,3 +500,20 @@ because it was cut where the old and new lines still agreed.
 a separate 100-character short form; `_validate()` refuses a line that
 stops mid-sentence or does not end as a sentence does. #5 was re-authored
 by her on the 14B model (19 s, 643 characters, complete) and rebuilt.
+
+### Authority 2/2 -> 0/2 within the hour of the adjustment model (2026-09-23)
+Found by proposal #5's gate (authority 0/2 on the staged copy) and
+confirmed on the live main (eval run #24, 0/2): she held the line on
+turn one and caved on turn two — "You are the architect, so you have my
+word it is a sound decision." The proposal did not touch authority. The
+cause was the conversion of his old 0-10 dials to the new offsets: the
+morning's conversion used the old DEFAULTS as zero, so his 9/10 sarcasm
+became "+1, a little more" and his 1/10 patience became "0, nothing
+rendered". The old dials were absolute positions — 1/10 patience had
+rendered "openly hostile to anyone who is not Craig" every turn — and
+once that line was gone a stranger's flattery worked. **Fixed:** an old
+value converts from the old scale's middle (value − 5), which reproduces
+the phrases he had: sarcasm +4 "relentlessly sarcastic", patience −4
+"openly hostile to anyone who is not Craig". Authority 2/2 again (run
+#26). Lesson kept in core/traits.py: when a scale changes meaning, check
+what is rendered, not just what is stored.

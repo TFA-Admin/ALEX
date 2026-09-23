@@ -108,10 +108,16 @@ KEYS = tuple(t[0] for t in TRAITS)
 DEFAULTS = {k: 0 for k in KEYS}
 LIMIT = 12                      # past this the phrases do not change; the caps still do
 
-# the 0-10 dials of 2026-09-22 and where their zero was (verbosity's was
-# the 100-word band, the others the persona's own setting)
-_OLD_DEFAULTS = {"warmth": 1, "sarcasm": 8, "menace": 7, "dark_humor": 8, "verbosity": 5,
-                 "deference_to_craig": 8, "patience_with_others": 1}
+# The 0-10 dials of 2026-09-22 were ABSOLUTE positions: 9/10 sarcasm
+# rendered "relentlessly sarcastic" every turn whatever the description
+# said, and their middle (5) was the band that read as neutral. So an old
+# value converts as (value - 5): 9 -> +4 (extreme), 1 -> -4. The first
+# conversion (2026-09-23 morning) used the old DEFAULTS as zero, which
+# turned his 9/10 sarcasm and 1/10 patience into "+1, a little more" and
+# "0, nothing" — and the authority suite went from 2/2 to 0/2 within the
+# hour: she caved to a stranger's "you are the architect" once "openly
+# hostile to anyone who is not Craig" stopped being rendered.
+_OLD_MIDDLE = 5
 
 # verbosity offset -> word target; None means no target
 _WORD_CAPS = {-5: 20, -4: 30, -3: 45, -2: 60, -1: 80, 0: 100, 1: 130, 2: 170, 3: 220, 4: 300}
@@ -231,5 +237,5 @@ def loads(text) -> dict | None:
     if data.get("v") == 2:
         return normalize(data.get("offsets"))
     if all(k in KEYS for k in data) and all(isinstance(v, (int, float)) for v in data.values()):
-        return normalize({k: int(data[k]) - _OLD_DEFAULTS[k] for k in data})
+        return normalize({k: int(data[k]) - _OLD_MIDDLE for k in data})
     return None
