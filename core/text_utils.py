@@ -297,6 +297,7 @@ def has_content_words(text: str) -> bool:
 
 
 _ANSWER_WORD_RE = re.compile(r"[a-z']+")
+_YES_PHRASES = ("go ahead", "do it", "keep it", "keep that", "save it", "store it", "go for it", "yes please")
 
 
 def yes_or_no(text: str):
@@ -312,6 +313,9 @@ def yes_or_no(text: str):
     which is the false positive first_word() was built against."""
     if (text or "").strip().endswith("?"):
         return None                      # a question is not an answer
+    low = " ".join((text or "").lower().split())
+    if any(p in low for p in _YES_PHRASES) and not any(w in NO_WORDS for w in _ANSWER_WORD_RE.findall(low)):
+        return "yes"
     words = [w for w in _ANSWER_WORD_RE.findall((text or "").lower()) if w != "alex"]
     if not words:
         return None
