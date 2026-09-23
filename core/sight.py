@@ -198,7 +198,13 @@ async def recognise(b64: str) -> str:
     more = f" There {'is one more face' if n == 2 else f'are {n - 1} more faces'} in the frame." if n > 1 else ""
     if best_user and best >= FACE_MATCH_THRESHOLD:
         return f"The face in the frame is {best_user}'s (match {best:.2f})." + more
-    return "There is a face in the frame you do not recognise." + more
+    # 2026-09-23: "you do not recognise" became "that is not Craig" in her
+    # mouth before he had enrolled at all. Say what is actually known.
+    if not profiles:
+        return ("There is a face in the frame; nobody has enrolled a face yet, so you cannot "
+                "tell by sight who it is — go by their voice and name." + more)
+    return ("There is a face in the frame that matches nobody who has enrolled; you cannot "
+            "tell by sight who it is." + more)
 
 
 # ------------------------------------------------------------------ looking

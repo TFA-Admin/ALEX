@@ -563,3 +563,26 @@ things, two of them one bug.
   backed only by the look tool; "I see." and "I see what you mean" are
   left alone. Unbacked, the look runs (eyes closed -> "you cannot see")
   and she answers again with that in front of her.
+
+### She looked, saw a man with a beard, and said the camera was dark (2026-09-23 14:36)
+Craig: "She still does not seem to have knowledge of the camera." The
+look tool ran twice and returned real descriptions ("A man with a beard
+sits in front of a bright window, wearing over-ear headphones"); her
+replies were "The camera remains dark; I see only the void" and "The
+camera remains dark; your claim lacks evidence." The claim check passed
+her because she HAD looked — it asks whether she looked, not whether
+she agreed with what she saw — and the conversation window was full of
+her own "the camera remains dark" from the hour the eyes were closed,
+which outweighed one evidence line among the context blocks. She also
+turned "a face you do not recognise" (nobody enrolled yet) into "that
+is not Craig". **Fixed:** a denial of sight in a reply after a look that
+returned a picture is the one contradiction a regex can catch
+(`core/claims.sight_denied`), and it is caught: not spoken, she answers
+again with the picture and the denial quoted back to her, and if she
+denies a second time the sentence is replaced with what she saw. What
+she saw is also repeated as the last thing in her prompt before she
+speaks. The unrecognised-face line now says what is known ("nobody has
+enrolled a face yet, so you cannot tell by sight who it is"). Verified
+over text with the same conversation history: "The camera shows only a
+red circle and blue square. There is no face in this frame." — no
+intervention needed.

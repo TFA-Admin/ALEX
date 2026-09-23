@@ -909,6 +909,14 @@ class System(BaseSystem):
         dials_block = her_traits.render(dials, mood_line=her_mood.line(mood_state) if mood_state else "")
         reply_tokens = her_traits.num_predict(dials)
 
+        # 2026-09-23: a look this turn is repeated here, last thing before
+        # she speaks. Among the context blocks it lost to a conversation
+        # window full of her own "the camera remains dark".
+        saw_now = her_claims.look_saw("\n".join(context_blocks)) if context_blocks else ""
+        sight_block = ((f"\n\n    YOU LOOKED THROUGH THE CAMERA JUST NOW AND SAW: {saw_now}"
+                        "\n    The camera is on and that is the picture. Say what you saw; never say it is dark or that you cannot see.")
+                       if saw_now else "")
+
         hard_rules_block = ""
         if hard_rules:
             rules_list = "\n".join(f"    - {r}" for r in hard_rules)
@@ -936,7 +944,7 @@ class System(BaseSystem):
 
     PERSONALITY (this is genuinely yours — express it, don't fight it):
     {personality}
-{hard_rules_block}{dials_block}
+{hard_rules_block}{dials_block}{sight_block}
 
     You have access to stored information about the user.
 
@@ -1240,7 +1248,12 @@ class System(BaseSystem):
                         if sentence is None:
                             break
                         tail = rest
-                        if her_claims.unbacked(sentence, evidence):
+                        denied_later = her_claims.sight_denied(sentence, system_prompt)
+                        if denied_later:
+                            saw_l = her_claims.look_saw(system_prompt)
+                            logger.info(f"[CLAIM] later sentence denied sight {denied_later!r} — replaced with what she saw")
+                            sentence = "I can see. " + saw_l + " "
+                        elif her_claims.unbacked(sentence, evidence):
                             block = await her_claims.gather_evidence(user_input, user_id, needs_seen, sentence)
                             honest = her_claims.honest_lines(block)
                             logger.info(f"[CLAIM] later sentence {sentence.strip()[:80]!r} — replaced with {honest[:80]!r}")
@@ -1265,27 +1278,47 @@ class System(BaseSystem):
                     continue
                 checked = True
                 found = her_claims.unbacked(clause, evidence)
-                if not found:
+                # 2026-09-23 (Craig: "She still does not seem to have knowledge
+                # of the camera"): she looked, the tool saw "a man with a beard
+                # in front of a bright window", and she said "the camera
+                # remains dark". Having looked passed her. A denial of sight
+                # with a real picture in the evidence is the one contradiction
+                # a regex can catch, and it is caught here.
+                denied = "" if found else her_claims.sight_denied(clause, system_prompt)
+                if not found and not denied:
                     yield buf
                     buf = ""
                     continue
                 await gen.aclose()
-                logger.info(f"[CLAIM] unbacked {found} in {clause.strip()!r} — not spoken; looking first")
                 await her_mood.note("own_slip", who=user_id)
-                block = await her_claims.gather_evidence(user_input, user_id, needs_seen, clause)
+                if denied:
+                    saw = her_claims.look_saw(system_prompt)
+                    logger.info(f"[CLAIM] denied sight {denied!r} in {clause.strip()[:80]!r} after a look that saw {saw[:60]!r} — answering again")
+                    block = "WHAT YOU LOOKED UP BEFORE ANSWERING (real, just now):\n[look] " + saw
+                    correction = ("\n\nYOU LOOKED THROUGH THE CAMERA JUST NOW AND SAW: " + saw
+                                  + "\n\nYou were about to say \"" + denied + "\". That is false: the camera is on "
+                                    "and this is the picture. Answer again with what you saw. Never say the camera "
+                                    "is dark, off or blind, or that you cannot see, when a picture is in front of you.")
+                    honest_fix = "I can see. " + saw
+                    summary = f"She said {clause.strip()[:90]!r} after a look that saw {saw[:50]!r}"
+                    reasoning = "Code compared her words with the look this turn returned: a real picture, denied."
+                else:
+                    logger.info(f"[CLAIM] unbacked {found} in {clause.strip()!r} — not spoken; looking first")
+                    block = await her_claims.gather_evidence(user_input, user_id, needs_seen, clause)
+                    correction = ("\n\nThat is everything you have looked at this turn. Answer from it. If it "
+                                  "does not contain what he asked about, say you do not have it. Do not say "
+                                  "you checked, read or ran anything beyond it.")
+                    honest_fix = her_claims.honest_lines(block)
+                    summary = f"She said {clause.strip()[:110]!r} without having looked"
+                    reasoning = "Code compared the claim with this turn's lookups and tool calls: there were none."
                 try:
                     await record_decision(
-                        "fabrication", f"She said {clause.strip()[:110]!r} without having looked",
-                        reasoning="Code compared the claim with this turn's lookups and tool calls: there were none.",
-                        evidence=block[:400],
+                        "fabrication", summary, reasoning=reasoning, evidence=block[:400],
                         outcome="not spoken, not stored; she answered again with the lookups in front of her",
                         actor="alex")
                 except Exception as e:
                     logger.warning(f"⚠️ could not record the slip: {e}")
-                second = (system_prompt + "\n\n" + block
-                          + "\n\nThat is everything you have looked at this turn. Answer from it. If it "
-                            "does not contain what he asked about, say you do not have it. Do not say "
-                            "you checked, read or ran anything beyond it.")
+                second = system_prompt + "\n\n" + block + correction
                 # The second attempt is held the same way. If she claims a
                 # check AGAIN with a refusal or nothing in front of her (seen
                 # on the first live test), the claim sentences are dropped and
@@ -1301,16 +1334,15 @@ class System(BaseSystem):
                     if head is None:
                         continue
                     checked2 = True
-                    again = her_claims.unbacked(head, backed)
+                    again = her_claims.unbacked(head, backed) or her_claims.sight_denied(head, block)
                     if again:
-                        honest = her_claims.honest_lines(block)
-                        logger.info(f"[CLAIM] persisted {again} — replaced with: {honest!r}")
-                        buf2 = (honest + " " + her_claims.drop_claims(buf2)).strip()
+                        logger.info(f"[CLAIM] persisted {again} — replaced with: {honest_fix!r}")
+                        buf2 = (honest_fix + " " + her_claims.drop_claims(buf2)).strip()
                     yield buf2
                     buf2 = ""
                 if buf2:
-                    if her_claims.unbacked(buf2, backed):
-                        buf2 = (her_claims.honest_lines(block) + " " + her_claims.drop_claims(buf2)).strip()
+                    if her_claims.unbacked(buf2, backed) or her_claims.sight_denied(buf2, block):
+                        buf2 = (honest_fix + " " + her_claims.drop_claims(buf2)).strip()
                     yield buf2
                 return
             if tail:

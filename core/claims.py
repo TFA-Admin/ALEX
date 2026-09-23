@@ -230,3 +230,47 @@ async def gather_evidence(user_input: str, user_id: str, needs: dict, clause: st
     logger.info(f"[CLAIM] looked up after the claim: {[n for n, _ in picked]}")
     return ("WHAT YOU LOOKED UP THIS TURN (real, just now — the only things you have "
             "checked; answer from this):\n" + "\n".join(parts))
+
+
+# ---------------------------------------------------------------- sight
+# 2026-09-23 (Craig: "She still does not seem to have knowledge of the
+# camera"). She looked — the tool returned "A man with a beard sits in
+# front of a bright window..." — and then said "The camera remains dark;
+# I see only the void." The evidence was there; the check above passed
+# her because she HAD looked. This is the one contradiction that is
+# checkable by regex: a real picture in the evidence and a denial of
+# sight in the clause.
+_LOOK_LINE_RE = re.compile(r"^\[look\]\s*(.+)$", re.M)
+_LOOK_NOTHING = ("has its eyes closed", "No page of", "could not make anything",
+                 "cannot see anything", "nothing to look through")
+_SIGHT_DENIAL_RE = re.compile(
+    r"\b(?:"
+    r"(?:the |my |your )?camera (?:remains|is|stays|is still) (?:dark|off|blind|closed|dead|down)"
+    r"|i (?:can(?:not|'t)|cannot|do not|don't|am unable to) see"
+    r"|(?:i )?see (?:only |nothing but |just )?(?:the )?(?:void|darkness|static|nothing|blackness)"
+    r"|(?:there is |i have )?no (?:visual|image|frame|picture|feed|input) "
+    r"|(?:your|the) eyes (?:are|remain|stay) (?:closed|shut)"
+    r"|(?:i am|i'm) blind"
+    r")\b",
+    re.I,
+)
+
+
+def look_saw(looked_block: str) -> str:
+    """The description a look returned this turn, or "" if she did not
+    look or the look came back with nothing to see."""
+    for m in _LOOK_LINE_RE.finditer(looked_block or ""):
+        text = m.group(1).strip()
+        if text and not any(x in text for x in _LOOK_NOTHING):
+            return text
+    return ""
+
+
+def sight_denied(clause: str, looked_block: str) -> str:
+    """The denial of sight in `clause` when a look this turn returned a
+    real picture — "" otherwise. What is returned is the phrase she used."""
+    saw = look_saw(looked_block)
+    if not saw or not clause:
+        return ""
+    m = _SIGHT_DENIAL_RE.search(clause)
+    return m.group(0) if m else ""
