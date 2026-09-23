@@ -77,7 +77,7 @@ MEMORY_RELEVANCE_FLOOR = 0.45
 # median and nearly at p90, the long tail (recall dumps, monologues) drops
 # the OLDEST turns instead of the system prompt, and there is headroom left.
 MEMORY_WINDOW_TURNS = 12
-MEMORY_CONTEXT_MAX_CHARS = 4000
+MEMORY_CONTEXT_MAX_CHARS = 5000
 
 
 def _fit_recent_to_budget(parts, budget):
