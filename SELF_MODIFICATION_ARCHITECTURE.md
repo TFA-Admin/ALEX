@@ -1671,6 +1671,39 @@ onboarding case; check the trimmed rules; pull the 14B; then item 14+.
   9008 MiB. So the idle author now runs on the 14B, and the cost to
   anyone arriving mid-thought is that reload.
 
+## 2026-09-23 (morning) — the author measures before it proposes
+
+Proposals so far: #1 threshold 7→8 (direction backwards; rejected), #2
+max_lookups 2→3 (gate passed; **0 of 88 passes had ever needed a third
+lookup**; rejected with that reason), #3 memory.window_turns 12→8
+(refused by the direction check before it existed as a row: she said
+"more recent exchanges" for a cut), #4 memory.context_chars 4000→5000
+(open). #4 came two minutes after #2 was rejected, and the idle loop had
+written "nothing due" 702 times overnight.
+
+Built: `core/self_author.measure(target)` — one measurement per target,
+computed when the author runs and put in its prompt as "WHAT THE NUMBERS
+SAY", with the instruction that no change is the common, correct answer
+when the numbers show no problem. Measured 06:44:
+
+| target | the number |
+|---|---|
+| deliberation.threshold | 88 passes: 19 looked something up (top 7-10), 6 topped at 5-6, 63 at ≤4; 4 replies caught claiming a check |
+| deliberation.max_lookups | 88 passes: 5 had two resources ≥7, **0 had three** |
+| memory.window_turns / context_chars | 313 windows over 7 days: **average 4001 chars against a 4000 budget; the budget cut 40% of windows, dropping 5 oldest turns each time** |
+| intent.status_check | 166/168; status_true 28/30, status_misfire 54/54; the one miss |
+
+So #4 is the first proposal the numbers support: the budget is the
+limiting factor in 40% of turns. Its cost is prompt tokens (~250 more
+per turn at 5000). Craig's call.
+
+Also: `PAUSE_AFTER_DECISION_S = 6h` before the next look after any
+decision; "nothing due" logged once per change or hour;
+`Launch_Controller.bat` (runs from D:, pythonw) because the Controller
+had been launched from the IDE and once from the network share (a staged
+copy took 113 s to come up over SMB); the Controller warns when its
+path is a share.
+
 ## Her personality, as Craig wrote it (2026-09-21 21:39)
 
 Kept here because it was overwritten once the same evening (personality_log
