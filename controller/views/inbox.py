@@ -105,7 +105,13 @@ class _GateThread(QThread):
 class InboxView(QWidget):
     def __init__(self, note):
         super().__init__()
-        self.note = note
+        # 2026-09-23 (Craig: "I tried approving the liver search in the
+        # controller and it didn't work"): every action wrote its outcome
+        # to the A.L.E.X. console and nothing else, so a failure looked like
+        # nothing. The last note is kept and a failed action shows it.
+        self._raw_note = note
+        self._last_note = ""
+        self.note = self._capture_note
         self._items = []
 
         layout = QVBoxLayout()
@@ -360,6 +366,10 @@ class InboxView(QWidget):
         tint_by_column(self.searches_table, 3)
         self.searches_table.resizeRowsToContents()
 
+    def _capture_note(self, text):
+        self._last_note = text
+        self._raw_note(text)
+
     # ---------------- ACTING ----------------
     def _selected_item(self):
         rows = selected_rows(self.table)
@@ -387,18 +397,20 @@ class InboxView(QWidget):
         key = self.action_btns[slot].property("action")
         d = item["data"]
 
+        ok = True
+        self._last_note = ""
         if key == "cancel_build":
-            actions.cancel_build(d["id"], d["module_name"], self.note)
+            ok = actions.cancel_build(d["id"], d["module_name"], self.note)
         elif key == "approve_access":
-            actions.approve_access(d["id"], d["module_name"], d.get("requested_access") or "", self.note)
+            ok = actions.approve_access(d["id"], d["module_name"], d.get("requested_access") or "", self.note)
         elif key == "run_search":
-            actions.run_search(d["id"], d["query"], self.note)
+            ok = actions.run_search(d["id"], d["query"], self.note)
         elif key == "decline_search":
-            actions.decline_search(d["id"], self.note)
+            ok = actions.decline_search(d["id"], self.note)
         elif key == "approve_retain":
-            actions.approve_retention(d["id"], self.note)
+            ok = actions.approve_retention(d["id"], self.note)
         elif key == "decline_retain":
-            actions.decline_retention(d["id"], self.note)
+            ok = actions.decline_retention(d["id"], self.note)
         elif key == "view_findings":
             actions.view_findings(self, d["id"], self.note)
             return
@@ -419,10 +431,12 @@ class InboxView(QWidget):
             self._select_version(d["id"])
             return
         elif key == "ack_security":
-            actions.ack_security(self.note)
+            ok = actions.ack_security(self.note)
         elif key == "ack_personality":
-            actions.ack_personality(self.note)
+            ok = actions.ack_personality(self.note)
 
+        if ok is False:
+            QMessageBox.warning(self, "Not done", self._last_note or "The action did not complete — see the A.L.E.X. console.")
         self.refresh()
         self.changed()
 
