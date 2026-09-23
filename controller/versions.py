@@ -429,6 +429,13 @@ def author_from_request(p: dict, log=print) -> int:
     target = p.get("target")
     if not target:
         raise RuntimeError("no target on this request")
+    # 2026-09-23: claim the row first, so a second builder (the periodic
+    # build_authored() in the running Controller, or a rebuild by hand)
+    # sees "building" and leaves it alone. See db.claim_proposal().
+    try:
+        asyncio.run(update_proposal(p["id"], status="building"))
+    except Exception:
+        pass
     if p.get("value"):
         # she authored this herself while idle (core/idle_author.py): the
         # value is on the row; only the rendering and the branch are left
@@ -496,7 +503,10 @@ def build_authored(log=print) -> int:
     """Rows she authored while idle become branches. Called from the
     Controller's slow refresh; a no-op almost always."""
     n = 0
+    from db.db import claim_proposal
     for p in asyncio.run(fetch_proposals(status="authored", limit=10)):
+        if not asyncio.run(claim_proposal(p["id"], "authored", "building")):
+            continue    # someone else has it
         try:
             author_from_request(p, log)
             n += 1

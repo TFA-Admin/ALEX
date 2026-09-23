@@ -756,6 +756,19 @@ async def get_proposal(proposal_id: int):
     return dict(zip(_PROPOSAL_KEYS, row)) if row else None
 
 
+async def claim_proposal(proposal_id: int, from_status: str, to_status: str) -> bool:
+    """Moves a row from one status to another only if it is still in the
+    first — the one builder that gets True owns it. 2026-09-23: the
+    Controller's periodic build and a direct rebuild both took #5 at
+    once; the loser's cleanup deleted the winner's worktree."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "UPDATE proposals SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status=?",
+            (to_status, proposal_id, from_status))
+        await db.commit()
+        return cur.rowcount == 1
+
+
 async def fetch_proposals(status: str = None, limit: int = 50):
     sql = f"SELECT {', '.join(_PROPOSAL_KEYS)} FROM proposals"
     params = []
