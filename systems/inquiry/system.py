@@ -20,7 +20,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from core.system_base import BaseSystem
-from core.text_utils import first_word, strip_trailing_punctuation, YES_WORDS, NO_WORDS
+from core.text_utils import first_word, strip_trailing_punctuation, YES_WORDS, NO_WORDS, yes_or_no
 from core.embedding_engine import embed
 from core.phrasebook import get_phrase
 from module_runtime.module_loader import load_module
@@ -121,11 +121,13 @@ class System(BaseSystem):
                 del _pending[user_id]
                 return None
 
-            word = first_word(msg)
+            # 2026-09-23: the whole answer, not its first word — see
+            # core/text_utils.yes_or_no for the "In fact, that's a fact" case.
+            answer = yes_or_no(msg)
 
             # 2026-09-21: the shared sets — see core/text_utils.YES_WORDS
             # for why "keep it" and "fact" have to count.
-            if word in YES_WORDS:
+            if answer == "yes":
                 denial = await require_creator(user_id, session, text)
                 if denial:
                     del _pending[user_id]
@@ -135,7 +137,7 @@ class System(BaseSystem):
                     return await self._run_search_stage(user_id, pending)
                 return await self._run_retain_stage(user_id, pending)
 
-            if word in NO_WORDS:
+            if answer == "no":
                 report_id = pending["report_id"]
                 stage = pending["stage"]
                 del _pending[user_id]

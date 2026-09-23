@@ -1472,9 +1472,11 @@ Reword it in your own voice so it doesn't come out identical every time you say 
             await resolve_retain_approval(pending["report_id"], False)
             return None
 
-        word = strip_trailing_punctuation(text.strip().lower().split()[0]) if text.strip() else ""
+        # 2026-09-23: the whole answer, not its first word (core/text_utils.yes_or_no)
+        from core.text_utils import yes_or_no as _yes_or_no
+        answer = _yes_or_no(text)
 
-        if word in KEEP_YES:
+        if answer == "yes":
             # Same gate every other retain goes through
             # (systems/inquiry/system.py calls this on its own "yes"):
             # role alone is not enough, the session has to be voice-verified
@@ -1498,7 +1500,7 @@ Reword it in your own voice so it doesn't come out identical every time you say 
                 return {"type": "response", "content": await get_phrase("retained_replacing_prior")}
             return {"type": "response", "content": await get_phrase("retained_new")}
 
-        if word in KEEP_NO:
+        if answer == "no":
             session.pop("awaiting_keep_answer", None)
             await resolve_retain_approval(pending["report_id"], False)
             logger.info(f"[ACTION] Keep declined for offer #{pending['report_id']} (by {user_id})")

@@ -294,3 +294,38 @@ def has_content_words(text: str) -> bool:
     return any(w not in _FUNCTION_WORDS for w in words)
 
 
+
+
+_ANSWER_WORD_RE = re.compile(r"[a-z']+")
+
+
+def yes_or_no(text: str):
+    """"yes", "no", or None for an answer to a question she asked.
+
+    2026-09-23 (Craig: "I also told her to store it and she did not").
+    The gates read only the FIRST word, so "In fact, that's a fact, Alex"
+    was neither and dropped the offer, and "Keep it" a turn later had
+    nothing left to keep. Now the first two and the last two words are
+    read (her name and punctuation ignored), and every word of a short
+    answer; a yes-word with no no-word is yes, the reverse is no, both or
+    neither is "moved on". Long unrelated sentences still fall through,
+    which is the false positive first_word() was built against."""
+    if (text or "").strip().endswith("?"):
+        return None                      # a question is not an answer
+    words = [w for w in _ANSWER_WORD_RE.findall((text or "").lower()) if w != "alex"]
+    if not words:
+        return None
+    if len(words) <= 6:
+        looked = words
+    else:
+        looked = words[:2] + words[-2:]
+    # "do", "go", "right" and "please" are yes when the whole reply is
+    # one of them; scattered in a sentence they are just words
+    strong_yes = YES_WORDS - {"do", "go", "right", "please"}
+    yes = any(w in (YES_WORDS if len(words) == 1 else strong_yes) for w in looked)
+    no = any(w in NO_WORDS for w in looked)
+    if yes and not no:
+        return "yes"
+    if no and not yes:
+        return "no"
+    return None
