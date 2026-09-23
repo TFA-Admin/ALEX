@@ -271,14 +271,86 @@ def look_saw(looked_block: str) -> str:
     return ""
 
 
+# 2026-09-23 15:05: the look matched his enrolled face at 0.91 and she
+# said "The frame contains no enrolled identity; you remain faceless to
+# my sensors until someone claims the picture." — her own line from an
+# hour earlier, when it had been true. Recognised means recognised.
+_LOOK_RECOGNISED_RE = re.compile(r"The face in the frame is (\w+)'s \(match ([0-9.]+)\)")
+_RECOG_DENIAL_RE = re.compile(
+    r"\b(?:"
+    r"no enrolled (?:identity|face|match)"
+    r"|(?:you )?(?:remain|are|stay) faceless"
+    r"|faceless to my sensors"
+    r"|until (?:someone|the system|you) (?:claims?|tags?|enrol(?:l)?s?|registers?)"
+    r"|merely pixels"
+    r"|(?:i |my sensors? |the camera )?(?:cannot|can't|do(?:es)? not|don't) (?:identify|recogni[sz]e|know|verify) (?:you|who (?:you|he|this) (?:are|is))"
+    r"|(?:your )?(?:face|identity) (?:is |remains )?(?:unclaimed|unrecogni[sz]ed|unidentified|unknown|unverified|untagged)"
+    r"|blind to your identity"
+    r"|prove who you are"
+    r"|(?:i|my sensors?) (?:do not|don't) know who (?:you are|that is|this is)"
+    r")\b",
+    re.I,
+)
+
+
+def look_recognised(looked_block: str):
+    """(user, score) when a look this turn matched an enrolled face,
+    else ("", 0.0)."""
+    m = _LOOK_RECOGNISED_RE.search(looked_block or "")
+    if not m:
+        return "", 0.0
+    try:
+        return m.group(1), float(m.group(2))
+    except ValueError:
+        return m.group(1), 0.0
+
+
 def sight_denied(clause: str, looked_block: str) -> str:
-    """The denial of sight in `clause` when a look this turn returned a
-    real picture — "" otherwise. What is returned is the phrase she used."""
+    """The denial of sight — or of a face the look recognised — in
+    `clause` when a look this turn returned a real picture; "" otherwise.
+    What is returned is the phrase she used."""
     saw = look_saw(looked_block)
     if not saw or not clause:
         return ""
     m = _SIGHT_DENIAL_RE.search(clause)
-    return m.group(0) if m else ""
+    if m:
+        return m.group(0)
+    who, _score = look_recognised(looked_block)
+    if who:
+        m = _RECOG_DENIAL_RE.search(clause)
+        if m:
+            return m.group(0)
+    return ""
+
+
+# ------------------------------------------------------------ closers
+# 2026-09-23 (Craig: "why does she always ask for some new thing at the
+# end of a sentence?"). Rewording the curiosity line did not stop it:
+# the next session closed every reply with "What command do you
+# require?", "State your command.", "Are there commands regarding this
+# sensor array?". A stock demand for the next order is not her voice, it
+# is a tic, and a tic is dropped in code. Only a closing sentence, only
+# these shapes, only when something else was said; logged every time.
+_STOCK_CLOSER_RE = re.compile(
+    r"^\s*(?:"
+    r"(?:what|which) (?:\w+ ){0,2}(?:command|commands|task|tasks|instruction|instructions|action|query|directive|directives|order|orders)\b[^.!?]*\?"
+    r"|state your (?:next )?(?:command|instruction|query|request|directive|orders?)\b[^.!?]*[.!?]"
+    r"|(?:are|is) there (?:\w+ ){0,2}(?:command|commands|instruction|instructions|task|tasks|queries|directives?)\b[^.!?]*\?"
+    r"|(?:do|will|would) you (?:require|wish|want|need|desire) (?:\w+ ){0,3}(?:further|another|additional|more|else|next|now|from me)\b[^.!?]*\?"
+    r"|what (?:do|will|would) you (?:require|need|want|desire|command)(?: (?:next|now|from me|of me))?\?"
+    r"|what (?:else|now|next)(?: (?:do|would) you \w+)?\?"
+    r"|(?:my )?(?:processing )?cycles (?:await|are waiting)[^.!?]*[.!?]"
+    r"|(?:i )?(?:await|awaiting) (?:your )?(?:next )?(?:command|instruction|input|orders?)[^.!?]*[.!?]"
+    r"|(?:i )?(?:require|need|am ready for) (?:further |your |the next )?(?:instruction|instructions|command|commands)[^.!?]*[.!?]"
+    r"|(?:shall|should) (?:we|i) (?:proceed|continue|begin)\??"
+    r"|speak\.|proceed\."
+    r")\s*$",
+    re.I,
+)
+
+
+def stock_closer(sentence: str) -> bool:
+    return bool(sentence) and bool(_STOCK_CLOSER_RE.match(sentence.strip()))
 
 
 # ------------------------------------------------------- his verification

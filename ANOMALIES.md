@@ -644,3 +644,28 @@ it as an instruction for every reply, and with a 20-word cap the stock
 question ("What do you require?") ate half of each one. **Fixed:** the
 line now says a reply ends when the answer ends, with the curiosity
 question a rare exception about the thing itself.
+
+### Recognised at 0.91, told "you remain faceless" (2026-09-23 15:05)
+The first look after his enrolment matched at 0.91 and she said "The
+frame contains no enrolled identity; you remain faceless to my sensors
+until someone claims the picture. Prove who you are." — her own line
+from an hour earlier, when it had been true, echoed from memory over the
+recognition sentence that now came first. Two turns later (0.67, 0.78)
+she came round on her own: "The frame resolves your features, matching
+the enrolled data at 0.78 probability." **Fixed:** a recognised face
+that she then denies ("no enrolled identity", "faceless", "merely
+pixels", "prove who you are") is caught like a denial of sight and
+answered again with the recognition in front of her; the seven echoing
+lines were retracted.
+
+### The closing question survived the prompt fix (2026-09-23 15:05-15:09)
+Every reply of the session still ended "What command do you require?",
+"State your command.", "Are there commands regarding this sensor
+array?". The reworded curiosity line was not enough against the habit.
+**Fixed in code:** the stream wrapper holds one sentence of lookahead,
+and a final sentence that is a stock demand for the next order
+(`core/claims.stock_closer`, narrow shapes, tested against hers) is
+dropped before it is spoken, logged as [VERBOSITY]. A real question
+("Do you want a diagnostic scan?", "Which module failed?") is not a
+closer and is kept. Craig's earlier rule — no banned phrases, she should
+listen — is about his corrections; this is a tic, not a phrase.

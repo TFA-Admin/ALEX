@@ -1260,6 +1260,7 @@ class System(BaseSystem):
             checked = False
             tail = ""            # after the head: scanned sentence by sentence
             fixed_later = False
+            held = ""            # one sentence of lookahead: a stock closer is dropped, not spoken
             gen = _generate(system_prompt)
             async for chunk in gen:
                 if checked:
@@ -1300,7 +1301,14 @@ class System(BaseSystem):
                             evidence["lookups"] = evidence["lookups"] or her_claims.real_evidence(block)
                             sentence = (honest + " ") if honest else ""
                         if sentence:
-                            yield sentence
+                            # 2026-09-23: the last sentence is held until the
+                            # next one completes or the stream ends, so a
+                            # stock closer ("What command do you require?")
+                            # can be dropped before it is spoken. Costs the
+                            # generation time of one sentence at the end.
+                            if held:
+                                yield held
+                            held = sentence
                     continue
                 buf += chunk
                 clause, rest = her_claims.first_clause(buf)
@@ -1389,6 +1397,12 @@ class System(BaseSystem):
                         buf2 = (honest_fix + " " + her_claims.drop_claims(buf2)).strip()
                     yield buf2
                 return
+            if held:
+                if not tail.strip() and her_claims.stock_closer(held):
+                    logger.info(f"[VERBOSITY] dropped a stock closer: {held.strip()[:80]!r}")
+                else:
+                    yield held
+                held = ""
             if tail:
                 if her_claims.unbacked(tail, evidence):
                     block = await her_claims.gather_evidence(user_input, user_id, needs_seen, tail)
