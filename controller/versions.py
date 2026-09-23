@@ -305,6 +305,14 @@ def run_gate(p: dict, log=print, suites=GATE_SUITES) -> dict:
     env = os.environ.copy()
     env["ALEX_URL"] = STAGING_URL
     env["ALEX_EVAL_DB"] = DB_PATH
+    # 2026-09-23: her model, explicitly. A worktree has no
+    # config/controller_settings.json until prepare_staging() copies it,
+    # and a gate run without staging (eval run #18) fell back to the
+    # code's default model — 68/84 on qwen2.5:7b, nothing to do with
+    # the proposal. The harness records the model it ran on.
+    if not env.get("ALEX_LLM_MODEL"):
+        from llm.ollama_client import DEFAULT_MODEL as _live_model
+        env["ALEX_LLM_MODEL"] = _live_model
     for suite, trials in suites:
         judged = suite not in ("intent",)
         if judged and not staging_up():
