@@ -457,7 +457,8 @@ def author_from_request(p: dict, log=print) -> int:
         log(f"[VERSIONS] Her author could not propose for {target}: {reason}")
         return p["id"]
     files = {data["file"]: data["content"]}
-    title = f"{target}: {data['current']} -> {data['value']}"
+    from core.self_author import short as _short
+    title = f"{target}: {_short(data['current'])} -> {_short(data['value'])}"
     rationale = data.get("rationale") or ""
     # the request row becomes the proposal row
     asyncio.run(update_proposal(p["id"], title=title, rationale=rationale))

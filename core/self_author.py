@@ -170,7 +170,20 @@ def _validate(t: Target, raw):
         raise ValueError("the line must be between 20 and 900 characters")
     if '"status_check"' not in v and t.key == "intent.status_check":
         raise ValueError('the line must still name the "status_check" category')
+    # 2026-09-23, proposal #5: a line that stops mid-sentence is not a
+    # line. (That one was cut by propose() itself — value[:120], meant
+    # for display, was what got stored — but a model can trail off too.)
+    if v[-1] in ",;:\u2014-(" or v.endswith(" and") or v.endswith(" or"):
+        raise ValueError(f"the line stops mid-sentence: ...{v[-40:]!r}")
+    if v[-1] not in ".)!?\"'":
+        raise ValueError(f"the line must end as a sentence does: ...{v[-40:]!r}")
     return v
+
+
+def short(text, n: int = 100) -> str:
+    """For titles and logs only — never for what is stored or rendered."""
+    text = str(text)
+    return text if len(text) <= n else text[:n - 1].rstrip() + "\u2026"
 
 
 def check_direction(t: Target, current: str, new_value: str, effect: str):
@@ -273,9 +286,13 @@ async def propose(key: str, why: str = "", root: str = ALEX_DIR, model: str = No
         content = render(key, value, root)
     except (OSError, ValueError) as e:
         return {"ok": False, "error": str(e)}
-    return {"ok": True, "target": key, "file": t.file, "current": cur if t.kind == "int" else cur[:120],
-            "value": value if t.kind == "int" else value[:120], "rationale": rationale,
-            "effect": effect, "content": content}
+    # 2026-09-23: the WHOLE value. Proposal #5 was born truncated because
+    # this clipped the line to 120 characters for display and the clipped
+    # copy was what core/idle_author.py stored and controller/versions.py
+    # rendered into the worktree. Display gets *_short; storage gets all.
+    return {"ok": True, "target": key, "file": t.file, "current": cur,
+            "value": value, "current_short": short(cur), "value_short": short(value),
+            "rationale": rationale, "effect": effect, "content": content}
 
 
 # ---------------------------------------------------------------------------

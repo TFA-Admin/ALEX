@@ -182,7 +182,7 @@ async def run_once(force_target: str = None) -> str:
             outcome=outcome, actor="alex", ref=ref)
         return f"{target}: {error[:160]}"
 
-    title = f"{target}: {result['current']} -> {result['value']}"
+    title = f"{target}: {result.get('current_short', result['current'])} -> {result.get('value_short', result['value'])}"
     pid = await create_proposal(title, result.get("rationale", ""), "alex",
                                 target=target, status="authored")
     await update_proposal(pid, value=str(result["value"]))

@@ -485,3 +485,18 @@ reset phrases, anything said with the code — are untouched). Row #14 and
 decision #149 were repaired by hand to hold what he actually said. Same
 family as the 2026-09-21 "a correction is not a personality change" fix:
 a 7B judgment call on every sentence needs deterministic exits.
+
+### Proposal #5 was born truncated (2026-09-23 12:54)
+Her idle author proposed a new `intent.status_check` line whose rationale
+said "explicitly including such cases" — and whose value was the first
+120 characters of the old line, ending mid-sentence at a comma, with the
+examples and the disabled-systems clause gone. Not her judgment:
+`core/self_author.propose()` returned `value[:120]` (meant for display)
+and that clipped copy was what `core/idle_author.py` stored and
+`controller/versions.py` rendered into the worktree. Her full line was
+lost. Craig, reviewing: "it sounds good to me" — the title read well
+because it was cut where the old and new lines still agreed.
+**Fixed 2026-09-23:** the whole value is stored and rendered; titles use
+a separate 100-character short form; `_validate()` refuses a line that
+stops mid-sentence or does not end as a sentence does. #5 was re-authored
+by her on the 14B model (19 s, 643 characters, complete) and rebuilt.
