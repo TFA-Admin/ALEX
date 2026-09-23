@@ -98,6 +98,13 @@ class _PersistentPiper:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            # 2026-09-23 (Craig: "A random CMD window opened. Is that us?").
+            # This was the one child in her tree spawned without the flag.
+            # Probed: a console child of her hidden process inherits the
+            # hidden console and shows nothing, so piper was not that
+            # window; but from a windowless parent (pythonw, a service) it
+            # would get a console of its own. The flag makes it never.
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         threading.Thread(target=self._read_stdout, args=(process,), daemon=True).start()
         threading.Thread(target=self._read_stderr, args=(process,), daemon=True).start()

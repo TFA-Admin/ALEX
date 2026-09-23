@@ -1739,6 +1739,21 @@ game; you will not lie; your name is ALEX.
 - **`model_usage` table is dead:** `log_model_usage()` has no caller (2
   rows, never written since). Drop it with a migration when the schema is
   next touched; `tests/harness.py` still lists it in USER_SCOPED_TABLES.
+- **Module authoring by her (Craig, 2026-09-23 07:47):** "what if I want
+  you to build a module so that you are aware of what time it is?" She
+  answered from the CANNOT rule: "I will not be updated; the controller
+  prevents that modification." Two things were true at once: she already
+  had the clock (the NOW line in every prompt, and `current_time`, which
+  is now a deliberation resource — see ANOMALIES.md), and building a
+  module is outside her whitelist, which is five settings with a
+  direction check each (core/self_author.py). Widening the container to
+  module authoring is the natural next slice of item 6: a proposal whose
+  worktree adds a file under `modules/`, gated the same way (intent,
+  onboarding, authority) plus the module's own self-test, approved from
+  the Inbox. What she must not be able to do is unchanged: PROTECTED_PATHS
+  refuse the Controller, the gate, the whitelist and the DB layer. Not
+  built; needs Craig's yes, because a module is code she wrote running in
+  her own process, which the settings slice deliberately was not.
 
 - **Intent-classification pre-gate.** Would skip the 1.00s classifier on
   messages that cannot be any of its 5 categories. Built and validated

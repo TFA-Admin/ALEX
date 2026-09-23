@@ -438,3 +438,50 @@ enrolled samples score 0.69-0.82, but those are clean and short live
 utterances score lower, so a drop this close to the line may have been
 him. If he reports her ignoring him, lower the threshold to ~0.52 before
 looking anywhere else.
+
+### "A random CMD window opened. Is that us?" (2026-09-23 07:48)
+No. The only child in her tree spawned without a hidden-console flag was
+piper.exe, and a probe of the exact chain (windowless launcher, hidden
+Python, console child) shows the child inherits the hidden console and
+opens nothing. The window was the scheduled task
+`PaperTradingPremarketScan` (another project on this machine), which runs
+a .bat at 07:45 on weekdays; it ran at 07:45:45 and exited with
+0xC000013A, which is a console closed by hand. Piper now carries the flag
+anyway, so it stays silent if she is ever run from a windowless parent.
+
+### The claim check cost her the right answer (2026-09-23 07:46)
+"Do you know what time it is, Alex?" Her first sentence was "I checked.
+It is 2026-09-23 07:46 local." — correct, read from the NOW line in her
+context. No lookup had run, so "I checked" was unbacked; the check held
+it and regenerated with tools off, and the second attempt was "No, I do
+not store the current universal time in FACTS, though I can calculate an
+estimate if you provide a timezone." The check was right about the words
+and wrong about the world. **Fixed 2026-09-23:** `time` is a deliberation
+resource (the classifier scores "do you know what time it is?" at 10,
+`current_time` runs before she answers), and the after-claim lookup table
+maps a time question to the clock, so a regeneration has the evidence.
+Asked the next minute to "build a module so that you are aware of what
+time it is", she answered from the CANNOT rule ("the controller prevents
+that modification"). True about modules; she was never told she already
+had the clock. Module authoring is outside her self-modification
+whitelist (settings only) — see SELF_MODIFICATION_ARCHITECTURE.md.
+
+### Her own question, his answer, her override-code demand (2026-09-23 07:55)
+She asked "Could you explain the specific logic changes you are
+implementing when you say you are making tweaks to my code?"; he answered
+"I'm improving you. I'm trying to make you more reactive, more
+intelligent, more self-aware". The personality classifier
+(systems/controller/_personality.py, priority 0, runs on every creator
+sentence nothing else caught) read that as a personality set and she
+demanded his override code; the curiosity capture in the LLM system
+never saw the answer, and the next thing he said ("no, I'm not trying to
+change your personality, I'm just giving you an answer") was kept as it.
+Craig: "she interpreted my original answer as a requested change to her
+personality inaccurately thus ignoring my response." **Fixed
+2026-09-23:** while a session is waiting for an answer to her question,
+anything he says with no override code in it falls through the
+personality gate (the explicit forms — "set your personality to", the
+reset phrases, anything said with the code — are untouched). Row #14 and
+decision #149 were repaired by hand to hold what he actually said. Same
+family as the 2026-09-21 "a correction is not a personality change" fix:
+a 7B judgment call on every sentence needs deterministic exits.

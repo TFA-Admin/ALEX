@@ -173,6 +173,22 @@ async def handle(session, user_id: str, text: str, msg: str):
             and await override_code_status(user_id, msg) == "absent"):
         return None
 
+    # 2026-09-23: an answer to her question is not a personality change.
+    # She asked "what logic changes are you implementing when you say you
+    # are making tweaks to my code?"; he answered "I'm improving you. I'm
+    # trying to make you more reactive, more intelligent, more self-aware";
+    # the classifier below read that as a personality set, she demanded
+    # his override code, and the answer she had asked for was lost — the
+    # next thing he said ("no, I'm not trying to change your personality")
+    # was stored as the answer instead. While she is waiting for an answer
+    # (systems/llm/system.py keeps the capture), what he says with no code
+    # in it is the answer and falls through to be kept as one.
+    if (new_desc is None and session.get("awaiting_curiosity_answer")
+            and await override_code_status(user_id, msg) == "absent"):
+        logger.info("[PERSONALITY] Not a change — she is waiting for his answer "
+                    f"about {session.get('awaiting_curiosity_answer')!r}")
+        return None
+
     if new_desc is None and await get_user_role(user_id) == "creator":
         result = await classify_personality_set(exact_phrase_input)
         if result.get("personality_command") == "set":

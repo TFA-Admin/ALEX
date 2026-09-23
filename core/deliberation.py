@@ -40,7 +40,7 @@ NEED_TO_LOOK = 7
 MAX_LOOKUPS = 2
 ASSESS_TIMEOUT_S = 8.0
 
-RESOURCES = ("memory", "modules", "state", "log", "code", "diagnostics", "projects", "scores")
+RESOURCES = ("memory", "modules", "state", "log", "code", "diagnostics", "projects", "scores", "time")
 
 _PROMPT = """You are A.L.E.X. Before answering him, decide what you need to look at.
 
@@ -55,11 +55,12 @@ You can look at:
   diagnostics — a fresh check of whether your systems are working
   projects    — the list of projects he has planned for you and where each stands (what is next for you, what you are being built toward, whether you can see his list, how a piece of work is coming along)
   scores      — your measured test scores (how you are doing on your tests, what you are bad at, whether a change helped)
+  time        — the current date, time and day (the time, the date, the day, how long since or until something, whether you know what time it is)
 
 For EACH one, how much does answering him well depend on looking at it, from 0 (not at all) to 10 (you cannot answer honestly without it)? Also give the memory search words and, if code, the file path.
 
 Respond with ONLY a JSON object:
-{{"memory": <0-10>, "modules": <0-10>, "state": <0-10>, "log": <0-10>, "code": <0-10>, "diagnostics": <0-10>, "projects": <0-10>, "scores": <0-10>, "search": "<what to search his memory for>", "path": "<file path or empty>"}}"""
+{{"memory": <0-10>, "modules": <0-10>, "state": <0-10>, "log": <0-10>, "code": <0-10>, "diagnostics": <0-10>, "projects": <0-10>, "scores": <0-10>, "time": <0-10>, "search": "<what to search his memory for>", "path": "<file path or empty>"}}"""
 
 
 async def assess(text: str, recent_lines=None) -> dict:
@@ -116,6 +117,8 @@ def lookups_for(scores: dict, text: str) -> list:
             picked.append(("my_projects", {}))
         elif r == "scores":
             picked.append(("my_scores", {}))
+        elif r == "time":
+            picked.append(("current_time", {}))
     return picked
 
 
