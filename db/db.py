@@ -244,6 +244,15 @@ async def init_db():
         except Exception:
             pass
 
+        # 🧐 CURIOSITY, PER PERSON (2026-09-23). She asked Craig about "the
+        # Keystone project you mentioned earlier" — a tester's project. A
+        # question is queued with the person whose conversation raised it
+        # and is asked only of them; NULL is the old rows, treated as his.
+        try:
+            await db.execute("ALTER TABLE curiosity_queue ADD COLUMN user TEXT")
+        except Exception:
+            pass
+
         # 🗂️ PROJECTS (2026-09-21). Craig: "She also claims to want to know
         # what projects we have in store for her, and I say we give them to
         # her... whether or not she will be able to track the progress as
@@ -1524,11 +1533,11 @@ async def retract_conclusion(conclusion_id: int, reason: str) -> bool:
         return cursor.rowcount > 0
 
 
-async def queue_curiosity_question(topic: str, question: str):
+async def queue_curiosity_question(topic: str, question: str, user: str = None):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT INTO curiosity_queue(topic, question) VALUES(?,?)",
-            (topic, question)
+            "INSERT INTO curiosity_queue (topic, question, user) VALUES (?, ?, ?)",
+            (topic, question, user)
         )
         await db.commit()
 
@@ -1605,17 +1614,26 @@ async def fetch_curiosity_queue(limit: int = 50):
     return [dict(zip(keys, r)) for r in rows]
 
 
-async def fetch_undelivered_curiosity_questions():
+async def fetch_undelivered_curiosity_questions(user: str = None, creator: bool = False):
     """Questions she still wants answered: never asked, or asked once long
     enough ago to be worth raising again. See
-    mark_curiosity_question_asked() for why one miss is not the end of it."""
+    mark_curiosity_question_asked() for why one miss is not the end of it.
+
+    2026-09-23: only the questions raised by THIS person's conversations.
+    The creator also gets the rows with no person recorded (before the
+    column existed, every question was asked of him)."""
+    who = ""
+    args = [CURIOSITY_MAX_ASKS, CURIOSITY_REASK_AFTER_S]
+    if user:
+        who = " AND (user=?" + (" OR user IS NULL)" if creator else ")")
+        args.append(user)
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "SELECT topic, question, created_at FROM curiosity_queue "
             "WHERE answer IS NULL AND delivered < ? AND (last_asked_at IS NULL OR "
-            "  strftime('%s','now') - strftime('%s', last_asked_at) > ?) "
-            "ORDER BY created_at ASC",
-            (CURIOSITY_MAX_ASKS, CURIOSITY_REASK_AFTER_S))
+            "  strftime('%s','now') - strftime('%s', last_asked_at) > ?)" + who +
+            " ORDER BY created_at ASC",
+            args)
         rows = await cursor.fetchall()
 
     keys = ["topic", "question", "created_at"]

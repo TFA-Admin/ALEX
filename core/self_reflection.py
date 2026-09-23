@@ -783,15 +783,26 @@ async def run_self_reflection():
     logger.info(f"[REFLECTION] Pass starting — {len(recent)} new turns since #{last_id}")
 
     try:
+        # 2026-09-23: curiosity is about somebody's conversation; it is
+        # asked of that somebody. Craig's turns first; otherwise whoever
+        # spoke most in this window.
+        if craig_turns:
+            curious_turns, curious_user = craig_turns, creator
+        else:
+            counts = {}
+            for r in other_turns:
+                counts[r.get("user")] = counts.get(r.get("user"), 0) + 1
+            curious_user = max(counts, key=counts.get) if counts else None
+            curious_turns = [r for r in other_turns if r.get("user") == curious_user]
         try:
-            curiosity = await _reflect_on_curiosity(recent)
+            curiosity = await _reflect_on_curiosity(curious_turns)
         except Exception as e:
             logger.warning(f"⚠️ Curiosity reflection failed: {e}")
             curiosity = None
 
         if curiosity:
             topic, question = curiosity
-            await queue_curiosity_question(topic, question)
+            await queue_curiosity_question(topic, question, user=curious_user)
             await record_decision(
                 "curiosity",
                 f"Wants to know about {topic}",

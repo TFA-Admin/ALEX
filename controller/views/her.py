@@ -51,6 +51,10 @@ class _PoppedWindow(QWidget):
         lay = QVBoxLayout()
         lay.setContentsMargins(6, 6, 6, 6)
         lay.addWidget(page)
+        # A page removed from a QTabWidget carries an explicit hide; a new
+        # layout does not undo that (Craig: "when I actually open that tab
+        # nothing shows").
+        page.show()
         self.setLayout(lay)
 
     def closeEvent(self, event):

@@ -469,30 +469,18 @@ async def ws_text(websocket: WebSocket):
                 # unrelated questions dumped at connect would be noise,
                 # not curiosity.
                 # -------------------------
-                questions = await fetch_undelivered_curiosity_questions()
+                # 2026-09-23: this person's questions only (Craig: "that
+                # was a conversation you had with another individual"), and
+                # asked once she has finished speaking, not 55 ms after her
+                # greeting went out while it was still playing (Craig: "She
+                # greeted me and immediately cut herself off to propose a
+                # curiosity she had"). The wait runs beside the main loop so
+                # his next words are not held up by it.
+                questions = await fetch_undelivered_curiosity_questions(
+                    user=user_id, creator=(role == "creator"))
 
                 if questions:
-                    q = questions[0]
-
-                    # 2026-09-20: sent as she wrote it. The "While you were
-                    # away, I noticed I don't really know about X." wrapper
-                    # this used to carry was a hardcoded line of mine around
-                    # a question of hers — see core/proactive.py for the same
-                    # fix and the reasoning.
-                    logger.info(f"[ACTION] Delivered curiosity question: {q['question']}")
-
-                    # Through say() like everything else — this sent a bare
-                    # envelope with no lock and no memory record, so she
-                    # could open a session by asking something and then not
-                    # know she had asked it.
-                    await say(websocket, q["question"], user_id=user_id)
-
-                    await mark_curiosity_question_asked(q["topic"])
-
-                    # She asked something; whatever he says next is very
-                    # likely the answer. See systems/llm/system.py for the
-                    # capture and why it is positional.
-                    alex_core.get_session(session_id)["awaiting_curiosity_answer"] = q["topic"]
+                    asyncio.create_task(_ask_when_quiet(websocket, session_id, user_id, questions[0]))
 
         # -------------------------
         # MAIN LOOP
@@ -597,6 +585,31 @@ async def ws_text(websocket: WebSocket):
             await session_closed(session_id)
         except Exception:
             pass
+
+
+async def _ask_when_quiet(websocket, session_id, user_id, q, give_up_after: float = 120.0):
+    """Delivers a queued curiosity question once she has finished speaking
+    and nobody has spoken for a moment. last_addressed_at is the END of
+    her playback (core/response_handler.py), so waiting for it to pass is
+    waiting for her to go quiet. If the conversation keeps moving, this
+    gives up and leaves the question to core/proactive.py's lull."""
+    from core import idle_author
+    t0 = time.time()
+    while time.time() - t0 < give_up_after:
+        session = alex_core.get_session(session_id)
+        quiet_from = session.get("last_addressed_at", 0) + 3.0
+        if time.time() >= quiet_from and idle_author.idle_for() >= 3.0 and not generation_lock.locked():
+            break
+        await asyncio.sleep(1.0)
+    else:
+        logger.info(f"[ACTION] Curiosity question held — the conversation kept moving: {q['question'][:80]!r}")
+        return
+    if session_id not in _active_connections:
+        return
+    logger.info(f"[ACTION] Delivered curiosity question to {user_id}: {q['question']}")
+    await say(websocket, q["question"], user_id=user_id)
+    await mark_curiosity_question_asked(q["topic"])
+    alex_core.get_session(session_id)["awaiting_curiosity_answer"] = q["topic"]
 
 
 # -------------------------

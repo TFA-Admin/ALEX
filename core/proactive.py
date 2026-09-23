@@ -60,7 +60,11 @@ async def _check_curiosity_delivery():
     if idle_author.idle_for() < CURIOSITY_QUIET_S or speech_lock.locked():
         return
 
-    questions = await fetch_undelivered_curiosity_questions()
+    # 2026-09-23: his questions only — the mid-session push reaches the
+    # creator's sessions, so it must never carry a question raised by
+    # somebody else's conversation.
+    from core.self_reflection import get_creator_name
+    questions = await fetch_undelivered_curiosity_questions(user=await get_creator_name(), creator=True)
     if not questions:
         return
 
