@@ -127,12 +127,14 @@ _HINTS = (
     (re.compile(r"\b(diagnos|system check|systems?\b.*\b(work|online|up)\b)", re.I), ("run_diagnostics", {})),
     (re.compile(r"\b(remember|recall|said|told|mention|discuss|talked)", re.I), ("search_memory", None)),
     (re.compile(r"\b(what time|time is it|the time|the date|today|what day|clock|o'clock)\b", re.I), ("current_time", {})),
+    (re.compile(r"\b(what do you see|can you see|do you see|look at|looking at|what am i (holding|wearing)|who is (here|there|this)|your camera|through the camera)\b", re.I), ("look", None)),
 )
 
 _RESOURCE_TOOL = {
     "memory": ("search_memory", None), "modules": ("list_modules", {}), "state": ("my_state", {}),
     "log": ("read_log", {"lines": 30}), "diagnostics": ("run_diagnostics", {}),
     "projects": ("my_projects", {}), "scores": ("my_scores", {}), "time": ("current_time", {}),
+    "sight": ("look", None),
 }
 
 
@@ -163,7 +165,7 @@ def lookups_after_claim(user_input: str, clause: str, needs: dict = None, max_lo
 _TOOL_NOUN = {"read_log": "my log", "read_my_source": "my source code", "my_state": "my own state",
               "search_memory": "our earlier conversations", "recent_turns": "our recent exchanges",
               "list_modules": "my modules", "run_diagnostics": "my diagnostics",
-              "my_projects": "his projects", "my_scores": "my scores", "current_time": "the clock"}
+              "my_projects": "his projects", "my_scores": "my scores", "current_time": "the clock", "look": "my camera"}
 
 
 def honest_lines(block: str) -> str:

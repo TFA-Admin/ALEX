@@ -44,6 +44,7 @@ and it is what roadmap item 1 ("she sees herself entirely") means.
 import asyncio
 import glob
 import json
+from core import sight
 import os
 import time
 from datetime import datetime
@@ -140,6 +141,12 @@ TOOLS = [
         ["path", "start_line"]),
     _fn("current_time",
         "The current local date, time and day of the week."),
+    _fn("look",
+        "Look through the camera on the page of the person you are talking to: one frame, "
+        "described, with whose face it is if you know them. Use it when asked what you see, "
+        "who is there, what they are holding or wearing, or to look at something. Their page "
+        "must have its eyes open; a frame is taken only when you look.",
+        {"question": {"type": "string", "description": "what they asked you to look at or for, if anything"}}),
     _fn("propose_change",
         "Ask your creator to consider a change to one of your own settings. "
         "You may only name a whitelisted target (deliberation.threshold, "
@@ -502,9 +509,14 @@ async def run_tool(name: str, args, user_id: str) -> str:
             coro = _my_projects()
         elif name == "propose_change":
             coro = _propose_change(user_id, str(args.get("target", "")), str(args.get("why", "")))
+        elif name == "look":
+            from core import sight
+            coro = sight.look(user_id, str(args.get("question") or args.get("query") or ""))
         else:
             coro = asyncio.to_thread(_current_time)
-        result = await asyncio.wait_for(coro, timeout=TOOL_TIMEOUT_S)
+        # 2026-09-23: a look is a frame from the page plus her model
+        # describing it; it gets its own budget.
+        result = await asyncio.wait_for(coro, timeout=(sight.LOOK_TIMEOUT_S if name == "look" else TOOL_TIMEOUT_S))
     except asyncio.TimeoutError:
         result = f"{name} took longer than {TOOL_TIMEOUT_S:.0f}s and was stopped."
     except Exception as e:

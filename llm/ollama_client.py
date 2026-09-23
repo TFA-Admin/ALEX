@@ -553,4 +553,32 @@ class OllamaManager:
             return None
 
 
+    async def describe_image(self, prompt: str, image_b64: str, model: str = DEFAULT_MODEL,
+                             timeout: float = 30.0, num_predict: int = 220):
+        """One frame, one answer (core/sight.py). Her own model sees —
+        qwen3.5 lists `vision` in its capabilities — so this is
+        generate_text() with an image attached, on the pooled client."""
+        if not self.ready and not await self.init(timeout=self.READY_WAIT_S):
+            raise RuntimeError("Ollama is not reachable")
+        options = {"num_ctx": SHARED_NUM_CTX, "num_batch": SHARED_NUM_BATCH, "num_predict": num_predict}
+        try:
+            r = await self._get_client().post(
+                f"{self.host}/api/chat",
+                timeout=timeout,
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt, "images": [image_b64]}],
+                    "stream": False,
+                    "keep_alive": KEEP_ALIVE,
+                    **_THINK_KW,
+                    "options": options
+                }
+            )
+            data = r.json()
+            return data.get("message", {}).get("content", "") or None
+        except Exception as e:
+            print(f"⚠️ describe_image failed: {e}")
+            return None
+
+
 ollama_manager = OllamaManager()

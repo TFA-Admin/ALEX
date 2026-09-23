@@ -12,6 +12,7 @@ from ws.ws_audio import AudioProcessor
 from ws.ws_chat import handle_chat
 from llm.ollama_client import locked_fields
 from identity.identity_manager import identity_manager
+from core import sight
 from core import readiness
 from core.voice import say
 from db.db import remember_own_utterance, session_opened, session_verified, session_heard, session_closed
@@ -388,7 +389,11 @@ async def ws_text(websocket: WebSocket):
         # connect, which passes user_id explicitly, does. This was the last
         # empty cell in the table in core/voice.py.
         _active_connections[session_id] = {
-            "websocket": websocket, "role": role, "user_id": user_id}
+            "websocket": websocket, "role": role, "user_id": user_id,
+            # 2026-09-23 (item 9): core/sight.py reads the socket while she
+            # waits for a frame; audio that arrives then goes here, and any
+            # other text is queued in "pending" for the loop below.
+            "audio": audio}
 
         # 2026-09-21: who this is, by name, for the Controller's People
         # view (db.sessions). Fails soft: a bookkeeping row must never cost
@@ -400,6 +405,16 @@ async def ws_text(websocket: WebSocket):
         except Exception as e:
             logger.warning(f"⚠️ could not record session: {e}")
         idle_author.note_activity()
+
+        # 2026-09-23 (roadmap item 9): her eyes first. If his face is
+        # enrolled and his page has its eyes open, one frame verifies him
+        # and she does not ask him to speak; otherwise the voice path below
+        # runs exactly as before.
+        if role in ("creator", "super_user") and not session.get("creator_verified"):
+            try:
+                await sight.verify_at_connect(websocket, _active_connections[session_id], session, session_id, user_id)
+            except Exception as e:
+                logger.warning(f"⚠️ face check failed: {e}")
 
         if role in ("creator", "super_user") and not session.get("creator_verified"):
             # not already verified above (voice-first recognition during
@@ -504,7 +519,10 @@ async def ws_text(websocket: WebSocket):
         while True:
 
             try:
-                message = await websocket.receive()
+                # 2026-09-23: anything core/sight.py read past while waiting
+                # for a frame is handled first, in order.
+                _pending = _active_connections.get(session_id, {}).get("pending")
+                message = _pending.pop(0) if _pending else await websocket.receive()
             except WebSocketDisconnect:
                 logger.info(f"🔴 WS disconnected: {session_id}")
                 break
@@ -540,6 +558,20 @@ async def ws_text(websocket: WebSocket):
             # tells it to stop (found live: without it, a longer response
             # just kept streaming right through an interrupt, since
             # nothing told the loop itself to stop).
+            # 👁 A frame from the page's camera (2026-09-23, item 9). An
+            # enrolment is kept as an embedding; a reply to a look or a
+            # verify that already timed out is dropped here.
+            if msg.startswith("__FRAME__"):
+                if sight.deliver_frame(_active_connections.get(session_id, {}), msg):
+                    continue
+                if msg.startswith("__FRAME__enrol:"):
+                    if role in ("creator", "super_user") and not session.get("creator_verified"):
+                        await websocket.send_text("__FACE__" + json.dumps(
+                            {"enrolled": False, "reason": "verify by voice first"}))
+                    else:
+                        await sight.enrol_frame(websocket, user_id, msg[len("__FRAME__enrol:"):])
+                continue
+
             if msg == "__INTERRUPT__":
                 alex_core.get_session(session_id)["interrupted"] = True
                 # 2026-09-23: being talked over moves her mood (core/mood.py)

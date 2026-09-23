@@ -125,6 +125,16 @@ async def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''')
 
+        # 👁 FACES (2026-09-23, roadmap item 9): the same shape as voices —
+        # SFace embeddings (core/sight.py), a rolling window per person.
+        await db.execute('''
+        CREATE TABLE IF NOT EXISTS face_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user TEXT,
+            embedding BLOB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+
         # 🎭 PERSONALITY CHANGE LOG (self-reflection visibility, not a gate)
         await db.execute('''
         CREATE TABLE IF NOT EXISTS personality_log (
@@ -1956,6 +1966,46 @@ async def fetch_voice_samples(user):
         rows = await cursor.fetchall()
 
     return [pickle.loads(r[0]) for r in rows]
+
+
+MAX_FACE_SAMPLES = 15
+
+
+async def add_face_sample(user, embedding):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT INTO face_profiles(user, embedding) VALUES(?,?)",
+                         (user, pickle.dumps(embedding)))
+        await db.commit()
+
+
+async def reinforce_face_sample(user, embedding, max_samples=MAX_FACE_SAMPLES):
+    """A confirmed face sample, pruned to the most recent max_samples —
+    the rolling window voice uses, for the same reason."""
+    await add_face_sample(user, embedding)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "DELETE FROM face_profiles WHERE user=? AND id NOT IN ("
+            "  SELECT id FROM face_profiles WHERE user=? ORDER BY id DESC LIMIT ?)",
+            (user, user, max_samples))
+        await db.commit()
+
+
+async def fetch_face_samples(user):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT embedding FROM face_profiles WHERE user=?", (user,))
+        rows = await cursor.fetchall()
+    return [pickle.loads(r[0]) for r in rows]
+
+
+async def fetch_all_face_profiles():
+    """{user: [embedding, ...]} for every enrolled face."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT user, embedding FROM face_profiles")
+        rows = await cursor.fetchall()
+    out = {}
+    for user, blob in rows:
+        out.setdefault(user, []).append(pickle.loads(blob))
+    return out
 
 
 async def fetch_all_voice_profiles():

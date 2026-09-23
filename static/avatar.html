@@ -471,6 +471,11 @@ body.chat-collapsed .panel-toggle-right{ transform: rotate(180deg); }
 @media (prefers-reduced-motion: reduce){
   #micLevel{ transition: none; }
 }
+/* 2026-09-23 (roadmap item 9): her eyes — the page's camera. Shown small
+   so the person can see what she can; hidden while closed. */
+#eyePreview{ display: none; width: 100%; max-height: 96px; object-fit: cover;
+  border-radius: 6px; margin-top: 6px; opacity: .85; background: #000; }
+#eyePreview.on{ display: block; }
 </style>
 </head>
 
@@ -492,6 +497,9 @@ body.chat-collapsed .panel-toggle-right{ transform: rotate(180deg); }
       <div class="tele-row" id="teleEngaged"><span>engaged</span><span class="val" id="teleEngagedVal">no</span></div>
       <div class="tele-row" id="teleState"><span>state</span><span class="val" id="teleStateVal">off</span></div>
       <div id="micContainer"><div id="micLevel"></div></div>
+      <div class="tele-row" id="teleEyes"><span>eyes</span><span class="val" id="teleEyesVal">closed</span></div>
+      <div class="tele-row" id="teleFace"><span>face</span><span class="val" id="teleFaceVal">—</span></div>
+      <video id="eyePreview" autoplay muted playsinline></video>
     </div>
 
     <div class="tele-group">
@@ -506,6 +514,10 @@ body.chat-collapsed .panel-toggle-right{ transform: rotate(180deg); }
 
     <div class="rail-actions">
       <button class="rail-btn" id="autoBtn" onclick="toggleAutoListen()">Auto Listen: Off</button>
+      <!-- 2026-09-23: her eyes. Open = this page's camera is hers to look
+           through when she is asked to; one frame at a time, never streamed. -->
+      <button class="rail-btn" id="eyesBtn" onclick="toggleEyes()">Eyes: Closed</button>
+      <button class="rail-btn" id="enrolFaceBtn" onclick="enrolFace()" title="Three frames a second apart; she keeps only the face embedding, never the picture">Enrol my face</button>
       <button class="rail-btn" onclick="logoff()">Log Off</button>
       <!-- 2026-09-21: the command reference, served from COMMANDS.md -->
       <button class="rail-btn" onclick="window.open('/commands?user=' + encodeURIComponent(localStorage.getItem('alex_user') || ''), '_blank')">What can I say?</button>
@@ -787,6 +799,99 @@ function setVersion(info){
     el.textContent = label ? ("v" + label) : "interface";
     if(info && info.branch) el.title = "the commit she was started from — branch " + info.branch;
 }
+
+// ---------------- EYES (2026-09-23, roadmap item 9) ----------------
+// The camera is opened once (Eyes: Open) and stays open so a frame is
+// instant; nothing is sent until she asks (__LOOK__<purpose>) — one
+// JPEG per look, or "none" while the eyes are closed. Craig: any
+// standard webcam, testers' pages too — "this will be her eyes after all."
+let eyeStream = null;
+const eyeVideo = document.getElementById("eyePreview");
+const eyeCanvas = document.createElement("canvas");
+
+function eyesAreOpen(){ return !!(eyeStream && eyeVideo && eyeVideo.readyState >= 2); }
+
+async function openEyes(){
+    if(eyeStream) return true;
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+        logDebug("This browser cannot open a camera here (needs HTTPS or localhost).");
+        return false;
+    }
+    try{
+        eyeStream = await navigator.mediaDevices.getUserMedia({
+            video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" }, audio: false });
+    }catch(e){
+        logDebug("Camera refused or missing: " + e.message);
+        setEyesUI(false);
+        return false;
+    }
+    if(eyeVideo){ eyeVideo.srcObject = eyeStream; try { await eyeVideo.play(); } catch(e){} }
+    setEyesUI(true);
+    try { localStorage.setItem("alex_eyes", "on"); } catch(e){}
+    logDebug("👁 eyes open");
+    return true;
+}
+
+function closeEyes(){
+    if(eyeStream){ eyeStream.getTracks().forEach(t => t.stop()); eyeStream = null; }
+    if(eyeVideo) eyeVideo.srcObject = null;
+    setEyesUI(false);
+    try { localStorage.setItem("alex_eyes", "off"); } catch(e){}
+    logDebug("👁 eyes closed");
+}
+
+function setEyesUI(on){
+    const b = document.getElementById("eyesBtn"); if(b) b.textContent = on ? "Eyes: Open" : "Eyes: Closed";
+    const v = document.getElementById("teleEyesVal"); if(v) v.textContent = on ? "open" : "closed";
+    if(eyeVideo) eyeVideo.classList.toggle("on", on);
+}
+
+function toggleEyes(){ if(eyeStream) closeEyes(); else openEyes(); }
+
+function grabFrame(){
+    if(!eyesAreOpen()) return null;
+    const w = eyeVideo.videoWidth || 640, h = eyeVideo.videoHeight || 480;
+    eyeCanvas.width = w; eyeCanvas.height = h;
+    eyeCanvas.getContext("2d").drawImage(eyeVideo, 0, 0, w, h);
+    const url = eyeCanvas.toDataURL("image/jpeg", 0.72);
+    return url.substring(url.indexOf(",") + 1);
+}
+
+function sendFrame(purpose){
+    const b64 = grabFrame();
+    try { ws.send("__FRAME__" + purpose + ":" + (b64 || "none")); } catch(e){ return; }
+    if(b64) logDebug("👁 sent a frame (" + purpose + ")");
+}
+
+// She asked. If the camera is still starting (a page that reopened its
+// eyes on load and connected at once), wait for the first frame, briefly.
+async function sendFrameWhenReady(purpose, maxWaitMs){
+    const t0 = Date.now();
+    while(eyeStream && !eyesAreOpen() && Date.now() - t0 < maxWaitMs){
+        await new Promise(r => setTimeout(r, 100));
+    }
+    sendFrame(purpose);
+}
+
+async function enrolFace(){
+    if(!(await openEyes())) return;
+    const faceVal = document.getElementById("teleFaceVal");
+    if(faceVal) faceVal.textContent = "enrolling…";
+    for(let i = 0; i < 3; i++){
+        await new Promise(r => setTimeout(r, i === 0 ? 700 : 1000));
+        sendFrame("enrol");
+    }
+}
+
+function showFace(info){
+    const v = document.getElementById("teleFaceVal"); if(!v || !info) return;
+    if(info.enrolled === true){ v.textContent = "enrolled (" + info.samples + " kept)"; return; }
+    if(info.enrolled === false){ v.textContent = "not enrolled: " + (info.reason || ""); return; }
+    if(info.seen === "none"){ v.textContent = "no face seen"; return; }
+    v.textContent = (info.seen || "?") + (info.score !== undefined ? " " + Number(info.score).toFixed(2) : "") + (info.verified ? " ✓" : "");
+}
+
+try { if(localStorage.getItem("alex_eyes") === "on") openEyes(); } catch(e){}
 
 /* ✅ DEBUG HELPER */
 const debugContent = document.getElementById("debugContent");
@@ -1091,6 +1196,16 @@ ws.onmessage = (e)=>{
 
     if(typeof data === "string" && data.startsWith("__READY__")){
         setReadiness(data.replace("__READY__", ""));
+        return;
+    }
+
+    if(typeof data === "string" && data.startsWith("__LOOK__")){
+        sendFrameWhenReady(data.replace("__LOOK__", ""), 3000);
+        return;
+    }
+
+    if(typeof data === "string" && data.startsWith("__FACE__")){
+        try { showFace(JSON.parse(data.replace("__FACE__", ""))); } catch(e){}
         return;
     }
 

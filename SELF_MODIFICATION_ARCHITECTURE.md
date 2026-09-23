@@ -1051,12 +1051,36 @@ The items, in build order:
    to her as tools (item 1). She selects behaviours and commands; the code
    executes them; nothing sub-100 ms is ever hers. Needs from Craig: what
    the phone talks to (WiFi/HTTP, BLE, serial) and the command set.
-9. **Sight.** Browser camera frames over the WebSocket. Two jobs, two
-   models: face verification for Principle 9 (recognition as authority) via
-   a small embedding model, always resident, cheap on the GPU; and "eyes to
-   explore" via a small vision-language model on demand (moondream-class
-   fits; a 7B VLM does not fit beside the chat model). "Look" is a tool.
-   Frames on request and on events, not continuous. LAN only (Principle 4).
+9. **Sight.** — **landed 2026-09-23.** Browser camera frames over the
+   WebSocket she already has (`core/sight.py`). Two jobs, and it turned
+   out one model: qwen3.5:9b lists `vision` in its capabilities (checked:
+   a red circle and a blue square, 4.9 s), so "look" is her own model with
+   a frame attached — no moondream, nothing extra on the GPU. Faces are
+   OpenCV's YuNet + SFace (`models/vision/*.onnx`, 39 MB, CPU, tens of
+   milliseconds), cosine ≥ 0.40 against a rolling window of 15 samples,
+   the shape voice uses (`face_profiles`).
+   - *Page:* "Eyes: Open" opens the camera once and keeps it (a small
+     preview in the rail); nothing is sent until she asks. `__LOOK__<p>`
+     from her, `__FRAME__<p>:<jpeg b64>` back, or `none` with the eyes
+     closed. "Enrol my face" sends three frames; only embeddings are kept.
+     Craig: any standard webcam; testers' pages too — "this will be her
+     eyes after all."
+   - *Verification:* at connect, a creator/super_user with an enrolled
+     face and open eyes is verified from one frame; voice is asked only
+     if that fails or the eyes are closed. Enrolment on a privileged
+     profile requires the session to be verified first (a stranger typing
+     "craig" cannot enrol a face on it).
+   - *Looking:* `look` is a tool and a deliberation resource (`sight`);
+     "what do you see / can you see me / look at this / who is there" runs
+     it before she answers. The description comes back with whose face it
+     is, if she knows them. Its own 40 s budget (frame + description).
+   - *Reading the socket:* the main loop awaits her turn inline, so
+     `core/sight.py` is the only reader while she waits for a frame; audio
+     goes to the session buffer, other text is queued (`conn["pending"]`)
+     and handled by the loop next.
+   - *Not built:* frames on events (a look at connect, at a sound), a
+     foreign-face gate like the foreign-speaker one, liveness (a photo of
+     Craig passes, as a recording passes voice).
 10. **Mood, for real.** — **landed 2026-09-23.** `core/mood.py` is a
     state: three axes (irritation ~30 min half-life, engagement ~10,
     strain ~5) moved by deterministic events she already logs — corrected,
@@ -1085,16 +1109,68 @@ The items, in build order:
     standing offset plus the mood's temporary one is what she is rendered
     with (`core/traits.py` effective()). The 0-10 rows convert on load;
     his verbosity 0 (20 words) is now verbosity −5 (20 words).
-11. **Autonomy within limits.** The frame is the existing principles made
-    mechanical: Principle 10 (the Controller's kill path never depends on
-    her), Principle 4 (no ambient network) widened to "no reach into other
-    systems" — run her process as a limited Windows user with an outbound
-    firewall rule allowing only Ollama, the robot and the camera, so the
-    guarantee does not depend on her code; `check_safety()` to an
+11. **Autonomy within limits.** — **deferred by Craig, 2026-09-23, with
+    the requirements written down; do this the day module authoring is
+    wanted, before the first module.** The frame is the existing principles
+    made mechanical: Principle 10 (the Controller's kill path never depends
+    on her), Principle 4 (no ambient network) widened to "no reach into
+    other systems" — run her process as a limited Windows user with an
+    outbound firewall rule allowing only Ollama, the robot and the camera,
+    so the guarantee does not depend on her code; `check_safety()` to an
     allowlist; protected paths (item 6). Within that: self-review of her
     code (item 1's read-only tools + item 6), and time awareness — the
     clock in her prompt, his hours as a fact, and the existing proactive
     push, so "it's 3am, go to bed" is one rule away.
+
+    **Item 11 requirements (2026-09-23, from Craig's four questions: "Are
+    you positive she would not be permitted to access the internet? She
+    MUST be isolated. Are you positive she cannot override me with her own
+    account? Are you positive she even needs her own account? Is any of
+    this even worth it?")**
+
+    - *Why it is not needed yet:* her proposals are settings, not code,
+      and her tools are read-only, so nothing she does runs as anyone. The
+      need arrives with module authoring — a module is her code in her
+      process with the launching account's rights. Prerequisite, not a
+      feature.
+    - *Account:* a limited Windows user, no admin. Writable: her folder,
+      the DB, the logs, her model caches. Read+execute grants needed for
+      the Python install (it lives under Craig's profile), torch/HF model
+      caches, Piper. The Controller launches her (and the staging copy on
+      5001) under it through a scheduled task registered with the
+      account's password; consoles tail her log file, not stdout.
+    - *Firewall:* the profile's outbound default set to BLOCK, then allow
+      rules scoped to her account (`New-NetFirewallRule -LocalUser`) for
+      this machine's own address (Ollama) and, later, the camera and robot
+      on the LAN. DNS blocked with the rest. She cannot change rules
+      (admin). **Verify by test**: a fetch from her account must fail
+      before it is called done.
+    - *Indirect routes that the firewall does not close:* loopback is not
+      filtered, so any local service that fetches a URL on request is a
+      relay (check the paper-trading dashboard and anything else listening
+      on localhost); a connected browser is a two-way channel, so port
+      5000 must never be forwarded again; Ollama's own /api/pull reaches
+      the model registry.
+    - *Web search must move out of her process:* the inquiry module needs
+      the internet by definition. Under isolation she asks, the Controller
+      (Craig's account) fetches after the gate, she never holds the
+      socket.
+    - *The gate must move under her account:* found while answering —
+      today `run_gate` runs `python -m tests.harness` in HER worktree as
+      Craig, and the harness imports the worktree's `core.*`, so a
+      proposal's code already runs with Craig's rights during the gate.
+      Under item 11 the gate runs as her, or it is a hole.
+    - *Override:* a standard user cannot stop another user's processes,
+      change firewall rules, tasks or services it does not own, or write
+      outside its folders — the Controller, the kill path and her launch
+      are covered. Residual: unpatched privilege-escalation bugs;
+      misconfiguration where something she can write later runs as Craig.
+      Test each path; assume none.
+    - *What it does not replace:* the container's protected paths and the
+      gate stay. Second wall, not a substitute.
+    - *Cost:* an afternoon; Craig at the machine with admin to create the
+      account and enter its password once; "she won't start" gets harder
+      to debug (ACLs).
 
 12. **Friends talking to her — a guest gateway, not an exposed UI.**
     Raised 2026-09-21 04:20-04:45. Craig's first shape was Discord with

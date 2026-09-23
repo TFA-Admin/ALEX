@@ -50,6 +50,7 @@ Ask naturally. She chooses to look before answering; these are her tools
 | read her own log — **creator only**; it carries every user's turns | `read_log` | "Anything in your log I should know about?" |
 | read her own source, a page at a time — **creator only** | `read_my_source` | "Read me the top of core/self_model.py." |
 | the clock | `current_time`, and always in her context | never something she guesses |
+| look through the camera on your page — one frame, described, and whose face it is if she knows you (Eyes: Open on the page; Enrol my face once, while verified) | `look` | "What do you see?" / "Can you see me?" / "Look at this." |
 | read her own test scores: latest and previous per suite, weakest categories | `my_scores` | "What are you bad at?" / "Did the last change help?" |
 | read the projects you have planned for her and where each stands (kept at the Controller, Her → Projects) | `my_projects` | "What's next for you?" / "How is the camera work coming along?" |
 | ask you to consider a change to one of five whitelisted settings of hers — **creator only**; it only files a request; the Controller's Versions tab builds, tests and decides | `propose_change` | "If you could change one thing about how you look things up, what would it be?" |
