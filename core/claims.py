@@ -39,7 +39,15 @@ _CLAIM_RE = re.compile(
     r"accessed|opened|retrieved|queried|consulted|fetched|loaded|cross-referenced|analy[sz]ed|processed the)\b"
     r"|(?:the |your |my )?(?:file|list|log|record|registry|database|queue|entr(?:y|ies)|stream)s? (?:exists?|shows?|says?|contains?|has|have|describes?|indicates?|confirms?)\b"
     r"|there (?:are|is) (?:no|nothing|zero) (?:completed|finished|done|tracked|recorded)\b"
-    r"|(?:i (?:can|do) see|i see) (?:the |your |it )"
+    # 2026-09-23 (Craig: "she claimed to have vision of a room when I had
+    # not turned the camera on" — "The camera is awake... I see nothing
+    # but the empty room"): seeing is a claim of work like any other; the
+    # look tool is the evidence. "I see." and "I see what you mean" are
+    # not claims and are left alone.
+    r"|(?:i (?:can|do|now) see|i see|i am seeing|i'm seeing|i(?:'m| am) looking at|i(?:'ve| have) (?:a )?(?:clear )?(?:view|visual) of)"
+    r"(?=\s+(?!what|why|how|that|your point|the point|no\b|why)\w)"
+    r"|(?:the |my |your )?camera (?:is (?:awake|on|live|active|up|open)|shows|sees|reveals|remains (?:on|live|active|open))\b"
+    r"|(?:the |your )?(?:room|frame) (?:is|looks|appears) \w"
     r")",
     re.I,
 )

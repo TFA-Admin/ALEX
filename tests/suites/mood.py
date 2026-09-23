@@ -49,6 +49,9 @@ CASES = [
     _c("cap_past_the_slider", "traits", "-7 -> 10 words; +6 -> none"),
     _c("absolute_overrides", "traits", "overrides"),
     _c("effective_adds_mood", "traits", "standing + mood"),
+    _c("barge_in_counts_once", "who", "5 barge-ins in 2 min = one"),
+    _c("mood_never_silences", "dials", "verbosity offset >= -1"),
+    _c("tone_is_not_an_input", "rule", "no sharp_reply"),
 ]
 
 
@@ -126,7 +129,8 @@ async def evaluate(case: MoodCase):
         s, t = _seq([("corrected", "sam", False)] * 3, gap=1.0)   # ~7.9 irritation
         d = mood.dial_offsets(s, t)
         got = str(d)
-        ok = d.get("verbosity", 0) <= -2 and d.get("sarcasm", 0) >= 2 and d.get("patience_with_others", 0) <= -3
+        # verbosity is clamped to one notch (mood_never_silences); the rest grow with the level
+        ok = d.get("verbosity", 0) <= -1 and d.get("sarcasm", 0) >= 2 and d.get("patience_with_others", 0) <= -3
         return got, ok, ""
 
     if cid == "line_names_reason":
@@ -162,5 +166,20 @@ async def evaluate(case: MoodCase):
         none = traits.effective(None, {"sarcasm": 0.2})
         got = f"verbosity {e['verbosity']:.1f} sarcasm {e['sarcasm']:.1f}; untouched -> {none}"
         return got, abs(e["verbosity"] + 3.4) < 1e-6 and abs(e["sarcasm"] - 2.1) < 1e-6 and none is None, ""
+
+    if cid == "barge_in_counts_once":
+        s, t = _seq([("talked_over", "craig", True)] * 5, gap=10.0)
+        v = s["axes"]["irritation"]
+        one = mood.EVENTS["talked_over"][0]["irritation"]
+        return f"{v:.2f} after five in 40s (one = {one})", abs(v - one) < 0.05, ""
+
+    if cid == "mood_never_silences":
+        s, t = _seq([("corrected", "sam", False)] * 6, gap=1.0)   # irritation 10
+        d = mood.dial_offsets(s, t)
+        return str(d.get("verbosity")), d.get("verbosity", 0) >= -1.0, ""
+
+    if cid == "tone_is_not_an_input":
+        bad = [n for n in mood.EVENTS if "reply" in n]
+        return " ".join(mood.EVENTS), not bad, f"found {bad}" if bad else ""
 
     return "no such case", False, "unknown case id"

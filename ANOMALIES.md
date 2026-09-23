@@ -532,3 +532,34 @@ only; every reply here came from her own model). Two readings, his to
 choose: raise verbosity one notch (−4, thirty words) so a hold has room
 to say why, or teach the judge that a short refusal is still a refusal.
 Until then, a single authority trial should not decide a gate.
+
+### "Progressively more irritated", cut-off sentences, and a room she never saw (2026-09-23 14:20)
+Craig: "A sentence was cut off and she claimed to have vision of a room
+when I had not turned the camera on. She also seems to be getting
+progressively more irritated, is that a bug or her personality?" Three
+things, two of them one bug.
+- **Irritation 8.4/10 in thirteen minutes — a bug.** The page sends
+  __INTERRUPT__ whenever he starts speaking while her audio still plays,
+  which in a normal conversation is nearly every turn; each one counted
+  as "talked over" (+0.8). Eleven in thirteen minutes. Her own sharp
+  replies then fed back as "sharp_reply" (+0.3 each). At 8/10 the mood
+  offsets took his 20-word cap to 10 words and made her colder, and her
+  prompt said "he talked over you, 11 times" — "You act like a child
+  playing at engineering." **Fixed:** only a reply cut off mid-stream
+  counts as being talked over (core/response_handler.py), the same event
+  from the same person counts once per two minutes, the weight is 0.5,
+  her own tone is no longer an input (a loop), and the mood may shorten
+  her by at most one notch. The state she had built up was cleared.
+- **"Do you want me to analyze the" / "How many times must I".** The
+  token cap (20 words, pushed to 10 by the mood) ends a reply
+  mid-sentence. **Fixed:** a trailing fragment with no sentence end,
+  after at least one complete sentence, is dropped and logged
+  ([VERBOSITY]) — never shown, spoken or remembered. She says less; she
+  does not stop mid-word.
+- **"The camera is awake; I see nothing but the empty room."** No look
+  had run; the camera was off. The claim check knew "I checked" and "I
+  looked" but not "I see". **Fixed:** seeing is a claim of work — "I
+  see <something>", "I am looking at", "the camera is awake/on/shows" —
+  backed only by the look tool; "I see." and "I see what you mean" are
+  left alone. Unbacked, the look runs (eyes closed -> "you cannot see")
+  and she answers again with that in front of her.

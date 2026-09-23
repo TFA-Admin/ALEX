@@ -574,12 +574,11 @@ async def ws_text(websocket: WebSocket):
 
             if msg == "__INTERRUPT__":
                 alex_core.get_session(session_id)["interrupted"] = True
-                # 2026-09-23: being talked over moves her mood (core/mood.py)
-                try:
-                    from core import mood as _mood
-                    await _mood.note("talked_over", who=user_id)
-                except Exception:
-                    pass
+                # 2026-09-23: not a mood event here. The page sends this
+                # whenever he starts speaking while her audio plays, which
+                # in a normal conversation is nearly every turn (11 in 13
+                # minutes, irritation 8/10). Being cut off mid-stream is
+                # what counts — core/response_handler.py notes that one.
                 continue
 
             # "__END_AUDIO__" is the one "__"-prefixed message the client

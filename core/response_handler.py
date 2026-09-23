@@ -22,6 +22,9 @@ from ws.ws_utils import split_speakable_text, enrich_profile
 from core.text_utils import strip_markdown
 from core.voice import playback_seconds
 from core.alex_core import alex_core
+
+_SENTENCE_ENDS = ".!?\u2026\"'\u201d\u2019)]*"
+_ANY_SENTENCE_END = re.compile(r"[.!?\u2026]")
 from core import mood as her_mood
 from db.db import record_response_timing
 from config.logger_config import logger
@@ -118,6 +121,13 @@ class ResponseHandler:
             if session is not None and session.get("interrupted"):
                 interrupted = True
                 logger.info(f"[ACTION] Response to {user_id} interrupted mid-stream by barge-in")
+                # 2026-09-23: THIS is being talked over — cut off while
+                # still composing — not every __INTERRUPT__ the page sends
+                # when he starts speaking as her last words play out.
+                try:
+                    await her_mood.note("talked_over", who=user_id)
+                except Exception:
+                    pass
                 break
 
             full_response += chunk
@@ -181,6 +191,19 @@ class ResponseHandler:
         # brand-new bubble instead of continuing the same one. Sending it
         # BEFORE __END__ (and the profile update, which has no ordering
         # requirement either way) fixes that.
+        # 2026-09-23 (Craig: "a sentence was cut off"): the token cap ends
+        # a reply mid-sentence — "Do you want me to analyze the". A tail
+        # with no sentence end, after at least one complete sentence, is
+        # the cap's fragment: dropped and logged, never shown, spoken or
+        # remembered. She says less; she does not stop mid-word.
+        tail = speech_buffer.strip()
+        if (tail and not interrupted and tail[-1] not in _SENTENCE_ENDS
+                and _ANY_SENTENCE_END.search(full_response[:-len(tail)] if full_response.endswith(tail) else full_response)):
+            logger.info(f"[VERBOSITY] dropped a cut-off fragment: {tail[:80]!r}")
+            if full_response.endswith(tail):
+                full_response = full_response[:-len(tail)].rstrip()
+            speech_buffer = ""
+
         remaining, remaining_spoken = shown_and_spoken(speech_buffer)
 
         if user_id not in NO_SPEECH_USERS and not interrupted and remaining_spoken:

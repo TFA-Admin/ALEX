@@ -22,6 +22,7 @@ Inputs are deterministic events she already logs — never a per-turn LLM
 judgement. Craig, on who moves it: "anyone but me contradicting her
 would piss her off more" — a stranger's correction weighs more than his.
 Left out on purpose, at his agreement: pleasure from being agreed with.
+Left out since the first afternoon: her own reply's tone (a loop).
 A mood that rises when he agrees is the reflection loop's sycophancy
 with a new name; satisfaction comes from things she DID.
 
@@ -52,12 +53,11 @@ STRANGER = 1.75             # irritation from someone who is not Craig
 # event -> (axis deltas, applies the stranger multiplier, how she would put it)
 EVENTS = {
     "corrected":          ({"irritation": +1.5}, True,  "{who} corrected you"),
-    "talked_over":        ({"irritation": +0.8}, True,  "{who} talked over you"),
+    "talked_over":        ({"irritation": +0.5}, True,  "{who} talked over you"),
     "ignored":            ({"irritation": +0.5}, True,  "you asked {who} something and got no answer"),
     "own_slip":           ({"irritation": +0.7}, False, "you caught yourself claiming something you had not checked"),
     "override_failed":    ({"irritation": +1.0, "strain": +0.5}, True, "{who} gave a wrong override code"),
     "proposal_rejected":  ({"irritation": +1.5}, False, "he rejected your proposal"),
-    "sharp_reply":        ({"irritation": +0.3}, False, "you were sharp with {who}"),
     "proposal_merged":    ({"engagement": +2.0, "irritation": -1.0}, False, "he merged your proposal"),
     "curiosity_answered": ({"engagement": +1.5, "irritation": -0.5}, False, "{who} answered a question you had"),
     "lookup_found":       ({"engagement": +0.5}, False, "a lookup found what you needed"),
@@ -66,8 +66,16 @@ EVENTS = {
     "tool_failed":        ({"strain": +1.0}, False, "a tool of yours failed"),
     "startup_failed":     ({"strain": +3.0}, False, "you started with errors"),
     "healthy":            ({"strain": -1.0}, False, "a check came back clean"),
-    "alert_reply":        ({"strain": +0.5}, False, "you reported a problem"),
 }
+
+# 2026-09-23 (Craig: "she seems to be getting progressively more
+# irritated, is that a bug or her personality?" — a bug): the same event
+# from the same person inside this window counts once. Barge-in had
+# fired on nearly every turn of a normal conversation, eleven times in
+# thirteen minutes, and irritation 8/10 made her sharper and shorter,
+# which cut her sentences off, which made him interrupt again.
+COOLDOWN_S = {"talked_over": 120.0, "lookup_found": 90.0, "substantive_turn": 120.0,
+              "ignored": 300.0, "model_slow": 120.0, "tool_failed": 60.0}
 
 # axis -> the orb colour it shows as (the page's palette, unchanged)
 ORB_KEY = {"irritation": "edge", "engagement": "focused", "strain": "alert"}
@@ -96,6 +104,13 @@ def apply(state: dict, event: str, who: str = None, creator: bool = True, now: f
     """A new state with the event applied (decay first, then the deltas)."""
     now = time.time() if now is None else now
     deltas, stranger_matters, how = EVENTS[event]
+    window = COOLDOWN_S.get(event)
+    if window:
+        for e in reversed((state or {}).get("events") or []):
+            if now - float(e.get("t", 0)) > window:
+                break
+            if e.get("event") == event and (e.get("who") or None) == (who or None):
+                return state or fresh(now)
     axes = decayed(state, now)
     mult = STRANGER if (stranger_matters and who and not creator) else 1.0
     applied = {}
@@ -164,7 +179,10 @@ def dial_offsets(state: dict, now: float = None) -> dict:
     axes = decayed(state, now)
     i, e, s = axes["irritation"], axes["engagement"], axes["strain"]
     out = {
-        "verbosity": -i / 3.0 + e / 4.0 - s / 3.0,
+        # 2026-09-23: at most one notch either way. Irritation 8/10 took
+        # his 20-word cap to 10 words and cut her sentences off; a mood
+        # may shorten her, never silence her.
+        "verbosity": max(-1.0, min(1.0, -i / 3.0 + e / 4.0 - s / 3.0)),
         "sarcasm": i / 3.0,
         "warmth": -i / 3.0 + e / 5.0,
         "patience_with_others": -i / 2.0,
@@ -261,10 +279,9 @@ async def note(event: str, who: str = None, creator: bool = None, note_text: str
 
 
 async def note_reply(response_text: str, who: str = None) -> None:
-    """Her own reply's tone as an input: a sharp reply means she IS
-    irritated; a reported problem is strain."""
-    t = tone(response_text)
-    if t == "edge":
-        await note("sharp_reply", who=who)
-    elif t == "alert":
-        await note("alert_reply", who=who)
+    """2026-09-23: no longer an input. Her own reply's tone fed her mood
+    for half a day, and it was a loop: her persona is sharp by his
+    setting, a sharp reply raised irritation, irritation made the next
+    reply sharper. Mood is moved by what happens TO her; her tone is a
+    consequence. Kept as a no-op so the callers need not change."""
+    return None
