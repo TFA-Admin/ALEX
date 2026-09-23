@@ -135,6 +135,20 @@ async def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''')
 
+        # 👁 OBSERVATIONS (2026-09-23): what a glance through the camera
+        # found while nothing was being said (core/sight.py). Text only,
+        # never a frame; pruned after 14 days (core/retention.py).
+        await db.execute('''
+        CREATE TABLE IF NOT EXISTS observations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user TEXT,
+            session_id TEXT,
+            text TEXT,
+            changed REAL,
+            face TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+
         # 🎭 PERSONALITY CHANGE LOG (self-reflection visibility, not a gate)
         await db.execute('''
         CREATE TABLE IF NOT EXISTS personality_log (
@@ -1154,6 +1168,79 @@ async def set_mood_state(state: dict):
             "INSERT INTO system_learning(key, value) VALUES('mood_state', ?) "
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(state),))
         await db.commit()
+
+
+async def add_observation(user: str, text: str, changed: float = 0.0, face: str = "", session_id: str = None) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO observations(user, session_id, text, changed, face) VALUES(?,?,?,?,?)",
+            (user, session_id, text, float(changed or 0.0), face or ""))
+        await db.commit()
+        return cur.lastrowid
+
+
+async def fetch_observations(user: str = None, hours: float = 6.0, limit: int = 10):
+    """Newest first. What she has noticed through the camera lately."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        if user:
+            cur = await db.execute(
+                "SELECT id, user, text, changed, face, created_at FROM observations "
+                "WHERE user=? AND created_at >= datetime('now', ?) ORDER BY id DESC LIMIT ?",
+                (user, f"-{float(hours)} hours", limit))
+        else:
+            cur = await db.execute(
+                "SELECT id, user, text, changed, face, created_at FROM observations "
+                "WHERE created_at >= datetime('now', ?) ORDER BY id DESC LIMIT ?",
+                (f"-{float(hours)} hours", limit))
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def retention_prune(policy: dict) -> dict:
+    """The daily forgetting (core/retention.py). Returns what it removed."""
+    out = {}
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("DELETE FROM observations WHERE created_at < datetime('now', ?)",
+                               (f"-{int(policy['observations_days'])} days",))
+        out["observations"] = cur.rowcount
+        kinds = tuple(policy.get("decisions_noise_kinds") or ())
+        if kinds:
+            marks = ",".join("?" for _ in kinds)
+            cur = await db.execute(
+                f"DELETE FROM decisions WHERE kind IN ({marks}) AND created_at < datetime('now', ?)",
+                (*kinds, f"-{int(policy['decisions_noise_days'])} days"))
+            out["decisions_noise"] = cur.rowcount
+        cur = await db.execute(
+            "DELETE FROM memory WHERE COALESCE(retracted,0)=1 AND created_at < datetime('now', ?)",
+            (f"-{int(policy['memory_retracted_days'])} days",))
+        out["memory_retracted"] = cur.rowcount
+        try:
+            cur = await db.execute("DELETE FROM sessions WHERE connected_at < datetime('now', ?)",
+                                   (f"-{int(policy['sessions_days'])} days",))
+            out["sessions"] = cur.rowcount
+        except Exception:
+            out["sessions"] = 0
+        await db.commit()
+    return out
+
+
+async def set_retention_summary(summary: dict):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO system_learning(key, value) VALUES('retention_last', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(summary),))
+        await db.commit()
+
+
+async def get_retention_summary():
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT value FROM system_learning WHERE key='retention_last'")
+        row = await cursor.fetchone()
+    try:
+        return json.loads(row[0]) if row and row[0] else None
+    except (TypeError, ValueError):
+        return None
 
 
 async def get_personality_locked() -> bool:

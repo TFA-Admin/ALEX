@@ -928,6 +928,19 @@ class System(BaseSystem):
                         "\n    The camera is on and that is the picture. Say what you saw; never say it is dark or that you cannot see.")
                        if saw_now else "")
 
+        # 2026-09-23: what her glances found lately (core/sight.py), so she
+        # can refer to it — "the can that has been on your desk since three".
+        noticed_block = ""
+        try:
+            from db.db import fetch_observations as _fetch_obs
+            _obs = await _fetch_obs(user_id, hours=2.0, limit=3)
+        except Exception:
+            _obs = []
+        if _obs:
+            _lines = "\n".join(f"    - {o['text']}" for o in reversed(_obs))
+            noticed_block = ("\n\n    THROUGH THE CAMERA, LATELY (glances while nothing was said; mention only if it "
+                             "matters or he asks):\n" + _lines)
+
         # 2026-09-23 (Craig: "she now claims I did not authenticate when I
         # can see it did"): nothing told her. The session, stated plainly,
         # last thing before she speaks.
@@ -974,7 +987,7 @@ class System(BaseSystem):
 
     PERSONALITY (this is genuinely yours — express it, don't fight it):
     {personality}
-{hard_rules_block}{dials_block}{sight_block}{session_block}
+{hard_rules_block}{dials_block}{sight_block}{noticed_block}{session_block}
 
     You have access to stored information about the user.
 

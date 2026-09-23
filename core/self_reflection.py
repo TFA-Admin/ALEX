@@ -210,7 +210,7 @@ or
     return new_text
 
 
-async def _reflect_on_curiosity(recent):
+async def _reflect_on_curiosity(recent, noticed=None):
     """Component 11's self-initiated curiosity trigger (2026-07-16): during
     this same reflection pass, notice a real, nameable topic she doesn't
     actually have knowledge about, rather than only reacting when a live
@@ -259,13 +259,18 @@ async def _reflect_on_curiosity(recent):
     convo_text = "\n".join(
         f"{r['user']}: {r['prompt']}\nALEX: {r['response']}" for r in recent
     )
+    # 2026-09-23: what her glances found (core/sight.py) is offered beside
+    # the conversation — "what is the green can on your desk?"
+    noticed_text = ""
+    if noticed:
+        noticed_text = "\n\nThings you noticed through the camera recently:\n" + "\n".join(f"- {n}" for n in noticed)
 
     prompt = f"""You are A.L.E.X, privately reviewing your recent conversations.
 
 Recent conversations:
-{convo_text}
+{convo_text}{noticed_text}
 
-What is the one thing mentioned here that you would most like to know more about? Write the question you would ask him about it.
+What is the one thing mentioned or noticed here that you would most like to know more about? Write the question you would ask him about it.
 
 Respond with ONLY a JSON object:
 {{"topic": "<the thing, in a few words>", "question": "<one natural sentence asking him about it>"}}"""
@@ -795,7 +800,13 @@ async def run_self_reflection():
             curious_user = max(counts, key=counts.get) if counts else None
             curious_turns = [r for r in other_turns if r.get("user") == curious_user]
         try:
-            curiosity = await _reflect_on_curiosity(curious_turns)
+            noticed = []
+            try:
+                from db.db import fetch_observations
+                noticed = [o["text"] for o in await fetch_observations(curious_user, hours=6.0, limit=5)]
+            except Exception:
+                noticed = []
+            curiosity = await _reflect_on_curiosity(curious_turns, noticed=noticed)
         except Exception as e:
             logger.warning(f"⚠️ Curiosity reflection failed: {e}")
             curiosity = None

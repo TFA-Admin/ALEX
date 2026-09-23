@@ -27,6 +27,7 @@ from db.db import (
     get_personality_hard_rules, remove_personality_hard_rule,
     get_personality_locked, set_personality_locked,
     get_personality_traits, set_personality_traits, get_mood_state,
+    fetch_observations, get_retention_summary,
     fetch_recent_personality_changes,
     fetch_active_conclusions, fetch_decisions, fetch_curiosity_queue, fetch_eval_runs,
     fetch_projects, create_project, update_project, PROJECT_STATUSES, record_decision,
@@ -967,7 +968,7 @@ class HerView(QWidget):
             "What she is rendered with because of it is on the Personality tab."))
         self.mood_output = QTextEdit()
         self.mood_output.setReadOnly(True)
-        self.mood_output.setMaximumHeight(220)
+        self.mood_output.setMaximumHeight(320)
         lay.addWidget(self.mood_output)
         mood_btns = QHBoxLayout()
         self.refresh_mood_btn = QPushButton("🔄 Refresh mood")
@@ -1011,6 +1012,27 @@ class HerView(QWidget):
             when = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(float(e.get("t", 0))))
             delta = ", ".join(f"{a} {d:+.1f}" for a, d in (e.get("delta") or {}).items())
             lines.append(f"  {when}  {e.get('note') or e.get('event')}  ({delta})")
+        # 2026-09-23: what her glances found, and what retention removed
+        try:
+            obs = asyncio.run(fetch_observations(None, hours=24.0, limit=6))
+        except Exception:
+            obs = []
+        lines.append("")
+        lines.append("Through the camera, last 24 h (glances; text only, kept 14 days):")
+        if not obs:
+            lines.append("  nothing noticed")
+        for o in obs:
+            lines.append(f"  {to_local(o.get('created_at'))}  [{o.get('user')}{', ' + o['face'] if o.get('face') else ''}]  {o.get('text')}")
+        try:
+            ret = asyncio.run(get_retention_summary())
+        except Exception:
+            ret = None
+        if ret:
+            removed = {k: v for k, v in (ret.get("removed") or {}).items() if v}
+            lines.append("")
+            lines.append("Retention (daily, core/retention.py): last run "
+                         + _time.strftime("%Y-%m-%d %H:%M", _time.localtime(float(ret.get("at", 0))))
+                         + (f", removed {removed}" if removed else ", nothing to remove"))
         self.mood_output.setPlainText("\n".join(lines))
 
     def run_fault_check(self):

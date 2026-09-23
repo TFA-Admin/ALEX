@@ -1078,9 +1078,26 @@ The items, in build order:
      `core/sight.py` is the only reader while she waits for a frame; audio
      goes to the session buffer, other text is queued (`conn["pending"]`)
      and handled by the loop next.
-   - *Not built:* frames on events (a look at connect, at a sound), a
-     foreign-face gate like the foreign-speaker one, liveness (a photo of
-     Craig passes, as a recording passes voice).
+   - *Glances (landed 2026-09-23 evening; Craig: "snapshots, not video
+     — seems doable... glances, an observation store, and observations
+     feeding her curiosity"):* while a page has its eyes open and nothing
+     has been said for 20 s, one frame a minute, compared with the last
+     as a 32x24 grey thumbnail; only a changed scene (mean difference ≥
+     10/255) goes to her model, at most once every two minutes per page.
+     The description is an observation (`observations`, text only, never
+     a frame, pruned after 14 days), shown in her prompt as "through the
+     camera, lately", offered to her curiosity reflection beside the
+     conversation, and listed at Her → Health. A still room costs no GPU.
+   - *Retention (landed with it; Craig: "does anything ever get
+     removed?"):* `core/retention.py`, daily — observations 14 d,
+     tool/speaker decisions 30 d, retracted memory 30 d, sessions 180 d,
+     backups keep 10, the Ollama log cut to its last MB past 5 MB. Her
+     conversation memory, decisions, eval runs, curiosity, facts and
+     personality history are never pruned. Measured before: 3.0 MB after
+     five months; memory ~160 rows/day, decisions ~80/day mostly noise.
+   - *Not built:* a look at connect for a non-creator, a foreign-face
+     gate like the foreign-speaker one, liveness (a photo of Craig
+     passes, as a recording passes voice).
 10. **Mood, for real.** — **landed 2026-09-23.** `core/mood.py` is a
     state: three axes (irritation ~30 min half-life, engagement ~10,
     strain ~5) moved by deterministic events she already logs — corrected,

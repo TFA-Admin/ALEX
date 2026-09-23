@@ -50,6 +50,35 @@ async def periodic_decay():
 # -------------------------
 # SELF-REFLECTION LOOP (personality — fully autonomous, no approval gate)
 # -------------------------
+async def periodic_retention():
+    """2026-09-23: once a day she forgets what is not worth keeping
+    (core/retention.py). First pass ten minutes after start."""
+    from core import retention
+    await asyncio.sleep(600)
+    while True:
+        try:
+            await retention.prune()
+        except Exception as e:
+            logger.warning(f"⚠️ retention failed: {e}")
+        await asyncio.sleep(24 * 3600)
+
+
+async def periodic_glances():
+    """2026-09-23 (Craig: "snapshots, not video... glances, an
+    observation store, and observations feeding her curiosity"). While a
+    page has its eyes open and nothing is being said, one frame a
+    minute, compared cheaply with the last; only a changed scene goes to
+    her model (core/sight.py)."""
+    from core import sight
+    await asyncio.sleep(30)
+    while True:
+        try:
+            await sight.glance_all()
+        except Exception as e:
+            logger.warning(f"⚠️ glance pass failed: {e}")
+        await asyncio.sleep(sight.GLANCE_EVERY_S)
+
+
 async def periodic_mood_tick():
     """2026-09-23: her mood fades on its own (core/mood.py); the orb is
     told once a minute so it fades too, instead of the page guessing."""
@@ -154,6 +183,8 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(periodic_self_reflection())
     asyncio.create_task(periodic_proactive_check())
     asyncio.create_task(periodic_mood_tick())
+    asyncio.create_task(periodic_retention())
+    asyncio.create_task(periodic_glances())
     # 2026-09-21 (roadmap item 6): her author, when nobody is talking to
     # her. Writes one 'authored' proposal row at a time; nothing more.
     from core import idle_author

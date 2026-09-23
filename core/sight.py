@@ -60,6 +60,19 @@ VERIFY_TIMEOUT_S = 4.0          # at connect: the camera may still be starting
 DESCRIBE_TIMEOUT_S = 30.0
 LOOK_TIMEOUT_S = 40.0           # the tool's own budget (frame + description)
 
+# Glances (2026-09-23, Craig: "snapshots, not video — seems doable"). One
+# frame a minute from a page with its eyes open while nothing is being
+# said; compared with the last one as a 32x24 grey thumbnail; only a
+# scene that changed goes to her model, at most once every two minutes
+# per page. The description is an observation (db.observations, text
+# only, 14 days), shown to her as "what you noticed" and offered to her
+# curiosity. ~2.5 s of GPU per described glance; a still room costs none.
+GLANCE_EVERY_S = 60.0
+GLANCE_QUIET_S = 20.0           # nobody has spoken and she is not speaking
+GLANCE_CHANGE = 1.5             # percent of the thumbnail whose pixels moved by more than 20/255 (a can is ~2%)
+GLANCE_DESCRIBE_EVERY_S = 120.0
+GLANCE_SIZE = (32, 24)
+
 _detector = None
 _recognizer = None
 _lock = threading.Lock()
@@ -363,3 +376,107 @@ async def _tell(websocket, info: dict):
         await websocket.send_text("__FACE__" + json.dumps(info))
     except Exception:
         pass
+
+
+# ------------------------------------------------------------------ glances
+def frame_signature(img):
+    """A 32x24 grey thumbnail as float32 — enough to tell a changed scene
+    from a still one, cheap enough to do every minute for every page."""
+    grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    small = cv2.resize(grey, GLANCE_SIZE, interpolation=cv2.INTER_AREA)
+    return small.astype("float32")
+
+
+def frame_change(a, b) -> float:
+    """Percent of thumbnail pixels that moved by more than 20/255. A mean
+    difference diluted a small new object (a can: 3 of 10); a percentage
+    of changed area catches it (2%) and still ignores lighting drift
+    (0%), while a person moving or the lights going off is most of it."""
+    if a is None or b is None:
+        return 100.0
+    return float(100.0 * np.mean(np.abs(a - b) > 20.0))
+
+
+def _busy() -> bool:
+    try:
+        from ws.ws_handlers import generation_lock
+        return generation_lock.locked()
+    except Exception:
+        return False
+
+
+async def describe_glance(b64: str, who: str) -> str:
+    from llm.ollama_client import ollama_manager
+    prompt = (f"This is a glance through the webcam on {who}'s side while nothing is being said. "
+              "In one or two plain sentences: who is there and what they are doing, and any object "
+              "or change worth noticing. State only what is visible; no names, no guesses.")
+    text = await ollama_manager.describe_image(prompt, b64, timeout=DESCRIBE_TIMEOUT_S, num_predict=120)
+    return (text or "").strip()
+
+
+async def glance(session_id: str, conn: dict) -> str:
+    """One glance for one page. Returns the observation text when a
+    changed scene was described, else ""."""
+    if cv2 is None:
+        return ""
+    user_id = conn.get("user_id") or ""
+    try:
+        b64 = await request_frame(conn, "glance", timeout=5.0)
+    except ConnectionError:
+        return ""
+    if not b64:
+        return ""
+    img = decode_frame(b64)
+    if img is None:
+        return ""
+    sig = await asyncio.to_thread(frame_signature, img)
+    change = frame_change(conn.get("glance_sig"), sig)
+    conn["glance_sig"] = sig
+    first = "glance_described_at" not in conn
+    if not first and change < GLANCE_CHANGE:
+        return ""
+    if not first and time.time() - conn.get("glance_described_at", 0) < GLANCE_DESCRIBE_EVERY_S:
+        return ""
+    conn["glance_described_at"] = time.time()
+    info = {}
+    who = await recognise(b64, info)
+    text = await describe_glance(b64, user_id)
+    if not text:
+        return ""
+    face = info.get("seen") or ""
+    from db.db import add_observation
+    try:
+        await add_observation(user_id, text, changed=change, face=face, session_id=session_id)
+    except Exception as e:
+        logger.warning(f"[SIGHT] could not keep the observation: {e}")
+    logger.info(f"[SIGHT] glance at {user_id}'s ({'first' if first else f'changed {change:.0f}%'}"
+                f"{', face ' + face if face else ''}): {text[:120]!r}")
+    if info:
+        await _tell(conn["websocket"], info)
+    return text
+
+
+async def glance_all() -> int:
+    """Every page with its eyes open, if the room is quiet and she is not
+    busy. Called once a minute from main.py."""
+    from ws.ws_handlers import _active_connections
+    from core import idle_author
+    from core.alex_core import alex_core
+    if _busy() or idle_author.idle_for() < GLANCE_QUIET_S:
+        return 0
+    n = 0
+    for session_id, conn in list(_active_connections.items()):
+        if not conn.get("eyes"):
+            continue
+        try:
+            session = alex_core.get_session(session_id)
+            if time.time() < float(session.get("last_addressed_at", 0) or 0) + GLANCE_QUIET_S:
+                continue
+        except Exception:
+            pass
+        try:
+            if await glance(session_id, conn):
+                n += 1
+        except Exception as e:
+            logger.warning(f"[SIGHT] glance at {conn.get('user_id')}'s failed: {e}")
+    return n
