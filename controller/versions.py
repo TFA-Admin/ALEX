@@ -341,18 +341,37 @@ def run_gate(p: dict, log=print, suites=GATE_SUITES) -> dict:
 # ---------------------------------------------------------------------------
 # DECIDE
 # ---------------------------------------------------------------------------
-def approve(p: dict, log=print) -> bool:
-    """Merge the branch into main. Refuses a dirty live tree (a merge on
-    top of uncommitted work is not reversible cleanly) and re-checks the
-    protected paths from the real diff. The caller restarts her."""
-    if main_tree_dirty():
-        log("[VERSIONS] Approve refused — the live tree has uncommitted changes. Commit or stash first.")
-        return False
-    hits = protected_hits(changed_files(p["branch"]))
+def dirty_files() -> list:
+    out = []
+    for line in _git(["status", "--porcelain"]).splitlines():
+        if len(line) > 3:
+            out.append(line[3:].strip().replace("\\", "/"))
+    return out
+
+
+def approve(p: dict, log=print) -> str:
+    """Merge the branch into main. Returns "" on success, else the reason
+    it did not — shown to him as a dialog (2026-09-23: his approval of #4
+    was refused because a roadmap edit was uncommitted at that moment,
+    and the refusal went only to the console; "nothing happened").
+
+    Refuses only when the live tree's uncommitted files OVERLAP the
+    branch's changes — git itself merges cleanly around unrelated dirty
+    files, and the old blanket refusal made every one of Claude's edits
+    a block on his decisions. Re-checks the protected paths from the real
+    diff. The caller restarts her."""
+    changed = changed_files(p["branch"])
+    overlap = sorted(set(dirty_files()) & set(changed))
+    if overlap:
+        reason = "the live tree has uncommitted changes in files this proposal also changes: " + ", ".join(overlap)
+        log(f"[VERSIONS] Approve refused — {reason}")
+        return reason
+    hits = protected_hits(changed)
     if hits:
-        log("[VERSIONS] Approve refused — the branch touches protected paths: " + ", ".join(hits))
+        reason = "the branch touches protected paths: " + ", ".join(hits)
+        log(f"[VERSIONS] Approve refused — {reason}")
         asyncio.run(update_proposal(p["id"], status="rejected", reason="protected paths: " + ", ".join(hits)))
-        return False
+        return reason
     kill_staging(p, log)
     try:
         _git(["merge", "--no-ff", "-q", p["branch"], "-m",
@@ -363,7 +382,7 @@ def approve(p: dict, log=print) -> bool:
             _git(["merge", "--abort"])
         except Exception:
             pass
-        return False
+        return f"git merge failed: {str(e.output)[:300]}"
     _discard_worktree(p["worktree"], p["branch"], log)
     asyncio.run(update_proposal(p["id"], status="merged", worktree=None))
     asyncio.run(record_decision(
@@ -372,7 +391,7 @@ def approve(p: dict, log=print) -> bool:
         evidence=p.get("gate") or "", outcome="merged into main; she restarts on it",
         actor="craig", ref=f"proposals#{p['id']}"))
     log(f"[VERSIONS] Proposal #{p['id']} merged into main")
-    return True
+    return ""
 
 
 def reject(p: dict, reason: str, log=print):

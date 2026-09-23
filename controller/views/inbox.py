@@ -629,12 +629,17 @@ class InboxView(QWidget):
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if confirm != QMessageBox.Yes:
             return
-        ok = False
+        problem = None
         try:
-            ok = versions.approve(p, self.note)
+            problem = versions.approve(p, self.note)
         except Exception as e:
-            self.note(f"⚠️ Approve failed: {e}")
-        if ok:
+            problem = f"{type(e).__name__}: {e}"
+        if problem:
+            # 2026-09-23: say it to his face, not only in the console
+            QMessageBox.warning(self, "Not approved", f"Proposal #{p['id']} was not merged.
+
+{problem}")
+        else:
             self.restart_her()
         self.refresh()
         self.changed()
