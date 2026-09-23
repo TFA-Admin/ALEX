@@ -690,3 +690,17 @@ holding", "look at this" — with the eyes open is a look, whatever the
 classifier scored. The classifier's sight line names those phrasings
 too. Verified with a throwaway user: eyes on, "Do you know what this
 is?", she asked for the frame.
+
+### Stop needs two clicks (2026-09-23, Craig: "when I click to stop ALEX or Ollama it sometimes doesn't stop")
+Stop trusted the process handle the Controller had started: terminate()
+on it, forget it, done. Whenever that process had been replaced — every
+headless restart from a shell today did this (a dozen of them), and
+Ollama's tray app respawns its server on its own — the handle pointed
+at a dead process, terminate() was a silent no-op, and only the second
+click (handle gone, so "find by port") reached the live one. Start had
+the mirror fault: a dead handle made it return without starting.
+**Fixed:** Stop targets whatever serves the port plus the handle if it
+is alive, waits up to six seconds for the port to clear, and kills if
+terminate was ignored; every step is logged. Start ignores a handle
+whose process has exited. Verified: one Stop with no handle cleared
+port 5000 and Start brought her back. Needs the Controller relaunched.

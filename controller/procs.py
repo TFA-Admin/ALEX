@@ -40,8 +40,11 @@ class ProcessManager:
 
     # ---------------- OLLAMA ----------------
     def start_ollama(self):
-        if self.ollama_proc:
+        # 2026-09-23: a handle whose process has exited must not block
+        # Start (the same stale handle that made Stop need two clicks).
+        if self.ollama_proc and self.ollama_proc.poll() is None:
             return
+        self.ollama_proc = None
 
         self.log("[Ollama] Starting...")
 
@@ -146,18 +149,55 @@ class ProcessManager:
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
 
-    def stop_ollama(self):
-        if self.ollama_proc:
-            self.ollama_proc.terminate()
-            self.ollama_proc = None
-        else:
-            pid = find_pid_by_port(11434)
+    # 2026-09-23 (Craig: "when I click to stop ALEX or Ollama it sometimes
+    # doesn't stop, requiring an additional push of the button"). Stop
+    # trusted the handle it had started: terminate() on it, forget it,
+    # done. When that process had already been replaced — every headless
+    # restart from a shell does this, and Ollama's tray app respawns its
+    # server — the handle was a dead process, terminate() was a silent
+    # no-op, and only the SECOND click (handle gone, so "find by port")
+    # reached the live one. Now: whatever serves the port is the target,
+    # plus the handle if it is still alive; then wait for the port to
+    # clear, and kill outright if it has not.
+    def _stop_port(self, label: str, port: int, handle, grace: float = 6.0):
+        pids = set()
+        if handle is not None:
+            if handle.poll() is None:
+                pids.add(handle.pid)
+            else:
+                self.log(f"[SYSTEM] The {label} process this Controller started (PID {handle.pid}) had already "
+                         f"exited; stopping whatever serves port {port} instead")
+        pid = find_pid_by_port(port)
+        if pid:
+            pids.add(pid)
+        if not pids:
+            self.log(f"[SYSTEM] Nothing is serving port {port}; {label} was not running")
+            return False
+        for pid in sorted(pids):
+            try:
+                psutil.Process(pid).terminate()
+                self.log(f"[SYSTEM] Stopped {label} (PID {pid})")
+            except psutil.NoSuchProcess:
+                pass
+            except Exception as e:
+                self.log(f"[SYSTEM] Failed to stop {label} (PID {pid}): {e}")
+        deadline = time.time() + grace
+        while is_port_open(port) and time.time() < deadline:
+            time.sleep(0.2)
+        if is_port_open(port):
+            pid = find_pid_by_port(port)
             if pid:
                 try:
-                    psutil.Process(pid).terminate()
-                    self.log(f"[SYSTEM] Stopped externally-launched Ollama (PID {pid})")
+                    psutil.Process(pid).kill()
+                    self.log(f"[SYSTEM] {label} (PID {pid}) ignored terminate for {grace:.0f}s — killed")
                 except Exception as e:
-                    self.log(f"[SYSTEM] Failed to stop Ollama: {e}")
+                    self.log(f"[SYSTEM] {label} (PID {pid}) still holds port {port} and could not be killed: {e}")
+                    return False
+        return True
+
+    def stop_ollama(self):
+        handle, self.ollama_proc = self.ollama_proc, None
+        self._stop_port("Ollama", 11434, handle)
 
         # "ollama app.exe" is a separate Windows tray supervisor (launched
         # at login, independent of anything ALEX/the Controller starts) —
@@ -188,8 +228,9 @@ class ProcessManager:
 
     # ---------------- ALEX ----------------
     def start_alex(self):
-        if self.alex_proc:
+        if self.alex_proc and self.alex_proc.poll() is None:
             return
+        self.alex_proc = None
 
         self.log("[ALEX] Starting...")
 
@@ -214,17 +255,8 @@ class ProcessManager:
         )
 
     def stop_alex(self):
-        if self.alex_proc:
-            self.alex_proc.terminate()
-            self.alex_proc = None
-        else:
-            pid = find_pid_by_port(5000)
-            if pid:
-                try:
-                    psutil.Process(pid).terminate()
-                    self.log(f"[SYSTEM] Stopped externally-launched A.L.E.X (PID {pid})")
-                except Exception as e:
-                    self.log(f"[SYSTEM] Failed to stop A.L.E.X: {e}")
+        handle, self.alex_proc = self.alex_proc, None
+        self._stop_port("A.L.E.X", 5000, handle)
 
     def restart_alex(self):
         """Fast restart — the server process only, not Ollama or this
