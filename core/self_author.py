@@ -397,8 +397,27 @@ async def measure(key: str) -> str:
         r = runs[0]
         cats = r.get("by_category") or {}
         parts = [f"{k} {v[0]}/{v[1]}" for k, v in cats.items() if k.startswith("status")]
-        return (f"latest intent suite {r['passed']}/{r['total']} ({str(r.get('created_at'))[:10]}): "
-                + ", ".join(parts) + f"; failed cases: {', '.join(r.get('failures') or []) or 'none'}.")
+        failures = list(r.get("failures") or [])
+        text = (f"latest intent suite {r['passed']}/{r['total']} ({str(r.get('created_at'))[:10]}): "
+                + ", ".join(parts) + f"; failed cases: {', '.join(failures) or 'none'}.")
+        # 2026-09-23 (projects #19, after proposal #5): the failing cases'
+        # WORDING, not just their ids, so she can add the example that
+        # would catch them — and a few that must keep NOT matching, so
+        # the line is not widened until everything is a status check.
+        try:
+            from tests.suites import intent as _suite
+            by_id = {c.id: c for c in _suite.CASES}
+            failed = [by_id[i] for i in failures if i in by_id]
+            if failed:
+                text += " What those say, and what they should have been read as: " + "; ".join(
+                    f"\"{c.text}\" -> {c.expect}" for c in failed[:6]) + "."
+            keep = [c for c in _suite.CASES if c.category == "status_misfire"][:5]
+            if keep:
+                text += (" These are NOT status checks and must stay that way: "
+                         + "; ".join(f"\"{c.text}\"" for c in keep) + ".")
+        except Exception as e:
+            text += f" (could not read the suite's cases: {e})"
+        return text
     return "no measurement defined for this target"
 
 
