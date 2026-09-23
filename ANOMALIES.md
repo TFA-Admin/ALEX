@@ -607,3 +607,17 @@ work; (4) her six false denials of that afternoon (camera dark, not
 Craig, voice print) were retracted from her memory so they stop
 steering her. Untested with a real voice match — that is his next
 connection.
+
+### Verified at 0.81, told "text clients lack verification data" (2026-09-23 14:51)
+Craig: "something is still wrong, now she's claiming I'm validating via
+text only." He had not typed anything. The cause was mine: to test the
+previous fix I had connected over text AS "craig" three minutes earlier.
+That session is unverified by design, her replies to it ("Text clients
+bypass authorization; your security is compromised", "Verification
+remains pending; your text client offered no proof") were stored as her
+conversation with HIM, and when he connected by voice she echoed them —
+in phrasings the new check did not yet know. **Fixed:** those six rows
+retracted; the denial patterns widened to "verification remains
+pending", "text proves nothing", "lacks verification data", "prove your
+identity", "attempt voice enrolment". **Rule for me:** never probe her
+under his name; a throwaway user, purged after, or the log.

@@ -301,6 +301,17 @@ _AUTH_DENIAL_RE = re.compile(
     r"|you (?:have not|haven't|did not|didn't|never) (?:been )?(?:verified|authenticated|proven)"
     r"|you are not craig"
     r"|(?:your )?identity (?:is |remains )?(?:unverified|unconfirmed|unproven|not confirmed)"
+    # 2026-09-23 14:51, voice verified at 0.81 and still: "The verification
+    # remains pending. Prove your identity by stating any sentence." and
+    # "Text clients lack verification data; your text proves nothing about
+    # identity." Every way she has found to say it so far.
+    r"|(?:the |your )?verification (?:remains|is|is still|stays) (?:pending|incomplete|outstanding|open|required|needed)"
+    r"|prove your identity"
+    r"|(?:your )?(?:text|typing|words?) (?:proves?|offers?|provides?|establishes?) nothing"
+    r"|(?:text|typed) clients? (?:lacks?|offers? no|has no|have no) (?:verification|proof|identity)"
+    r"|(?:offered|provided|gave|with) no proof"
+    r"|(?:attempt|start|begin|do|run) (?:a )?(?:voice )?enrol(?:l)?ment"
+    r"|(?:state|say|speak) (?:any|a) sentence (?:now|first|to verify|so i can verify)"
     r")\b",
     re.I,
 )
