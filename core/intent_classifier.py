@@ -96,7 +96,7 @@ Separately, before A.L.E.X. answers, decide what she needs to look at to answer 
   projects — the list of projects he has planned for her and where each stands: use when he asks what is next for her, what she is being built toward, whether she can see his list, or how some piece of work is coming along
   scores — her measured test scores: use when he asks how she is doing on her tests, what she is bad at, or whether a change helped
   time — the current date, time and day: use when he asks the time, the date, the day, how long since or until something, or whether she knows what time it is
-  sight — her camera, one frame: use when he asks what she sees, whether she can see him, who is there, what he is holding or wearing, what the room looks like, or tells her to look at something
+  sight — her camera, one frame: use when he asks what she sees, whether she can see him, who is there, what he is holding, wearing or showing, "what is this" / "do you know what this is" (he is holding something up), what the room looks like, or tells her to look at something
 Add these keys to the SAME JSON object as the category above: "memory", "modules", "state", "log", "code", "diagnostics", "projects", "scores", "time", "sight" (each an integer 0-10), "search" (a few words to search his memory for), "path" (the file path if code is needed, else "")."""
 
 

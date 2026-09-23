@@ -587,6 +587,15 @@ async def ws_text(websocket: WebSocket):
             # actually sends — it MUST reach process_message() below, which
             # is what triggers audio.process_end() to transcribe it. Every
             # other "__"-prefixed string is a genuine stray control signal.
+            # 👁 the page's eyes opened or closed (2026-09-23): kept on the
+            # connection so a "what is this?" with the eyes open is a look.
+            if msg.startswith("__EYES__"):
+                conn_ = _active_connections.get(session_id)
+                if conn_ is not None:
+                    conn_["eyes"] = msg.endswith("on")
+                    logger.info(f"[SIGHT] {user_id}'s eyes {'open' if conn_['eyes'] else 'closed'}")
+                continue
+
             if msg.startswith("__") and msg != "__END_AUDIO__":
                 continue
 

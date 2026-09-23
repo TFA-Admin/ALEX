@@ -33,6 +33,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 import threading
 import time
 
@@ -180,6 +181,30 @@ def deliver_frame(conn: dict, msg: str) -> bool:
         return False
     fut.set_result(None if payload in ("", "none") else payload)
     return True
+
+
+# ------------------------------------------------------------- eyes state
+# 2026-09-23 (Craig held a can up: "Alex do you know what this is?" — the
+# classifier scored sight 0 and she answered "Identify the object; I have
+# no omniscient database"). The page now says when its eyes open or
+# close (__EYES__on/off), so a "what is this" with the eyes open is a
+# look, deterministically, whatever the classifier thought.
+_DEMONSTRATIVE_RE = re.compile(
+    r"\b(?:what(?:'s| is) (?:this|that|it)\b|do you know what (?:this|that|it) is|what am i (?:holding|wearing|showing)"
+    r"|(?:look|looking) at (?:this|that|it|me)\b|can you see (?:this|that|it|me)\b|(?:see|recogni[sz]e) (?:this|that)\b"
+    r"|what do you (?:see|think of this|make of this)|guess what (?:this|it) is|(?:identify|describe) (?:this|that|it))",
+    re.I,
+)
+
+
+def eyes_open(user_id: str) -> bool:
+    from ws.ws_handlers import _active_connections
+    return any(c.get("eyes") for c in list(_active_connections.values()) if c.get("user_id") == user_id)
+
+
+def wants_a_look(user_id: str, text: str) -> bool:
+    """He is pointing at something and his eyes are open."""
+    return bool(text) and eyes_open(user_id) and bool(_DEMONSTRATIVE_RE.search(text))
 
 
 # ------------------------------------------------------------- recognising

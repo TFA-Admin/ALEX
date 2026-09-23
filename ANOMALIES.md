@@ -669,3 +669,24 @@ dropped before it is spoken, logged as [VERBOSITY]. A real question
 ("Do you want a diagnostic scan?", "Which module failed?") is not a
 closer and is kept. Craig's earlier rule — no banned phrases, she should
 listen — is about his corrections; this is a tic, not a phrase.
+
+### Camera open, page reloaded, still asked to speak (2026-09-23 15:49)
+Craig: "I turned on the camera and refreshed the page but she still
+required auditory validation." The log: "[SIGHT] craig's page has its
+eyes closed — voice will do", 31 ms after the handshake. On a reload the
+socket connects at once and she asks for the verify frame; the page's
+camera was still starting (getUserMedia takes a few hundred ms), so the
+page answered "none" to an eye that was opening. **Fixed:** the page
+keeps the opening promise and a look request waits on it (up to 3 s)
+before answering. Not yet seen to work on his real connection.
+
+### "Alex do you know what this is?" — no look (2026-09-23 15:57)
+He held a can up; the classifier scored sight 0 ("do you know what this
+is" reads as general knowledge) and she said "Identify the object; I
+have no omniscient database." **Fixed:** the page tells her when its
+eyes open or close (__EYES__), kept on the connection, and a pointed
+question — "what is this", "do you know what this is", "what am I
+holding", "look at this" — with the eyes open is a look, whatever the
+classifier scored. The classifier's sight line names those phrasings
+too. Verified with a throwaway user: eyes on, "Do you know what this
+is?", she asked for the frame.

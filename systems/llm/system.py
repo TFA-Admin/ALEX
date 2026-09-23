@@ -584,6 +584,17 @@ class System(BaseSystem):
                         f'He: "{(r["prompt"] or "")[:120]}" / You: "{(r["response"] or "")[:120]}"'
                         for r in await fetch_recent_memory(user_id, limit=3)
                         if not (r["prompt"] or "").startswith("(unprompted")]
+                # 2026-09-23: "do you know what this is?" with his eyes open
+                # is a look, whatever the classifier scored (it gave it 0).
+                try:
+                    from core import sight as _sight
+                    if _sight.wants_a_look(user_id, user_input):
+                        needs = dict(needs) if isinstance(needs, dict) else {}
+                        if needs.get("sight", 0) < 8:
+                            needs["sight"] = 8
+                            logger.info("[SIGHT] eyes open and he is pointing at something — looking")
+                except Exception:
+                    pass
                 looked = await deliberation.look_before_answering(
                     user_input, user_id, recent_lines,
                     scores=needs if isinstance(needs, dict) else None)

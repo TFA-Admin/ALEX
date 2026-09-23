@@ -806,6 +806,7 @@ function setVersion(info){
 // JPEG per look, or "none" while the eyes are closed. Craig: any
 // standard webcam, testers' pages too — "this will be her eyes after all."
 let eyeStream = null;
+let eyesOpening = null;   // the getUserMedia promise while the camera starts
 const eyeVideo = document.getElementById("eyePreview");
 const eyeCanvas = document.createElement("canvas");
 
@@ -813,20 +814,33 @@ function eyesAreOpen(){ return !!(eyeStream && eyeVideo && eyeVideo.readyState >
 
 async function openEyes(){
     if(eyeStream) return true;
+    if(eyesOpening) return eyesOpening;
     if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
         logDebug("This browser cannot open a camera here (needs HTTPS or localhost).");
         return false;
     }
-    try{
-        eyeStream = await navigator.mediaDevices.getUserMedia({
-            video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" }, audio: false });
-    }catch(e){
-        logDebug("Camera refused or missing: " + e.message);
-        setEyesUI(false);
-        return false;
-    }
+    // 2026-09-23 (Craig: "I turned on the camera and refreshed the page
+    // but she still required auditory validation"): on a reload the
+    // socket connects and she asks for the verify frame ~30 ms later,
+    // while getUserMedia is still starting. The request now waits on this
+    // promise instead of answering "none" to an eye that was opening.
+    eyesOpening = (async () => {
+        try{
+            eyeStream = await navigator.mediaDevices.getUserMedia({
+                video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" }, audio: false });
+        }catch(e){
+            logDebug("Camera refused or missing: " + e.message);
+            setEyesUI(false);
+            return false;
+        }
+        return true;
+    })();
+    const opened = await eyesOpening;
+    eyesOpening = null;
+    if(!opened) return false;
     if(eyeVideo){ eyeVideo.srcObject = eyeStream; try { await eyeVideo.play(); } catch(e){} }
     setEyesUI(true);
+    tellEyes();
     try { localStorage.setItem("alex_eyes", "on"); } catch(e){}
     logDebug("👁 eyes open");
     return true;
@@ -836,8 +850,16 @@ function closeEyes(){
     if(eyeStream){ eyeStream.getTracks().forEach(t => t.stop()); eyeStream = null; }
     if(eyeVideo) eyeVideo.srcObject = null;
     setEyesUI(false);
+    tellEyes();
     try { localStorage.setItem("alex_eyes", "off"); } catch(e){}
     logDebug("👁 eyes closed");
+}
+
+// She keeps the state on the connection (__EYES__on/off), so "what is
+// this?" with the eyes open is a look. Sent on every change and again
+// when the profile arrives, since the loop that reads it starts then.
+function tellEyes(){
+    try { if(ws && ws.readyState === 1) ws.send("__EYES__" + (eyeStream ? "on" : "off")); } catch(e){}
 }
 
 function setEyesUI(on){
@@ -867,6 +889,9 @@ function sendFrame(purpose){
 // eyes on load and connected at once), wait for the first frame, briefly.
 async function sendFrameWhenReady(purpose, maxWaitMs){
     const t0 = Date.now();
+    if(eyesOpening){
+        try { await Promise.race([eyesOpening, new Promise(r => setTimeout(r, maxWaitMs))]); } catch(e){}
+    }
     while(eyeStream && !eyesAreOpen() && Date.now() - t0 < maxWaitMs){
         await new Promise(r => setTimeout(r, 100));
     }
@@ -1143,6 +1168,7 @@ ws.onmessage = (e)=>{
     }
 
     if(typeof data === "string" && data.startsWith("__PROFILE__")){
+        setTimeout(tellEyes, 300);
         const json = JSON.parse(data.replace("__PROFILE__", ""));
         let html = "";
 
