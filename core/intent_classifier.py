@@ -54,7 +54,7 @@ Classify this message into EXACTLY ONE of these categories:
 
 3. "job" — the user is stating their job/profession (e.g. "my job is a teacher", "I work as an engineer").
 
-4. "status_check" — the user is asking A.L.E.X. to check, test, run, or report on her OWN operational status or systems, in ANY phrasing, including short/casual ones (e.g. "are you okay", "are you working correctly", "check your systems", "is everything working", "run/perform/do a diagnostic (on yourself)", "system check"), including asking whether any of her systems or modules are disabled or off, or asking the status of one named part of her (Ollama, the database, a module). This is NOT about the user's own status or feelings — only hers.
+4. "status_check" — the user is asking A.L.E.X. to check, test, run, or report on her OWN operational status or systems, in ANY phrasing, including short/casual ones (e.g. "are you okay", "are you working correctly", "check your systems", "is everything working", "run/perform/do a diagnostic (on yourself)", "system check"), including asking whether any of her systems or modules are disabled or off, or asking the status of one named part of her (Ollama, the database, a module). This is NOT about the user's own status or feelings — only hers. Additionally, the system should correctly identify queries about disabled systems or components.
 
 5. "permission_command" — the user is asking to update a stored value AND provides an authorization code together in the same message (e.g. "set my job to teacher with code 1234").
 
