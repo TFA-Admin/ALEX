@@ -636,9 +636,7 @@ class InboxView(QWidget):
             problem = f"{type(e).__name__}: {e}"
         if problem:
             # 2026-09-23: say it to his face, not only in the console
-            QMessageBox.warning(self, "Not approved", f"Proposal #{p['id']} was not merged.
-
-{problem}")
+            QMessageBox.warning(self, "Not approved", f"Proposal #{p['id']} was not merged.{chr(10)}{chr(10)}{problem}")
         else:
             self.restart_her()
         self.refresh()
