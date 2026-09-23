@@ -1111,6 +1111,28 @@ async def set_personality_traits(traits: dict):
         await db.commit()
 
 
+async def get_mood_state():
+    """Her mood (core/mood.py) as last stored, or None. One JSON row; both
+    her process and the Controller read and write it."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT value FROM system_learning WHERE key='mood_state'")
+        row = await cursor.fetchone()
+    if not row or not row[0]:
+        return None
+    try:
+        return json.loads(row[0])
+    except (TypeError, ValueError):
+        return None
+
+
+async def set_mood_state(state: dict):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO system_learning(key, value) VALUES('mood_state', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(state),))
+        await db.commit()
+
+
 async def get_personality_locked() -> bool:
     """2026-09-21 (Craig, after writing her personality himself and finding
     it overwritten within the hour by a spoken sentence the classifier read

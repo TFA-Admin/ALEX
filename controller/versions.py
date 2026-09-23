@@ -70,7 +70,7 @@ PROTECTED_PATHS = (
 
 # What the gate runs. The deterministic suite imports the WORKTREE's code
 # (cwd) and needs no instance; the judged one talks to the staging port.
-GATE_SUITES = (("intent", 1), ("onboarding", 1), ("authority", 1))
+GATE_SUITES = (("mood", 1), ("intent", 1), ("onboarding", 1), ("authority", 1))
 
 
 def _git(args, cwd=ALEX_DIR) -> str:
@@ -385,6 +385,7 @@ def approve(p: dict, log=print) -> str:
         return f"git merge failed: {str(e.output)[:300]}"
     _discard_worktree(p["worktree"], p["branch"], log)
     asyncio.run(update_proposal(p["id"], status="merged", worktree=None))
+    _note_mood("proposal_merged")
     asyncio.run(record_decision(
         "approval", f"He approved proposal #{p['id']}: {p['title']}",
         reasoning="His call, at the Controller, after the gate and (if he chose) talking to the staged version.",
@@ -394,11 +395,21 @@ def approve(p: dict, log=print) -> str:
     return ""
 
 
+def _note_mood(event: str):
+    """2026-09-23: his verdict on her proposal moves her mood (core/mood.py)."""
+    try:
+        from core import mood as _mood
+        asyncio.run(_mood.note(event, who="craig", creator=True))
+    except Exception:
+        pass
+
+
 def reject(p: dict, reason: str, log=print):
     kill_staging(p, log)
     if p.get("worktree"):
         _discard_worktree(p["worktree"], p["branch"] or branch_name(p["id"]), log)
     asyncio.run(update_proposal(p["id"], status="rejected", reason=reason, worktree=None))
+    _note_mood("proposal_rejected")
     asyncio.run(record_decision(
         "rejection", f"He rejected proposal #{p['id']}: {p['title']}",
         reasoning=reason, evidence=p.get("gate") or "",

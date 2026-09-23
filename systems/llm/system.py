@@ -61,7 +61,17 @@ from db.db import (
     get_personality_hard_rules, list_module_registry, fetch_decisions, get_personality_traits
 )
 from core.knowledge_filter import is_worth_keeping
-from core import self_model, corrections as corr, tools as her_tools, deliberation, claims as her_claims, traits as her_traits
+from core import self_model, corrections as corr, tools as her_tools, deliberation, claims as her_claims, traits as her_traits, mood as her_mood
+
+
+def _mood_slow(seconds: float, after: float = 12.0):
+    """2026-09-23: a slow first token is strain (core/mood.py)."""
+    if seconds > after:
+        try:
+            import asyncio as _asyncio
+            _asyncio.create_task(her_mood.note("model_slow"))
+        except Exception:
+            pass
 from systems.controller._role_gates import require_creator
 from core.phrasebook import get_phrase
 from config.logger_config import logger
@@ -303,11 +313,16 @@ class System(BaseSystem):
                     logger.info(
                         f"[ACTION] Curiosity about {awaiting_topic!r} answered: "
                         f"{user_input[:80]!r}")
+                    await her_mood.note("curiosity_answered", who=user_id)
             except Exception as e:
                 logger.warning(f"⚠️ could not keep the answer: {e}")
         elif awaiting_topic:
             # Too short to be an answer — keep waiting one more turn.
             session["awaiting_curiosity_answer"] = awaiting_topic
+
+        # 2026-09-23: a real conversation engages her (core/mood.py).
+        if len(user_input.split()) >= 25:
+            await her_mood.note("substantive_turn", who=user_id)
 
         # -------------------------
         # "STOP SAYING THAT" (2026-09-20)
@@ -389,6 +404,7 @@ class System(BaseSystem):
                         f"{'binding' if is_creator else 'advisory only'}")
 
                 session["just_corrected"] = told
+                await her_mood.note("corrected", who=user_id, creator=is_creator)
             else:
                 # 2026-09-20 (Craig: "would she ask for clarification if I
                 # were to say dont say that on the first utterance"). She
@@ -577,6 +593,8 @@ class System(BaseSystem):
             if looked:
                 context_blocks.append(looked)
                 evidence_ran = her_claims.real_evidence(looked)
+                if evidence_ran:
+                    await her_mood.note("lookup_found", who=user_id)
 
         # 2026-09-21 (evening): her recent slips, as facts. core/claims.py
         # records a 'fabrication' decision when a reply claimed work she had
@@ -873,12 +891,22 @@ class System(BaseSystem):
 
         # 2026-09-22: the dials (core/traits.py). Rendered as words below
         # the rules; the verbosity dial also caps the reply's tokens.
+        # 2026-09-23: his standing adjustments plus her mood right now
+        # (core/mood.py) — the mood adds temporary offsets that grow with
+        # how she is, and one line saying why, so what she is rendered
+        # with this turn is the sum.
         try:
             dials = await get_personality_traits()
         except Exception as e:
             logger.warning(f"⚠️ could not read her dials: {e}")
             dials = None
-        dials_block = her_traits.render(dials)
+        try:
+            mood_state = await her_mood.state()
+        except Exception as e:
+            logger.warning(f"⚠️ could not read her mood: {e}")
+            mood_state = None
+        dials = her_traits.effective(dials, her_mood.dial_offsets(mood_state) if mood_state else {})
+        dials_block = her_traits.render(dials, mood_line=her_mood.line(mood_state) if mood_state else "")
         reply_tokens = her_traits.num_predict(dials)
 
         hard_rules_block = ""
@@ -1144,7 +1172,7 @@ class System(BaseSystem):
                 async for chunk in ollama_manager.generate_stream(sys_prompt + user_tail):
                     if first_chunk_at is None:
                         first_chunk_at = time.time()
-                        logger.info(f"[TIMING] generation time-to-first-chunk: {first_chunk_at - gen_start:.2f}s")
+                        logger.info(f"[TIMING] generation time-to-first-chunk: {first_chunk_at - gen_start:.2f}s"); _mood_slow(first_chunk_at - gen_start)
                     out = _filter(chunk)
                     if out:
                         yield out
@@ -1162,7 +1190,7 @@ class System(BaseSystem):
                             continue
                         if first_chunk_at is None:
                             first_chunk_at = time.time()
-                            logger.info(f"[TIMING] generation time-to-first-chunk: {first_chunk_at - gen_start:.2f}s")
+                            logger.info(f"[TIMING] generation time-to-first-chunk: {first_chunk_at - gen_start:.2f}s"); _mood_slow(first_chunk_at - gen_start)
                         said += payload
                         out = _filter(payload)
                         if out:
@@ -1243,6 +1271,7 @@ class System(BaseSystem):
                     continue
                 await gen.aclose()
                 logger.info(f"[CLAIM] unbacked {found} in {clause.strip()!r} — not spoken; looking first")
+                await her_mood.note("own_slip", who=user_id)
                 block = await her_claims.gather_evidence(user_input, user_id, needs_seen, clause)
                 try:
                     await record_decision(

@@ -50,6 +50,20 @@ async def periodic_decay():
 # -------------------------
 # SELF-REFLECTION LOOP (personality — fully autonomous, no approval gate)
 # -------------------------
+async def periodic_mood_tick():
+    """2026-09-23: her mood fades on its own (core/mood.py); the orb is
+    told once a minute so it fades too, instead of the page guessing."""
+    from core import mood as her_mood
+    from ws.ws_handlers import broadcast_signal, _active_connections
+    while True:
+        await asyncio.sleep(60)
+        try:
+            if _active_connections:
+                await broadcast_signal("__MOOD__" + her_mood.payload(await her_mood.state()))
+        except Exception as e:
+            logger.warning(f"⚠️ mood tick failed: {e}")
+
+
 async def periodic_self_reflection():
     # 2026-07-16: found live — this used to fire immediately on every
     # startup with zero delay, meaning its own real Ollama calls (curiosity
@@ -139,6 +153,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(periodic_decay())
     asyncio.create_task(periodic_self_reflection())
     asyncio.create_task(periodic_proactive_check())
+    asyncio.create_task(periodic_mood_tick())
     # 2026-09-21 (roadmap item 6): her author, when nobody is talking to
     # her. Writes one 'authored' proposal row at a time; nothing more.
     from core import idle_author

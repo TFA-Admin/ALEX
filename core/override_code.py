@@ -84,5 +84,18 @@ async def override_code_status(user_id: str, msg: str) -> str:
     if real_code and real_code in _normalize_code(msg):
         return "valid"
     if "override code" in msg:
+        # 2026-09-23: a wrong code moves her mood (core/mood.py) — once per
+        # message, since several handlers ask about the same sentence.
+        global _last_invalid
+        if _last_invalid != (user_id, msg):
+            _last_invalid = (user_id, msg)
+            try:
+                from core import mood as _mood
+                await _mood.note("override_failed", who=user_id)
+            except Exception:
+                pass
         return "invalid"
     return "absent"
+
+
+_last_invalid = None

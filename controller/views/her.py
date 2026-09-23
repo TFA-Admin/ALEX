@@ -15,17 +15,18 @@ from datetime import datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget,
     QTableWidget, QAbstractItemView, QTextEdit, QLineEdit, QMessageBox,
-    QSlider, QGridLayout, QCheckBox, QComboBox,
+    QSlider, QGridLayout, QCheckBox, QComboBox, QSpinBox,
 )
 from PySide6.QtCore import Qt
-from core import traits as her_traits
+import time as _time
+from core import traits as her_traits, mood as her_mood
 
 from db.db import (
     get_personality, set_personality, DEFAULT_PERSONALITY,
     log_personality_change, reset_all_phrases, add_personality_hard_rule,
     get_personality_hard_rules, remove_personality_hard_rule,
     get_personality_locked, set_personality_locked,
-    get_personality_traits, set_personality_traits,
+    get_personality_traits, set_personality_traits, get_mood_state,
     fetch_recent_personality_changes,
     fetch_active_conclusions, fetch_decisions, fetch_curiosity_queue, fetch_eval_runs,
     fetch_projects, create_project, update_project, PROJECT_STATUSES, record_decision,
@@ -176,35 +177,57 @@ class HerView(QWidget):
         # Craig: "would it be possible to link her persona to slider bars?"
         # Seven dials, rendered into her prompt as words each turn
         # (core/traits.py); verbosity also caps the reply in code.
-        lay.addWidget(QLabel("Dials — they shape how the description comes out; Verbosity also caps her reply length in code:"))
+        # 2026-09-23 (Craig: "instead of having them be a slider, make
+        # them just adjust whatever the value is up or down... if something
+        # isn't quite right where the slider would be maxed out, I would
+        # still be able to make adjustment"): signed offsets with no
+        # ceiling, and her mood's own temporary offset shown beside his.
+        lay.addWidget(QLabel(
+            "Adjustments — each pushes that trait up or down from the written description, with no ceiling "
+            "(0 = as written, ±1 a little, ±2–3 strongly, ±4–5 extreme, ±6 and beyond overrides the description). "
+            "Her mood adds a temporary amount of its own; the right column is what she is rendered with now. "
+            "Verbosity also caps her reply length in code."))
         grid = QGridLayout()
-        self.dial_sliders = {}
-        self.dial_values = {}
-        for row_i, (key, label, _phrases) in enumerate(her_traits.TRAITS):
+        for col, head in enumerate(("Trait", "His adjustment", "Mood now", "Effective")):
+            h = QLabel(f"<b>{head}</b>")
+            grid.addWidget(h, 0, col)
+        self.dial_spins = {}
+        self.dial_mood_lbls = {}
+        self.dial_effective_lbls = {}
+        self._mood_state = None
+        self._mood_offsets_cache = {}
+        for row_i, (key, label, _less, _more) in enumerate(her_traits.TRAITS, start=1):
             grid.addWidget(QLabel(label), row_i, 0)
-            slider = QSlider(Qt.Horizontal)
-            slider.setRange(0, 10)
-            slider.setValue(her_traits.DEFAULTS[key])
-            slider.setTickInterval(1)
-            value_lbl = QLabel(str(her_traits.DEFAULTS[key]))
-            value_lbl.setMinimumWidth(24)
-            slider.valueChanged.connect(lambda v, k=key: self._dial_moved(k, v))
-            grid.addWidget(slider, row_i, 1)
-            grid.addWidget(value_lbl, row_i, 2)
-            self.dial_sliders[key] = slider
-            self.dial_values[key] = value_lbl
+            spin = QSpinBox()
+            spin.setRange(-her_traits.LIMIT, her_traits.LIMIT)
+            spin.setValue(0)
+            spin.setMinimumWidth(70)
+            spin.valueChanged.connect(lambda v, k=key: self._dial_moved(k, v))
+            grid.addWidget(spin, row_i, 1)
+            mood_lbl = QLabel("0")
+            mood_lbl.setStyleSheet("color: gray;")
+            eff_lbl = QLabel("0")
+            grid.addWidget(mood_lbl, row_i, 2)
+            grid.addWidget(eff_lbl, row_i, 3)
+            self.dial_spins[key] = spin
+            self.dial_mood_lbls[key] = mood_lbl
+            self.dial_effective_lbls[key] = eff_lbl
+        grid.setColumnStretch(4, 1)
         lay.addLayout(grid)
         self.dial_preview = QLabel()
         self.dial_preview.setWordWrap(True)
         self.dial_preview.setStyleSheet("color: gray;")
         lay.addWidget(self.dial_preview)
         dial_btns = QHBoxLayout()
-        self.apply_dials_btn = QPushButton("✅ Apply dials")
+        self.apply_dials_btn = QPushButton("✅ Apply adjustments")
         self.apply_dials_btn.clicked.connect(self.apply_dials)
         dial_btns.addWidget(self.apply_dials_btn)
-        self.reset_dials_btn = QPushButton("♻️ Defaults")
+        self.reset_dials_btn = QPushButton("♻️ As written (all 0)")
         self.reset_dials_btn.clicked.connect(self.reset_dials)
         dial_btns.addWidget(self.reset_dials_btn)
+        self.reload_dials_btn = QPushButton("🔄 Reload (mood moves)")
+        self.reload_dials_btn.clicked.connect(self.load_dials)
+        dial_btns.addWidget(self.reload_dials_btn)
         dial_btns.addStretch(1)
         lay.addLayout(dial_btns)
 
@@ -293,6 +316,7 @@ class HerView(QWidget):
         self._refresh_persona_button()
         self.refresh_hard_rules()
         self.load_dials()
+        self.refresh_mood()
 
         try:
             changes = asyncio.run(fetch_recent_personality_changes(limit=10))
@@ -306,45 +330,58 @@ class HerView(QWidget):
         self.personality_changes_table.resizeRowsToContents()
 
     def _dial_moved(self, key, value):
-        self.dial_values[key].setText(str(value))
         self._preview_dials()
 
     def _current_dials(self) -> dict:
-        return {k: s.value() for k, s in self.dial_sliders.items()}
+        return {k: s.value() for k, s in self.dial_spins.items()}
+
+    def _read_mood(self):
+        try:
+            self._mood_state = asyncio.run(get_mood_state()) or her_mood.fresh()
+        except Exception as e:
+            self.note(f"⚠️ Failed to read her mood: {e}")
+            self._mood_state = her_mood.fresh()
+        self._mood_offsets_cache = her_mood.dial_offsets(self._mood_state)
+        return self._mood_offsets_cache
 
     def _preview_dials(self):
-        cap = her_traits.word_cap(self._current_dials())
-        phrases = []
-        for key, label, phr in her_traits.TRAITS:
-            phrases.append(phr[her_traits.band(self.dial_sliders[key].value())])
-        self.dial_preview.setText(" ".join(phrases) + (f" Reply length: about {cap} words." if cap else ""))
+        mood_offsets = self._mood_offsets_cache or {}
+        standing = self._current_dials()
+        eff = her_traits.effective(standing, mood_offsets) or {k: 0.0 for k in her_traits.KEYS}
+        for key in her_traits.KEYS:
+            mo = mood_offsets.get(key, 0.0)
+            self.dial_mood_lbls[key].setText(f"{mo:+.1f}" if abs(mo) >= 0.05 else "0")
+            self.dial_effective_lbls[key].setText(her_traits.signed(eff[key]))
+        mood_line = her_mood.line(self._mood_state) if self._mood_state else ""
+        text = her_traits.render(eff, mood_line=mood_line)
+        self.dial_preview.setText(text.strip() or "Nothing adjusted; the description is the voice.")
 
     def load_dials(self):
         try:
             traits = asyncio.run(get_personality_traits())
         except Exception as e:
-            self.note(f"⚠️ Failed to load her dials: {e}")
+            self.note(f"⚠️ Failed to load her adjustments: {e}")
             traits = None
         traits = her_traits.normalize(traits)
-        for key, slider in self.dial_sliders.items():
-            slider.blockSignals(True)
-            slider.setValue(traits[key])
-            slider.blockSignals(False)
-            self.dial_values[key].setText(str(traits[key]))
+        for key, spin in self.dial_spins.items():
+            spin.blockSignals(True)
+            spin.setValue(traits[key])
+            spin.blockSignals(False)
+        self._read_mood()
         self._preview_dials()
 
     def apply_dials(self):
         traits = self._current_dials()
         try:
             asyncio.run(set_personality_traits(traits))
-            asyncio.run(log_personality_change(her_traits.dumps(traits), "creator set the dials at the Controller", kind="dials"))
-            self.note("[SYSTEM] Dials applied: " + ", ".join(f"{k}={v}" for k, v in traits.items()))
+            asyncio.run(log_personality_change(her_traits.dumps(traits), "creator set the adjustments at the Controller", kind="dials"))
+            self.note("[SYSTEM] Adjustments applied: " + ", ".join(f"{k} {her_traits.signed(v)}" for k, v in traits.items()))
         except Exception as e:
-            self.note(f"⚠️ Failed to apply the dials: {e}")
+            self.note(f"⚠️ Failed to apply the adjustments: {e}")
 
     def reset_dials(self):
-        for key, slider in self.dial_sliders.items():
-            slider.setValue(her_traits.DEFAULTS[key])
+        for key, spin in self.dial_spins.items():
+            spin.setValue(0)
 
     def _refresh_persona_button(self):
         if persona_disabled():
@@ -923,6 +960,21 @@ class HerView(QWidget):
     def _build_health(self):
         page = QWidget()
         lay = QVBoxLayout()
+        # 2026-09-23 (roadmap item 10): her mood, the numbers and why.
+        lay.addWidget(QLabel(
+            "<b>Her mood</b> — three axes that things happening to her move and that fade on their own "
+            "(irritation ~30 min, engagement ~10 min, strain ~5 min; core/mood.py). "
+            "What she is rendered with because of it is on the Personality tab."))
+        self.mood_output = QTextEdit()
+        self.mood_output.setReadOnly(True)
+        self.mood_output.setMaximumHeight(220)
+        lay.addWidget(self.mood_output)
+        mood_btns = QHBoxLayout()
+        self.refresh_mood_btn = QPushButton("🔄 Refresh mood")
+        self.refresh_mood_btn.clicked.connect(self.refresh_mood)
+        mood_btns.addWidget(self.refresh_mood_btn)
+        mood_btns.addStretch(1)
+        lay.addLayout(mood_btns)
         lay.addWidget(QLabel(
             "Proactive fault check — her own diagnostic_tool module, run on demand. "
             "It used to run at every connect; it is a real sweep, so it runs only when asked."))
@@ -937,6 +989,29 @@ class HerView(QWidget):
         lay.addLayout(btns)
         page.setLayout(lay)
         return page
+
+    def refresh_mood(self):
+        try:
+            st = asyncio.run(get_mood_state()) or her_mood.fresh()
+        except Exception as e:
+            self.mood_output.setPlainText(f"Could not read her mood: {e}")
+            return
+        axes = her_mood.decayed(st)
+        lines = ["   ".join(f"{a}: {axes[a]:.1f}/10" for a in her_mood.AXES)]
+        lines.append(her_mood.line(st) or "Calm — nothing about it in her prompt.")
+        offs = her_mood.dial_offsets(st)
+        if offs:
+            lines.append("Trait offsets from it now: " + ", ".join(f"{k} {v:+.1f}" for k, v in offs.items()))
+        lines.append("")
+        lines.append("What moved it (newest first):")
+        events = list(st.get("events") or [])
+        if not events:
+            lines.append("  nothing yet")
+        for e in reversed(events[-14:]):
+            when = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(float(e.get("t", 0))))
+            delta = ", ".join(f"{a} {d:+.1f}" for a, d in (e.get("delta") or {}).items())
+            lines.append(f"  {when}  {e.get('note') or e.get('event')}  ({delta})")
+        self.mood_output.setPlainText("\n".join(lines))
 
     def run_fault_check(self):
         self.fault_check_output.setPlainText("Running diagnostic check...")

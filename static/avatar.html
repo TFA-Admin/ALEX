@@ -1065,8 +1065,17 @@ ws.onmessage = (e)=>{
     // Drives the orb's TARGET color; animateOrb() below eases toward it
     // smoothly rather than snapping.
     if(typeof data === "string" && data.startsWith("__MOOD__")){
-        setMoodTarget(data.replace("__MOOD__", ""));
-        armIdleMoodReset();
+        // 2026-09-23: a state now (core/mood.py), sent as JSON — colour
+        // key, how strongly, a label, the axes — on connect, after every
+        // reply, and once a minute as it fades. The bare key is the old
+        // per-reply form, kept readable.
+        const rawMood = data.replace("__MOOD__", "");
+        if(rawMood.startsWith("{")){
+            try { setMoodState(JSON.parse(rawMood)); }
+            catch(e){ console.warn("bad __MOOD__", e); }
+        }else{
+            setMoodTarget(rawMood);
+        }
         return;
     }
 
@@ -1546,6 +1555,20 @@ function setMoodTarget(key){
     const c = MOOD_COLORS[key] || MOOD_COLORS.calm;
     targetColor = c.slice();
     if(moodNameEl){ moodNameEl.textContent = MOOD_LABELS[key] || key; }
+}
+
+// 2026-09-23: the mood state. The dominant axis picks the colour; its
+// level sets how far from calm the orb goes, so irritated 2/10 is a tint
+// and irritated 8/10 is the full colour. The label is hers ("irritated
+// 4/10"). No idle reset any more: the state fades on the server and the
+// page is told as it does.
+function setMoodState(m){
+    const c = MOOD_COLORS[m.key] || MOOD_COLORS.calm;
+    const base = MOOD_COLORS.calm;
+    const w = (m.key === "calm") ? 0 : Math.min(1, 0.35 + 0.65 * (m.level || 0));
+    targetColor = [0, 1, 2].map(i => base[i] + (c[i] - base[i]) * w);
+    if(moodNameEl){ moodNameEl.textContent = m.label || "calm"; }
+    if(idleMoodResetHandle){ clearTimeout(idleMoodResetHandle); idleMoodResetHandle = null; }
 }
 
 // 2026-07-17 (Craig: "when idle the orb is showing as focused... unless

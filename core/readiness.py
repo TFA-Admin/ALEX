@@ -71,6 +71,13 @@ async def set_state(state: str):
         return
     _state = state
     logger.info(f"[READY] {state} - {LABELS.get(state, state)}")
+    if state == "failed":
+        # 2026-09-23: starting with errors is strain (core/mood.py)
+        try:
+            from core import mood as _mood
+            await _mood.note("startup_failed")
+        except Exception:
+            pass
 
     try:
         from ws.ws_handlers import broadcast_signal

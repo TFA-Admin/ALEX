@@ -22,7 +22,7 @@ from ws.ws_utils import split_speakable_text, enrich_profile
 from core.text_utils import strip_markdown
 from core.voice import playback_seconds
 from core.alex_core import alex_core
-from core.mood import derive_mood
+from core import mood as her_mood
 from db.db import record_response_timing
 from config.logger_config import logger
 
@@ -200,9 +200,11 @@ class ResponseHandler:
 
         # 🎭 MOOD — computed after the real response is already fully on
         # its way, never blocks or slows it down. See core/mood.py.
+        # 2026-09-23: her reply's tone is one input to a real mood state;
+        # what the orb gets is the state (core/mood.py).
         if not interrupted and full_response:
-            mood = derive_mood(full_response)
-            await websocket.send_text("__MOOD__" + mood)
+            await her_mood.note_reply(full_response, user_id)
+            await websocket.send_text("__MOOD__" + her_mood.payload(await her_mood.state()))
 
         # 2026-07-17 (Craig: "over the course of a long response... when
         # I said I agree she didn't hear it") — the wake-word conversation
@@ -310,8 +312,8 @@ class ResponseHandler:
         await websocket.send_text("__PROFILE__" + json.dumps(updated))
 
         if content:
-            mood = derive_mood(content)
-            await websocket.send_text("__MOOD__" + mood)
+            await her_mood.note_reply(content, user_id)
+            await websocket.send_text("__MOOD__" + her_mood.payload(await her_mood.state()))
 
         # See the matching comments in _handle_stream — refreshes the
         # wake-word conversation window from when she finishes speaking,

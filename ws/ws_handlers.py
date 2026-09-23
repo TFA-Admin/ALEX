@@ -311,6 +311,13 @@ async def ws_text(websocket: WebSocket):
             await websocket.send_text("__VERSION__" + json.dumps(_version.describe()))
         except Exception:
             pass
+        # 2026-09-23: her mood as it is now (core/mood.py), so the orb
+        # does not open calm when she is not.
+        try:
+            from core import mood as _mood
+            await websocket.send_text("__MOOD__" + _mood.payload(await _mood.state()))
+        except Exception:
+            pass
 
         user_id = await identity_manager.resolve_user_passive(
             claimed_name,
@@ -535,6 +542,12 @@ async def ws_text(websocket: WebSocket):
             # nothing told the loop itself to stop).
             if msg == "__INTERRUPT__":
                 alex_core.get_session(session_id)["interrupted"] = True
+                # 2026-09-23: being talked over moves her mood (core/mood.py)
+                try:
+                    from core import mood as _mood
+                    await _mood.note("talked_over", who=user_id)
+                except Exception:
+                    pass
                 continue
 
             # "__END_AUDIO__" is the one "__"-prefixed message the client
@@ -612,6 +625,11 @@ async def _ask_when_quiet(websocket, session_id, user_id, q, give_up_after: floa
         await asyncio.sleep(1.0)
     else:
         logger.info(f"[ACTION] Curiosity question held — the conversation kept moving: {q['question'][:80]!r}")
+        try:
+            from core import mood as _mood
+            await _mood.note("ignored", who=user_id)
+        except Exception:
+            pass
         return
     if session_id not in _active_connections:
         return

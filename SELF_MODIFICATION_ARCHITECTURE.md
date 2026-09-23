@@ -1057,10 +1057,34 @@ The items, in build order:
    explore" via a small vision-language model on demand (moondream-class
    fits; a 7B VLM does not fit beside the chat model). "Look" is a tool.
    Frames on request and on events, not continuous. LAN only (Principle 4).
-10. **Mood, for real.** `core/mood.py` is a per-response label with no
-    state. Design: a small state with decay, deterministic inputs
-    (corrections, being contradicted, time of day, how the turn went),
-    rendered as one line in her prompt and to the orb; tied to 11's clock.
+10. **Mood, for real.** — **landed 2026-09-23.** `core/mood.py` is a
+    state: three axes (irritation ~30 min half-life, engagement ~10,
+    strain ~5) moved by deterministic events she already logs — corrected,
+    talked over, ignored, her own slip, a wrong override code, a rejected
+    proposal; a real conversation, a question of hers answered, a lookup
+    that found something, a merged proposal; a slow model, a failed tool,
+    starting with errors, a clean check. Craig's calls: three axes for now;
+    a stranger's correction weighs 1.75x his ("anyone but me contradicting
+    her would piss her off more"); no pleasure from being agreed with.
+    Shown as one line in her prompt WITH THE REASON, on the orb (dominant
+    axis -> colour, level -> how far from calm; told on connect, after
+    every reply and once a minute as it fades), and at Her -> Health. It
+    nudges her traits by amounts that grow with the level. Stored in
+    system_learning.mood_state so restarts do not wipe it and time passes
+    for her while she is off. Suite: tests/suites/mood.py, 16/16, in the
+    gate. Time of day waits on item 11.
+
+    With it, the dials became **adjustments** (Craig: "instead of having
+    them be a slider, make them just adjust whatever the value is up or
+    down... if something isn't quite right where the slider would be
+    maxed out, I would still be able to make adjustment"): each trait is a
+    signed offset from the written description with no ceiling — 0 renders
+    nothing, ±1 "a little", ±2-3 strong, ±4-5 extreme, ±6+ an absolute
+    phrase that overrides the description; verbosity's word cap keeps
+    tightening past where the slider stopped (−7 is ten words). His
+    standing offset plus the mood's temporary one is what she is rendered
+    with (`core/traits.py` effective()). The 0-10 rows convert on load;
+    his verbosity 0 (20 words) is now verbosity −5 (20 words).
 11. **Autonomy within limits.** The frame is the existing principles made
     mechanical: Principle 10 (the Controller's kill path never depends on
     her), Principle 4 (no ambient network) widened to "no reach into other
@@ -1780,13 +1804,9 @@ game; you will not lie; your name is ALEX.
   of the troubleshooting phase, which is Craig's own framing of where she is:
   *"I fear my interactions right now are all diagnostically based so I'm not
   really using her as intended."*
-- **Mood is stateless.** `core/mood.py` computes from the current response
-  text alone — `_ALERT_MARKERS`, `_EDGE_CONTENT_MARKERS`, length/"?" →
-  focused, else calm. No state, no decay, no accumulation. Craig: *"I see it
-  changing but I'm not too sure it's behaving right. She seems to get over
-  things relatively quickly."* Correct observation: there is nothing to get
-  over. It is a per-response label, not a mood. Needs real state with decay
-  before it means anything.
+- ~~**Mood is stateless.**~~ Fixed 2026-09-23 — see item 10 in the work
+  in progress list. Craig's *"she seems to get over things relatively
+  quickly"* now has a number behind it: irritation halves in 30 minutes.
 - **"Re-enable X" understood in any phrasing** (Craig: "I don't want this
   command to be exactly this either"). Planned as a narrow binary check that
   only runs while something is actually disabled — NOT a new category on the

@@ -509,6 +509,11 @@ async def run_tool(name: str, args, user_id: str) -> str:
         result = f"{name} took longer than {TOOL_TIMEOUT_S:.0f}s and was stopped."
     except Exception as e:
         result = f"{name} failed: {e}"
+        try:
+            from core import mood as _mood
+            await _mood.note("tool_failed")
+        except Exception:
+            pass
 
     result = _clip(str(result))
     elapsed = time.time() - t0
