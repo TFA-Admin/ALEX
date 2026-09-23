@@ -648,6 +648,7 @@ Respond with ONLY a JSON object, nothing else:
                     # this IS a voice verification — no need to ask again later this session
                     if session is not None:
                         session["creator_verified"] = True
+                        session["verified_how"] = "voice, recognised while onboarding"
 
                     welcome = await get_phrase("greeting_returning_user", name=recognized_owner)
                     await websocket.send_text(welcome)

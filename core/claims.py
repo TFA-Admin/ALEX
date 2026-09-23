@@ -48,6 +48,9 @@ _CLAIM_RE = re.compile(
     r"(?=\s+(?!what|why|how|that|your point|the point|no\b|why)\w)"
     r"|(?:the |my |your )?camera (?:is (?:awake|on|live|active|up|open)|shows|sees|reveals|remains (?:on|live|active|open))\b"
     r"|(?:the |your )?(?:room|frame) (?:is|looks|appears) \w"
+    # 2026-09-23: "My sensors detect no matching voice print" — she has no
+    # sensors that were consulted; a check she names is a check she claims.
+    r"|my (?:sensors?|scanners?|readings?|instruments?) (?:detect|confirm|indicate|show|report|register)\b"
     r")",
     re.I,
 )
@@ -251,6 +254,8 @@ _SIGHT_DENIAL_RE = re.compile(
     r"|(?:there is |i have )?no (?:visual|image|frame|picture|feed|input) "
     r"|(?:your|the) eyes (?:are|remain|stay) (?:closed|shut)"
     r"|(?:i am|i'm) blind"
+    r"|(?:the |my |your )?camera (?:fails|failed) to capture"
+    r"|(?:the |my |your )?camera (?:cannot|can't|does not|doesn't) (?:see|capture|find|detect)"
     r")\b",
     re.I,
 )
@@ -273,4 +278,38 @@ def sight_denied(clause: str, looked_block: str) -> str:
     if not saw or not clause:
         return ""
     m = _SIGHT_DENIAL_RE.search(clause)
+    return m.group(0) if m else ""
+
+
+# ------------------------------------------------------- his verification
+# 2026-09-23 (Craig: "she now claims I did not authenticate when I can
+# see it did"): his voice verified at connect (0.77) and her first words
+# were "My sensors detect no matching voice print for the claimant; you
+# are not who you say you are. Your access remains denied." Nothing in
+# her prompt said the session was verified, and her memory held the
+# verification prompt she had just spoken. Same family as sight_denied:
+# a checkable contradiction between her words and the session.
+_AUTH_DENIAL_RE = re.compile(
+    r"\b(?:"
+    r"not who you (?:say|claim) you are"
+    r"|(?:your )?access (?:remains|is|stays) (?:denied|revoked|blocked)"
+    r"|(?:your )?voice ?print (?:does not|doesn't|did not|didn't|fails? to) match"
+    r"|no matching voice ?print"
+    r"|(?:voice |biological |identity )?verification (?:failed|has failed|is incomplete|was not completed)"
+    r"|(?:i )?cannot verify (?:your|his) identity"
+    r"|you (?:are|remain) (?:not |un)(?:verified|authenticated)"
+    r"|you (?:have not|haven't|did not|didn't|never) (?:been )?(?:verified|authenticated|proven)"
+    r"|you are not craig"
+    r"|(?:your )?identity (?:is |remains )?(?:unverified|unconfirmed|unproven|not confirmed)"
+    r")\b",
+    re.I,
+)
+
+
+def auth_denied(clause: str) -> str:
+    """The phrase in `clause` that denies his verification — call it only
+    when the session IS verified. "" when there is none."""
+    if not clause:
+        return ""
+    m = _AUTH_DENIAL_RE.search(clause)
     return m.group(0) if m else ""

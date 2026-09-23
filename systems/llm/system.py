@@ -917,6 +917,25 @@ class System(BaseSystem):
                         "\n    The camera is on and that is the picture. Say what you saw; never say it is dark or that you cannot see.")
                        if saw_now else "")
 
+        # 2026-09-23 (Craig: "she now claims I did not authenticate when I
+        # can see it did"): nothing told her. The session, stated plainly,
+        # last thing before she speaks.
+        try:
+            _who_role = await _role(user_id)
+        except Exception:
+            _who_role = None
+        if session.get("creator_verified"):
+            session_block = (f"\n\n    THIS SESSION: you are talking to {user_id}, your creator, verified when he connected "
+                             f"({session.get('verified_how') or 'voice'}). He is who he says he is; never say he failed "
+                             "verification, is not who he claims, or is denied.")
+        elif _who_role in ("creator", "super_user"):
+            session_block = (f"\n\n    THIS SESSION: you are talking to {user_id}, who holds the {_who_role} role but has NOT "
+                             "been verified this session (typed, or no voice match yet). Talk normally; anything "
+                             "privileged waits for verification or the override code. Say that plainly if it comes "
+                             "up, without accusing him.")
+        else:
+            session_block = f"\n\n    THIS SESSION: you are talking to {user_id}, not your creator."
+
         hard_rules_block = ""
         if hard_rules:
             rules_list = "\n".join(f"    - {r}" for r in hard_rules)
@@ -944,7 +963,7 @@ class System(BaseSystem):
 
     PERSONALITY (this is genuinely yours — express it, don't fight it):
     {personality}
-{hard_rules_block}{dials_block}{sight_block}
+{hard_rules_block}{dials_block}{sight_block}{session_block}
 
     You have access to stored information about the user.
 
@@ -1249,7 +1268,11 @@ class System(BaseSystem):
                             break
                         tail = rest
                         denied_later = her_claims.sight_denied(sentence, system_prompt)
-                        if denied_later:
+                        denied_auth_later = her_claims.auth_denied(sentence) if session.get("creator_verified") else ""
+                        if denied_auth_later:
+                            logger.info(f"[CLAIM] later sentence denied his verification {denied_auth_later!r} — replaced")
+                            sentence = f"You are verified, {user_id}; you matched when you connected. "
+                        elif denied_later:
                             saw_l = her_claims.look_saw(system_prompt)
                             logger.info(f"[CLAIM] later sentence denied sight {denied_later!r} — replaced with what she saw")
                             sentence = "I can see. " + saw_l + " "
@@ -1285,13 +1308,25 @@ class System(BaseSystem):
                 # with a real picture in the evidence is the one contradiction
                 # a regex can catch, and it is caught here.
                 denied = "" if found else her_claims.sight_denied(clause, system_prompt)
-                if not found and not denied:
+                denied_auth = ("" if (found or denied or not session.get("creator_verified"))
+                               else her_claims.auth_denied(clause))
+                if not found and not denied and not denied_auth:
                     yield buf
                     buf = ""
                     continue
                 await gen.aclose()
                 await her_mood.note("own_slip", who=user_id)
-                if denied:
+                if denied_auth:
+                    how = session.get("verified_how") or "voice"
+                    logger.info(f"[CLAIM] denied his verification {denied_auth!r} in {clause.strip()[:80]!r} — he verified at connect ({how}) — answering again")
+                    block = f"THIS SESSION (real): {user_id} is your creator and verified when he connected ({how})."
+                    correction = ("\n\n" + block + "\n\nYou were about to say \"" + denied_auth + "\". That is false. "
+                                  "He is verified. Answer him as your verified creator; never say he failed verification, "
+                                  "is not who he says, or is denied.")
+                    honest_fix = f"You are verified, {user_id}; you matched when you connected."
+                    summary = f"She said {clause.strip()[:90]!r} to her verified creator"
+                    reasoning = f"Code compared her words with the session: verified at connect ({how})."
+                elif denied:
                     saw = her_claims.look_saw(system_prompt)
                     logger.info(f"[CLAIM] denied sight {denied!r} in {clause.strip()[:80]!r} after a look that saw {saw[:60]!r} — answering again")
                     block = "WHAT YOU LOOKED UP BEFORE ANSWERING (real, just now):\n[look] " + saw
@@ -1334,14 +1369,16 @@ class System(BaseSystem):
                     if head is None:
                         continue
                     checked2 = True
-                    again = her_claims.unbacked(head, backed) or her_claims.sight_denied(head, block)
+                    again = (her_claims.unbacked(head, backed) or her_claims.sight_denied(head, block)
+                             or (her_claims.auth_denied(head) if session.get("creator_verified") else ""))
                     if again:
                         logger.info(f"[CLAIM] persisted {again} — replaced with: {honest_fix!r}")
                         buf2 = (honest_fix + " " + her_claims.drop_claims(buf2)).strip()
                     yield buf2
                     buf2 = ""
                 if buf2:
-                    if her_claims.unbacked(buf2, backed) or her_claims.sight_denied(buf2, block):
+                    if (her_claims.unbacked(buf2, backed) or her_claims.sight_denied(buf2, block)
+                            or (her_claims.auth_denied(buf2) if session.get("creator_verified") else "")):
                         buf2 = (honest_fix + " " + her_claims.drop_claims(buf2)).strip()
                     yield buf2
                 return

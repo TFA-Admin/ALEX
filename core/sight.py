@@ -275,6 +275,7 @@ async def verify_at_connect(websocket, conn: dict, session: dict, session_id: st
     logger.info(f"[SIGHT] face {'verified' if ok else 'did not match'} {user_id}: {score:.2f} ({n} face(s))")
     if ok:
         session["creator_verified"] = True
+        session["verified_how"] = f"face, match {score:.2f}"
         try:
             await session_verified(session_id, True)
         except Exception:

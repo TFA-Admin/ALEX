@@ -586,3 +586,24 @@ enrolled a face yet, so you cannot tell by sight who it is"). Verified
 over text with the same conversation history: "The camera shows only a
 red circle and blue square. There is no face in this frame." — no
 intervention needed.
+
+### "My sensors detect no matching voice print" — to a creator who had just verified (2026-09-23 14:44)
+Craig: "she now claims I did not authenticate when I can see it did."
+The log: voice verified at 14:44:05, score 0.77; her first reply nine
+seconds later: "My sensors detect no matching voice print for the
+claimant; you are not who you say you are. Your access remains denied."
+Then "Your biological verification failed" and "the camera fails to
+capture your face". Nothing in her prompt told her the session was
+verified — the role gates knew, she did not — and her memory held the
+verification prompt she had just spoken plus that afternoon's denials,
+so she completed the pattern. **Fixed:** (1) her prompt now states the
+session, last thing before she speaks: verified creator (and how), or a
+creator-role user NOT verified this session, or someone who is not her
+creator; (2) a denial of his verification while the session is verified
+is caught like a denial of sight (`core/claims.auth_denied`) — not
+spoken, answered again with the session stated and the denial quoted, a
+second denial replaced; (3) "my sensors detect/confirm" is a claim of
+work; (4) her six false denials of that afternoon (camera dark, not
+Craig, voice print) were retracted from her memory so they stop
+steering her. Untested with a real voice match — that is his next
+connection.
