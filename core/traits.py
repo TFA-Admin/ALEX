@@ -45,9 +45,9 @@ TRAITS = (
         "Dark humor in most replies.",
         "Constantly, cruelly funny.")),
     ("verbosity", "Verbosity", (
-        "Answer in a sentence or two.",
-        "Keep it short.",
-        "Moderate length.",
+        "One sentence. Never more.",
+        "Two or three short sentences.",
+        "A short paragraph.",
         "Take your time.",
         "As long as it takes.")),
     ("deference_to_craig", "Deference to Craig", (
@@ -107,7 +107,11 @@ def num_predict(traits, default: int = 300) -> int:
     cap = word_cap(traits)
     if cap is None:
         return default
-    return min(default, int(cap * 1.6) + 40)
+    # 2026-09-23 (Craig: "the verbosity slider didn't seem to change much.
+    # She still talks a lot"): 1.6 tokens a word plus 40 let a 30-word
+    # dial run to ~65 words. English on this tokenizer is ~1.3 tokens a
+    # word; the margin is for punctuation and one clause of overrun.
+    return min(default, int(cap * 1.3) + 12)
 
 
 def render(traits) -> str:
@@ -122,7 +126,7 @@ def render(traits) -> str:
         lines.append(f"    - {label} {t[key]}/10: {phrases[band(t[key])]}")
     cap = word_cap(t)
     if cap is not None:
-        lines.append(f"    - Reply length: at most about {cap} words unless he asks for more.")
+        lines.append(f"    - Reply length: at most {cap} words. Stop when you have answered; a cut-off reply is worse than a short one.")
     return ("\n\n    YOUR DIALS (set by your creator at his Controller; they shape how the "
             "personality above comes out):\n" + "\n".join(lines))
 

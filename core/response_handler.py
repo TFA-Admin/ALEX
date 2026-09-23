@@ -20,6 +20,7 @@ print("🔥 RESPONSE HANDLER LOADED")
 from speech.tts_engine import synthesize_speech
 from ws.ws_utils import split_speakable_text, enrich_profile
 from core.text_utils import strip_markdown
+from core.voice import playback_seconds
 from core.alex_core import alex_core
 from core.mood import derive_mood
 from db.db import record_response_timing
@@ -110,6 +111,8 @@ class ResponseHandler:
         full_response = ""
         speech_buffer = ""
         interrupted = False
+        first_audio_at = None    # when her first clip went out
+        audio_seconds = 0.0      # how much audio this turn sent, by duration
 
         async for chunk in stream_fn():
             if session is not None and session.get("interrupted"):
@@ -153,6 +156,9 @@ class ResponseHandler:
                 tts_total += time.time() - tts_t0
                 if pcm:
                     await websocket.send_bytes(pcm)
+                    if first_audio_at is None:
+                        first_audio_at = time.time()
+                    audio_seconds += playback_seconds(pcm)
 
         # Stored and logged clean too: her own replies come back as her
         # context, and markdown there teaches her to write more of it.
@@ -184,6 +190,9 @@ class ResponseHandler:
             tts_total += time.time() - tts_t0
             if pcm:
                 await websocket.send_bytes(pcm)
+                if first_audio_at is None:
+                    first_audio_at = time.time()
+                audio_seconds += playback_seconds(pcm)
 
         # 🔄 PROFILE UPDATE
         updated = await enrich_profile(user_id)
@@ -220,11 +229,21 @@ class ResponseHandler:
         # window's real expiry (what the browser mirrors locally) just
         # got pushed out further, to whenever she finished talking, which
         # can be well after the turn started for a long response.
+        # 2026-09-23 (Craig: "make it so she times out from listening based
+        # on when she's done talking versus the last user vocalization").
+        # This refreshed the window when the last clip was SENT, but the
+        # browser plays clips back to back after they arrive, so on a long
+        # reply the window was already running out while she was still
+        # audible. The clips' own durations say when she actually stops;
+        # the window starts then.
         if session is not None:
             if session.pop("conversation_closing", False):
                 session["last_addressed_at"] = 0
             else:
-                session["last_addressed_at"] = time.time()
+                still_playing = 0.0
+                if first_audio_at is not None:
+                    still_playing = max(0.0, first_audio_at + audio_seconds - time.time())
+                session["last_addressed_at"] = time.time() + still_playing
                 await websocket.send_text("__ENGAGED__1")
 
         await websocket.send_text("__END__")
@@ -278,12 +297,14 @@ class ResponseHandler:
         # also exactly what the page discards once he has interrupted her
         # even once (see core/voice.py).
         tts_total = 0.0
+        spoken_for = 0.0
         if content and user_id not in NO_SPEECH_USERS:
             tts_t0 = time.time()
             pcm = await synthesize_speech(content)
             tts_total = time.time() - tts_t0
             if pcm:
                 await websocket.send_bytes(pcm)
+                spoken_for = playback_seconds(pcm)
 
         updated = await enrich_profile(user_id)
         await websocket.send_text("__PROFILE__" + json.dumps(updated))
@@ -300,7 +321,8 @@ class ResponseHandler:
             if session.pop("conversation_closing", False):
                 session["last_addressed_at"] = 0
             else:
-                session["last_addressed_at"] = time.time()
+                # the window starts when the clip finishes playing, not when it was sent
+                session["last_addressed_at"] = time.time() + spoken_for
                 await websocket.send_text("__ENGAGED__1")
 
         await websocket.send_text("__END__")

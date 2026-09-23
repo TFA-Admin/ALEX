@@ -40,6 +40,25 @@ from controller.common import make_readable, fill_row, selected_rows, to_local, 
 from controller import actions
 
 
+class _PoppedWindow(QWidget):
+    """A tab of hers in its own window. Closing it puts the tab back."""
+
+    def __init__(self, page, title, owner, index):
+        super().__init__(None, Qt.Window)
+        self.setWindowTitle(f"A.L.E.X — {title}")
+        self.resize(900, 700)
+        self._page, self._title, self._owner, self._index = page, title, owner, index
+        lay = QVBoxLayout()
+        lay.setContentsMargins(6, 6, 6, 6)
+        lay.addWidget(page)
+        self.setLayout(lay)
+
+    def closeEvent(self, event):
+        self.layout().removeWidget(self._page)
+        self._owner._pop_back(self._page, self._title, self._index)
+        super().closeEvent(event)
+
+
 class HerView(QWidget):
     def __init__(self, note):
         super().__init__()
@@ -49,6 +68,17 @@ class HerView(QWidget):
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 4, 0, 0)
+        # 2026-09-23 (Craig: "have it as a separate application inside the
+        # controller that I can open... maybe we should be doing that with
+        # any of the more complex systems"). Any inner tab can be popped
+        # out into its own window and comes back to its place on close.
+        pop_row = QHBoxLayout()
+        pop_row.addStretch(1)
+        self.pop_out_btn = QPushButton("⧉ Open this tab in its own window")
+        self.pop_out_btn.clicked.connect(self.pop_out_current)
+        pop_row.addWidget(self.pop_out_btn)
+        layout.addLayout(pop_row)
+        self._popped = {}
         self.inner = QTabWidget()
         self.inner.addTab(self._build_personality(), "Personality")
         self.inner.addTab(self._build_beliefs(), "Beliefs")
@@ -60,6 +90,26 @@ class HerView(QWidget):
         self.inner.addTab(self._build_projects(), "Projects")
         layout.addWidget(self.inner)
         self.setLayout(layout)
+
+    # =====================================================================
+    # POP-OUT (2026-09-23)
+    # =====================================================================
+    def pop_out_current(self):
+        idx = self.inner.currentIndex()
+        if idx < 0:
+            return
+        page = self.inner.widget(idx)
+        title = self.inner.tabText(idx)
+        self.inner.removeTab(idx)
+        win = _PoppedWindow(page, title, self, idx)
+        self._popped[title] = win
+        win.show()
+
+    def _pop_back(self, page, title, idx):
+        self._popped.pop(title, None)
+        page.setParent(None)
+        self.inner.insertTab(min(idx, self.inner.count()), page, title)
+        self.inner.setCurrentWidget(page)
 
     # =====================================================================
     # PERSONALITY
