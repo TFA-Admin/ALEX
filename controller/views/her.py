@@ -15,7 +15,7 @@ from datetime import datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget,
     QTableWidget, QAbstractItemView, QTextEdit, QLineEdit, QMessageBox,
-    QSlider, QGridLayout,
+    QSlider, QGridLayout, QCheckBox, QComboBox,
 )
 from PySide6.QtCore import Qt
 from core import traits as her_traits
@@ -36,7 +36,7 @@ from db.db import (
 from core.intent_classifier import merge_personality_change
 from module_runtime.module_installer import install_module
 
-from controller.common import make_readable, fill_row, selected_rows, to_local
+from controller.common import make_readable, fill_row, selected_rows, to_local, tint_by_column
 from controller import actions
 
 
@@ -538,6 +538,9 @@ class HerView(QWidget):
         self.belief_retract_btn.clicked.connect(self.retract_belief)
         btns.addWidget(self.belief_retract_btn)
         btns.addStretch(1)
+        self.beliefs_show_retracted = QCheckBox("Show retracted")
+        self.beliefs_show_retracted.stateChanged.connect(lambda _: self.refresh_beliefs())
+        btns.addWidget(self.beliefs_show_retracted)
         self.beliefs_refresh_btn = QPushButton("🔄 Refresh")
         self.beliefs_refresh_btn.clicked.connect(self.refresh_beliefs)
         btns.addWidget(self.beliefs_refresh_btn)
@@ -548,6 +551,8 @@ class HerView(QWidget):
     def refresh_beliefs(self):
         try:
             rows = asyncio.run(fetch_active_conclusions(limit=50))
+            if self.beliefs_show_retracted.isChecked():
+                rows = rows + asyncio.run(fetch_active_conclusions(limit=30, status="retracted"))
         except Exception as e:
             self.note(f"⚠️ Failed to load her beliefs: {e}")
             rows = []
@@ -557,8 +562,9 @@ class HerView(QWidget):
         for row, c in enumerate(rows):
             fill_row(self.beliefs_table, row, [
                 c["id"],
-                "confirmed by you" if c.get("status") == "confirmed" else "hers, unconfirmed",
+                {"confirmed": "confirmed by you", "retracted": "retracted"}.get(c.get("status"), "hers, unconfirmed"),
                 c["kind"], c["statement"], c["evidence"] or ""])
+        tint_by_column(self.beliefs_table, 1)
         self.beliefs_table.resizeRowsToContents()
 
     def _selected_belief(self):
@@ -611,6 +617,11 @@ class HerView(QWidget):
         make_readable(self.reasoning_table, wrap_column=3)
         lay.addWidget(self.reasoning_table)
         btns = QHBoxLayout()
+        btns.addWidget(QLabel("Show:"))
+        self.reasoning_kind = QComboBox()
+        self.reasoning_kind.addItem("all kinds")
+        self.reasoning_kind.currentTextChanged.connect(lambda _: self.refresh_decisions())
+        btns.addWidget(self.reasoning_kind)
         btns.addStretch(1)
         self.reasoning_refresh_btn = QPushButton("🔄 Refresh")
         self.reasoning_refresh_btn.clicked.connect(self.refresh_decisions)
@@ -625,12 +636,21 @@ class HerView(QWidget):
         except Exception as e:
             self.note(f"⚠️ Failed to load her reasoning: {e}")
             rows = []
+        kinds = sorted({d["kind"] for d in rows if d.get("kind")})
+        have = [self.reasoning_kind.itemText(i) for i in range(self.reasoning_kind.count())]
+        for k in kinds:
+            if k not in have:
+                self.reasoning_kind.addItem(k)
+        chosen = self.reasoning_kind.currentText()
+        if chosen and chosen != "all kinds":
+            rows = [d for d in rows if d.get("kind") == chosen]
 
         self.reasoning_table.setRowCount(len(rows))
         for row, d in enumerate(rows):
             fill_row(self.reasoning_table, row, [
                 to_local(d["created_at"]), d["kind"], d["summary"],
                 d["reasoning"] or "", d["evidence"] or "", d["outcome"] or ""])
+        tint_by_column(self.reasoning_table, 1)
         self.reasoning_table.resizeRowsToContents()
 
     # =====================================================================
@@ -972,6 +992,7 @@ class HerView(QWidget):
         for row, p in enumerate(self._projects):
             fill_row(self.projects_table, row, [
                 p["id"], p["status"], p["title"], p.get("notes") or "", to_local(p.get("updated_at"))])
+        tint_by_column(self.projects_table, 1)
         self.projects_table.resizeRowsToContents()
 
     def _selected_project(self):

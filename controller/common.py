@@ -147,6 +147,64 @@ def fill_row(table, row, values):
         table.setItem(row, col, item)
 
 
+# -----------------------------
+# Colour by state (2026-09-23). Craig: "There doesn't really seem to be
+# any distinguishing between something that's in or got rejected... Is
+# there a way to split out the old from the new, the rejected from the
+# approved? Maybe some color coding?" One palette for every table, keyed
+# by the words that already appear in its status/kind column, so a row's
+# state is visible before it is read. Translucent, so it works on light
+# and dark themes.
+# -----------------------------
+from PySide6.QtGui import QColor, QBrush
+
+TINTS = {
+    "open":    QColor(255, 179, 0, 55),     # amber: waiting on him
+    "active":  QColor(66, 133, 244, 55),    # blue: in progress / being tried
+    "good":    QColor(46, 160, 67, 60),     # green: accepted / done / confirmed
+    "bad":     QColor(220, 53, 69, 60),     # red: rejected / retracted / a slip
+    "settled": QColor(128, 128, 128, 45),   # grey: old, backlog, declined
+}
+
+# status or kind text -> tint key (matched by substring, first hit wins)
+_STATE_WORDS = (
+    ("unconfirmed", "open"), ("requested", "open"), ("authored", "open"), ("proposed", "open"),
+    ("planned", "open"), ("pending", "open"),
+    ("gated", "active"), ("in_progress", "active"), ("in progress", "active"), ("running", "active"),
+    ("confirmed", "good"), ("merged", "good"), ("done", "good"), ("approval", "good"),
+    ("confirmation", "good"), ("built", "good"), ("retained", "good"),
+    ("rejected", "bad"), ("rejection", "bad"), ("retracted", "bad"), ("retraction", "bad"),
+    ("fabrication", "bad"), ("denied", "bad"), ("failed", "bad"),
+    ("declined", "settled"), ("backlog", "settled"), ("speaker", "settled"),
+)
+
+
+def tint_for(text) -> QColor | None:
+    low = (text or "").lower()
+    for word, key in _STATE_WORDS:
+        if word in low:
+            return TINTS[key]
+    return None
+
+
+def tint_row(table, row, color):
+    if color is None:
+        return
+    brush = QBrush(color)
+    for col in range(table.columnCount()):
+        item = table.item(row, col)
+        if item is not None:
+            item.setBackground(brush)
+
+
+def tint_by_column(table, col):
+    """Tints every row from the text in `col` (its status or kind)."""
+    for row in range(table.rowCount()):
+        item = table.item(row, col)
+        if item is not None:
+            tint_row(table, row, tint_for(item.text()))
+
+
 def selected_rows(table) -> list:
     """Row indexes of the current selection, ascending."""
     model = table.selectionModel()

@@ -26,7 +26,7 @@ import webbrowser
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget,
-    QTableWidget, QAbstractItemView, QMessageBox, QInputDialog,
+    QTableWidget, QAbstractItemView, QMessageBox, QInputDialog, QCheckBox,
 )
 from PySide6.QtCore import QThread, Signal
 
@@ -35,7 +35,7 @@ from db.db import (
     fetch_active_conclusions, fetch_unacknowledged_security_events,
     fetch_unacknowledged_personality_changes,
 )
-from controller.common import make_readable, fill_row, selected_rows, to_local
+from controller.common import make_readable, fill_row, selected_rows, to_local, tint_by_column
 from controller import actions
 from controller import versions
 
@@ -305,6 +305,7 @@ class InboxView(QWidget):
         self.table.setRowCount(len(self._items))
         for row, it in enumerate(self._items):
             fill_row(self.table, row, [to_local(it["when"]), it["kind"], it["from"], it["item"], it["detail"]])
+        tint_by_column(self.table, 1)
         self.table.resizeRowsToContents()
 
         # Hold the selection across the 5s refresh, or the buttons would
@@ -341,6 +342,7 @@ class InboxView(QWidget):
                 r["id"], r["requested_by"], r["module_name"], r["status"],
                 r["result"] or "", to_local(r["resolved_at"]),
                 r.get("requested_access") or "", access_label, origin_label])
+        tint_by_column(self.builds_table, 3)
         self.builds_table.resizeRowsToContents()
 
         try:
@@ -355,6 +357,7 @@ class InboxView(QWidget):
                 r["id"], r["requested_by"], r["query"], r["status"],
                 to_local(r["created_at"]), to_local(r.get("search_resolved_at")),
                 to_local(r.get("retain_resolved_at"))])
+        tint_by_column(self.searches_table, 3)
         self.searches_table.resizeRowsToContents()
 
     # ---------------- ACTING ----------------
@@ -480,6 +483,10 @@ class InboxView(QWidget):
         row2.addWidget(self.v_approve_btn)
         row2.addWidget(self.v_reject_btn)
         row2.addStretch(1)
+        self.v_show_settled = QCheckBox("Show settled (merged, rejected, declined)")
+        self.v_show_settled.setToolTip("Off: only what is open or being tried. On: everything, oldest greyed.")
+        self.v_show_settled.stateChanged.connect(lambda _: self.refresh_versions())
+        row2.addWidget(self.v_show_settled)
         self.v_refresh_btn = QPushButton("🔄 Refresh")
         self.v_refresh_btn.clicked.connect(self.refresh_versions)
         row2.addWidget(self.v_refresh_btn)
@@ -506,6 +513,10 @@ class InboxView(QWidget):
         except Exception as e:
             self.note(f"⚠️ Failed to load proposals: {e}")
             self._proposals = []
+        # 2026-09-23: settled rows out of the way unless asked for
+        if not self.v_show_settled.isChecked():
+            self._proposals = [p for p in self._proposals
+                               if p.get("status") in ("requested", "authored", "proposed", "gated")]
         up = versions.staging_up()
         self.versions_label.setText(
             f"Proposed versions of her. Staging port {versions.STAGING_PORT}: "
@@ -517,6 +528,7 @@ class InboxView(QWidget):
             fill_row(self.versions_table, row, [
                 p["id"], p["status"], p.get("author") or "", p["title"], p.get("target") or "",
                 _gate_summary(p.get("gate")), staging, to_local(p.get("updated_at"))])
+        tint_by_column(self.versions_table, 1)
         self.versions_table.resizeRowsToContents()
         if keep is not None:
             self._select_version(keep)
