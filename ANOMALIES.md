@@ -621,3 +621,26 @@ retracted; the denial patterns widened to "verification remains
 pending", "text proves nothing", "lacks verification data", "prove your
 identity", "attempt voice enrolment". **Rule for me:** never probe her
 under his name; a throwaway user, purged after, or the log.
+
+### Enrolled, seen, not recognised; and every reply ends with a question (2026-09-23 14:57)
+Craig: "I clicked enroll and it is seeing things but still won't
+recognize the visual as me." Three samples stored at 14:56:32; they
+match each other at 0.78-0.80 and themselves at 1.00, so the matching
+works. The three looks after enrolment described him ("a person with a
+beard, wearing headphones and a plaid shirt") and she said "you remain
+faceless to my sensors". Whether the detector missed his backlit face
+or the match fell under 0.40 cannot be told: the recognition sentence
+came AFTER a paragraph of description, the log line and the decisions
+row were clipped before it, and she had said "faceless" the turn before.
+**Changed:** recognition comes first in what she is given; the page's
+face row and a [SIGHT] face line get the facts (seen, score, faces);
+the threshold is OpenCV's own 0.363 (his own samples vary that much in
+that light); the detector's score threshold is 0.7. The next look tells.
+
+Craig: "why does she always ask for some new thing at the end of a
+sentence?" A standing line in her prompt allowed "one short question at
+the end of your reply... not every turn" when curious. A 9B model read
+it as an instruction for every reply, and with a 20-word cap the stock
+question ("What do you require?") ate half of each one. **Fixed:** the
+line now says a reply ends when the answer ends, with the curiosity
+question a rare exception about the thing itself.

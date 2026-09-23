@@ -50,7 +50,10 @@ MODELS_DIR = os.path.join(ALEX_DIR, "models", "vision")
 DETECTOR_PATH = os.path.join(MODELS_DIR, "face_detection_yunet_2023mar.onnx")
 RECOGNIZER_PATH = os.path.join(MODELS_DIR, "face_recognition_sface_2021dec.onnx")
 
-FACE_MATCH_THRESHOLD = 0.40     # SFace cosine; OpenCV's own line is 0.363
+# SFace cosine. OpenCV's own line is 0.363; 0.40 was "a bit stricter" and
+# his three enrolment samples score only 0.78-0.80 against each other in
+# a backlit room, so a later frame can dip. His line it is (2026-09-23).
+FACE_MATCH_THRESHOLD = 0.363
 FRAME_TIMEOUT_S = 6.0           # a look: the page grabs and sends within a second
 VERIFY_TIMEOUT_S = 4.0          # at connect: the camera may still be starting
 DESCRIBE_TIMEOUT_S = 30.0
@@ -69,7 +72,9 @@ def _models():
     global _detector, _recognizer
     with _lock:
         if _detector is None:
-            _detector = cv2.FaceDetectorYN.create(DETECTOR_PATH, "", (320, 320), 0.8, 0.3, 5000)
+            # score threshold 0.7 (was 0.8): his face in front of a bright
+            # window is partly in shadow; enrolment found it, a look must too.
+            _detector = cv2.FaceDetectorYN.create(DETECTOR_PATH, "", (320, 320), 0.7, 0.3, 5000)
             _recognizer = cv2.FaceRecognizerSF.create(RECOGNIZER_PATH, "")
     return _detector, _recognizer
 
@@ -178,15 +183,20 @@ def deliver_frame(conn: dict, msg: str) -> bool:
 
 
 # ------------------------------------------------------------- recognising
-async def recognise(b64: str) -> str:
-    """Whose face is in the frame, in her words, or "" if she cannot say."""
+async def recognise(b64: str, info: dict = None) -> str:
+    """Whose face is in the frame, in her words, or "" if she cannot say.
+    `info`, if given, is filled with the facts for the page and the log:
+    seen (user / "unknown" / "none"), score, faces."""
+    info = info if info is not None else {}
     if not available():
         return ""
     img = decode_frame(b64)
     if img is None:
         return ""
     feat, n = await asyncio.to_thread(face_embedding, img)
+    info["faces"] = n
     if feat is None:
+        info["seen"] = "none"
         return "There is no face in the frame."
     from db.db import fetch_all_face_profiles
     profiles = await fetch_all_face_profiles()
@@ -195,15 +205,21 @@ async def recognise(b64: str) -> str:
         s = match_score(feat, embs)
         if s > best:
             best_user, best = user, s
+    info["score"] = round(best, 2)
+    info["best"] = best_user
     more = f" There {'is one more face' if n == 2 else f'are {n - 1} more faces'} in the frame." if n > 1 else ""
     if best_user and best >= FACE_MATCH_THRESHOLD:
+        info["seen"] = best_user
         return f"The face in the frame is {best_user}'s (match {best:.2f})." + more
+    info["seen"] = "unknown"
     # 2026-09-23: "you do not recognise" became "that is not Craig" in her
     # mouth before he had enrolled at all. Say what is actually known.
     if not profiles:
         return ("There is a face in the frame; nobody has enrolled a face yet, so you cannot "
-                "tell by sight who it is — go by their voice and name." + more)
-    return ("There is a face in the frame that matches nobody who has enrolled; you cannot "
+                "tell by sight who it is — go by their voice and name. (The 'Enrol my face' button "
+                "on his page enrols him, while he is verified by voice.)" + more)
+    return (f"There is a face in the frame that matches nobody who has enrolled (best {best:.2f} "
+            f"against {best_user or 'anyone'}; a match needs {FACE_MATCH_THRESHOLD:.2f}); you cannot "
             "tell by sight who it is." + more)
 
 
@@ -238,10 +254,22 @@ async def look(user_id: str, question: str = "") -> str:
         return (f"{user_id}'s page has its eyes closed (the Eyes button on the page opens the camera), "
                 "so you cannot see anything right now.")
     t0 = time.time()
+    info = {}
+    who = await recognise(b64, info)
     seen = await describe(b64, question, user_id)
-    who = await recognise(b64)
-    out = " ".join(x for x in (seen, who) if x)
-    logger.info(f"[SIGHT] looked for {user_id} in {time.time() - t0:.1f}s -> {out[:100]!r}")
+    # 2026-09-23 (Craig: "it is seeing things but still won't recognize the
+    # visual as me"): whose face it is comes FIRST — after a paragraph of
+    # description it was the last thing she read, and it lost to her
+    # earlier "you remain faceless to my sensors". The page's face row
+    # and the log get the facts too, so a miss can be seen for what it is.
+    out = " ".join(x for x in (who, seen) if x)
+    logger.info(f"[SIGHT] face for {user_id}: {info.get('seen', '?')}"
+                + (f" (score {info['score']:.2f} vs {FACE_MATCH_THRESHOLD:.2f}, best {info.get('best')})" if 'score' in info else "")
+                + f", faces {info.get('faces', '?')}")
+    logger.info(f"[SIGHT] looked for {user_id} in {time.time() - t0:.1f}s -> {seen[:100]!r}")
+    if info:
+        for conn in conns:
+            await _tell(conn["websocket"], info)
     return out or "The frame arrived but you could not make anything of it."
 
 
