@@ -106,6 +106,9 @@ class HerView(QWidget):
         self.inner.addTab(self._build_curiosity(), "Curiosity")
         self.inner.addTab(self._build_modules(), "Modules")
         self.inner.addTab(self._build_health(), "Health")
+        # 2026-09-25 (Craig: "I don't see a pet tab, so how can I check her
+        # continued actions with it?")
+        self.inner.addTab(self._build_pet(), "Pet")
         self.inner.addTab(self._build_scores(), "Scores")
         self.inner.addTab(self._build_projects(), "Projects")
         layout.addWidget(self.inner)
@@ -339,6 +342,7 @@ class HerView(QWidget):
         self.refresh_hard_rules()
         self.load_dials()
         self.refresh_mood()
+        self.refresh_pet()
 
         try:
             changes = asyncio.run(fetch_recent_personality_changes(limit=10))
@@ -1104,6 +1108,91 @@ class HerView(QWidget):
                          + _time.strftime("%Y-%m-%d %H:%M", _time.localtime(float(ret.get("at", 0))))
                          + (f", removed {removed}" if removed else ", nothing to remove"))
         self.mood_output.setPlainText("\n".join(lines))
+
+    # =====================================================================
+    # PET (2026-09-25, projects #23)
+    # =====================================================================
+    def _build_pet(self):
+        page = QWidget()
+        lay = QVBoxLayout()
+        lay.addWidget(QLabel(
+            "Her pet (core/pet.py). Four needs fall on the clock while she runs; health falls when any is "
+            "starved and recovers when all are met. She tends the lowest need herself every ten minutes of quiet "
+            "and records each act as a decision. Below: how it is now, and everything done for it."))
+        self.pet_state_lbl = QLabel("—")
+        self.pet_state_lbl.setStyleSheet("font-size: 13px;")
+        lay.addWidget(self.pet_state_lbl)
+        name_row = QHBoxLayout()
+        name_row.addWidget(QLabel("Name:"))
+        self.pet_name_edit = QLineEdit()
+        self.pet_name_edit.setMaximumWidth(220)
+        name_row.addWidget(self.pet_name_edit)
+        self.pet_name_btn = QPushButton("💾 Save name")
+        self.pet_name_btn.clicked.connect(self.save_pet_name)
+        name_row.addWidget(self.pet_name_btn)
+        name_row.addStretch(1)
+        lay.addLayout(name_row)
+        lay.addWidget(QLabel("Everything done for it (her decisions of kind 'pet', newest first):"))
+        self.pet_table = QTableWidget()
+        self.pet_table.setColumnCount(5)
+        self.pet_table.setHorizontalHeaderLabels(["When", "Who", "What", "Why", "Before → after"])
+        self.pet_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.pet_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        make_readable(self.pet_table, wrap_column=4)
+        lay.addWidget(self.pet_table)
+        btns = QHBoxLayout()
+        self.pet_refresh_btn = QPushButton("🔄 Refresh")
+        self.pet_refresh_btn.clicked.connect(self.refresh_pet)
+        btns.addWidget(self.pet_refresh_btn)
+        btns.addWidget(QLabel("   Tend it yourself (recorded as you, for testing):"))
+        self.pet_tend_btns = {}
+        for action, label in (("feed", "🍽 Feed"), ("rest", "😴 Rest"), ("clean", "🧼 Clean"), ("play", "🎾 Play")):
+            b = QPushButton(label)
+            b.clicked.connect(lambda _=False, a=action: self.tend_pet_as_craig(a))
+            btns.addWidget(b)
+            self.pet_tend_btns[action] = b
+        btns.addStretch(1)
+        lay.addLayout(btns)
+        page.setLayout(lay)
+        return page
+
+    def refresh_pet(self):
+        try:
+            from core import pet as her_pet
+            st = asyncio.run(her_pet.state())
+            self.pet_state_lbl.setText(her_pet.describe(st, her_pet.pet_name())
+                                       + f"   (born {_time.strftime('%Y-%m-%d', _time.localtime(float(st.get('born_at', 0))))})")
+            self.pet_name_edit.setText("" if her_pet.pet_name() == "the pet" else her_pet.pet_name())
+        except Exception as e:
+            self.pet_state_lbl.setText(f"Could not read the pet: {e}")
+        try:
+            rows = asyncio.run(fetch_decisions(limit=200, kind="pet"))
+        except Exception as e:
+            self.note(f"⚠️ Failed to load the pet's history: {e}")
+            rows = []
+        self.pet_table.setRowCount(len(rows))
+        for row, d in enumerate(rows):
+            fill_row(self.pet_table, row, [
+                to_local(d.get("created_at")), d.get("actor"), d.get("summary"), d.get("reasoning"),
+                f"{d.get('evidence') or ''}  →  {d.get('outcome') or ''}"])
+        self.pet_table.resizeRowsToContents()
+
+    def save_pet_name(self):
+        from controller.common import load_controller_settings, save_controller_settings
+        settings = load_controller_settings()
+        settings["pet_name"] = self.pet_name_edit.text().strip()
+        save_controller_settings(settings)
+        self.note(f"[SYSTEM] Her pet is now called {settings['pet_name'] or 'the pet'!r}")
+        self.refresh_pet()
+
+    def tend_pet_as_craig(self, action: str):
+        try:
+            from core import pet as her_pet
+            text = asyncio.run(her_pet.tend(action, by="craig", why="from the Controller's Pet tab"))
+            self.note(f"[PET] {text}")
+        except Exception as e:
+            self.note(f"⚠️ Could not tend the pet: {e}")
+        self.refresh_pet()
 
     def run_fault_check(self):
         self.fault_check_output.setPlainText("Running diagnostic check...")
