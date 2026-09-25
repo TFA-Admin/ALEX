@@ -15,7 +15,7 @@ from datetime import datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget,
     QTableWidget, QAbstractItemView, QTextEdit, QLineEdit, QMessageBox,
-    QSlider, QGridLayout, QCheckBox, QComboBox, QSpinBox,
+    QSlider, QGridLayout, QCheckBox, QComboBox, QSpinBox, QScrollArea,
 )
 from PySide6.QtCore import Qt
 import time as _time
@@ -40,6 +40,18 @@ from module_runtime.module_installer import install_module
 
 from controller.common import make_readable, fill_row, selected_rows, to_local, tint_by_column
 from controller import actions
+
+
+
+def _scrolling(page):
+    """A page inside a scroll area: it takes the room it is given and
+    scrolls for the rest, instead of demanding its full height of the
+    window. The pop-out takes the scroll area with it."""
+    area = QScrollArea()
+    area.setWidgetResizable(True)
+    area.setFrameShape(QScrollArea.NoFrame)
+    area.setWidget(page)
+    return area
 
 
 class _PoppedWindow(QWidget):
@@ -86,7 +98,9 @@ class HerView(QWidget):
         layout.addLayout(pop_row)
         self._popped = {}
         self.inner = QTabWidget()
-        self.inner.addTab(self._build_personality(), "Personality")
+        # 2026-09-25: the tallest page scrolls instead of setting the
+        # window's minimum height (it asked for 787 px).
+        self.inner.addTab(_scrolling(self._build_personality()), "Personality")
         self.inner.addTab(self._build_beliefs(), "Beliefs")
         self.inner.addTab(self._build_decisions(), "Decisions")
         self.inner.addTab(self._build_curiosity(), "Curiosity")
@@ -163,13 +177,20 @@ class HerView(QWidget):
         # stored beside the thing it disables.
         self.persona_toggle_btn = QPushButton()
         self.persona_toggle_btn.clicked.connect(self.toggle_persona)
-        for b in (self.reset_personality_btn, self.reset_phrases_btn, self.persona_toggle_btn):
-            btns.addWidget(b)
         btns.addStretch(1)
         self.personality_refresh_btn = QPushButton("🔄 Refresh")
         self.personality_refresh_btn.clicked.connect(self.refresh_personality)
         btns.addWidget(self.personality_refresh_btn)
         lay.addLayout(btns)
+        # 2026-09-25 (Craig: "why is the controller so much larger now?"):
+        # seven controls on one row were 2044 px of minimum width, and the
+        # widest row on any tab is the width of the window. The resets and
+        # the persona switch sit on their own row.
+        btns2 = QHBoxLayout()
+        for b in (self.reset_personality_btn, self.reset_phrases_btn, self.persona_toggle_btn):
+            btns2.addWidget(b)
+        btns2.addStretch(1)
+        lay.addLayout(btns2)
         self._refresh_persona_button()
 
         # -------------------------

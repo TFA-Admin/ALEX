@@ -730,3 +730,18 @@ queued a question about "the nature of Craig's gratitude and kindness";
 Craig retracted conclusion #25 himself from the Controller with a note.
 Memory 21 GB free of 32; GPU 8.9 of 10 GB with the 9b resident; the
 Controller used 1.9% of a core over 31 hours.
+
+### "Why is the controller so much larger now?" (2026-09-25)
+Measured offscreen: the window asked for 1150 x 720 and its minimum
+size hint was 4080 x 915. A QLabel that does not wrap demands its whole
+text as minimum width, and the widest thing on any tab is the width of
+the window; the Personality tab's new adjustments explanation (372
+characters) was 4032 px on its own. Behind it, rows of controls: the
+persona buttons (seven on one row, 2044 px), the Run buttons (six,
+1218 px), the Versions actions (1320 px), the Run switches (1356 px).
+The height came from the Personality page (787 px). **Fixed:** every
+long label wraps (one pass over the window at start), the wide rows are
+split in two, and the Personality page scrolls. Minimum size hint now
+1144 x 380. Dark mode arrived with it (controller/theme.py): Fusion
+style, one palette, stronger row tints, a switch on the Run tab,
+remembered in controller_settings.json, dark by default.

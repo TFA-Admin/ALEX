@@ -497,14 +497,19 @@ class InboxView(QWidget):
         row2.addWidget(self.v_approve_btn)
         row2.addWidget(self.v_reject_btn)
         row2.addStretch(1)
+        lay.addLayout(row2)
+        # 2026-09-25: the filter and refresh on their own row — four wide
+        # controls on one line set the whole window's minimum width.
+        row3 = QHBoxLayout()
         self.v_show_settled = QCheckBox("Show settled (merged, rejected, declined)")
         self.v_show_settled.setToolTip("Off: only what is open or being tried. On: everything, oldest greyed.")
         self.v_show_settled.stateChanged.connect(lambda _: self.refresh_versions())
-        row2.addWidget(self.v_show_settled)
+        row3.addWidget(self.v_show_settled)
         self.v_refresh_btn = QPushButton("🔄 Refresh")
         self.v_refresh_btn.clicked.connect(self.refresh_versions)
-        row2.addWidget(self.v_refresh_btn)
-        lay.addLayout(row2)
+        row3.addWidget(self.v_refresh_btn)
+        row3.addStretch(1)
+        lay.addLayout(row3)
 
         self._proposals = []
         self._gate_thread = None

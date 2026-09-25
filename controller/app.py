@@ -261,8 +261,22 @@ class AlexController(QWidget):
         super().closeEvent(event)
 
 
+def _wrap_long_labels(root: QWidget):
+    """2026-09-25 (Craig: "why is the controller so much larger now?"):
+    a QLabel that does not wrap demands its whole text as minimum width,
+    and the widest label on any tab sets the width of the window. The
+    Personality tab's new explanation ran to 372 characters. Every long
+    label wraps; the window is back to the size it asks for."""
+    for lbl in root.findChildren(QLabel):
+        if len(lbl.text()) > 90 and not lbl.wordWrap():
+            lbl.setWordWrap(True)
+
+
 def main():
+    from controller import theme
     app = QApplication(sys.argv)
+    theme.apply(app, theme.is_dark())
     window = AlexController()
+    _wrap_long_labels(window)
     window.show()
     sys.exit(app.exec())

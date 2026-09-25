@@ -59,11 +59,18 @@ class RunView(QWidget):
         self.check_orphans_btn = QPushButton("🧹 Check for Orphans")
         self.check_orphans_btn.clicked.connect(lambda: self.procs.check_for_orphans(prompt_if_none=True))
 
-        for b in [self.start_alex_btn, self.stop_alex_btn, self.restart_alex_btn,
-                  self.start_ollama_btn, self.stop_ollama_btn, self.check_orphans_btn]:
+        # 2026-09-25 (Craig: "why is the controller so much larger now?"):
+        # six buttons on one row were 1218 px of minimum width. Hers on one
+        # row, Ollama's on the next.
+        for b in [self.start_alex_btn, self.stop_alex_btn, self.restart_alex_btn]:
             btns.addWidget(b)
         btns.addStretch(1)
         layout.addLayout(btns)
+        btns_ollama = QHBoxLayout()
+        for b in [self.start_ollama_btn, self.stop_ollama_btn, self.check_orphans_btn]:
+            btns_ollama.addWidget(b)
+        btns_ollama.addStretch(1)
+        layout.addLayout(btns_ollama)
 
         # ---------------- MODEL ----------------
         # 2026-09-21: her model, chosen here. Takes effect on her next
@@ -83,6 +90,10 @@ class RunView(QWidget):
         self.model_selector.currentTextChanged.connect(self._model_choice_changed)
         model_row.addWidget(self.model_selector)
         model_row.addStretch(1)
+        layout.addLayout(model_row)
+        # 2026-09-25: the switches on their own row — six widgets on one
+        # line were 1356 px of minimum width and set the window's.
+        switch_row = QHBoxLayout()
         # 2026-09-21 (Craig: "give her access to the larger model whenever
         # she is not being used directly but still active"): her author
         # runs in her process when nobody has spoken to her for a while
@@ -95,8 +106,17 @@ class RunView(QWidget):
             "After 15 minutes with nobody talking to her, she looks at one whitelisted setting "
             "and may propose a change. It lands in the Inbox as a version for you to test and decide.")
         self.idle_author_box.stateChanged.connect(self._idle_author_changed)
-        model_row.addWidget(self.idle_author_box)
-        layout.addLayout(model_row)
+        switch_row.addWidget(self.idle_author_box)
+
+        # 2026-09-25 (Craig: "can we give it a dark mode?"): controller/theme.py
+        from controller import theme as _theme
+        self.dark_box = QCheckBox("Dark mode")
+        self.dark_box.setChecked(_theme.is_dark())
+        self.dark_box.setToolTip("One palette for the whole Controller; remembered in config/controller_settings.json")
+        self.dark_box.stateChanged.connect(self._dark_mode_changed)
+        switch_row.addWidget(self.dark_box)
+        switch_row.addStretch(1)
+        layout.addLayout(switch_row)
 
         # 2026-09-22: which model her author thinks with when she is idle.
         # Her own model with thinking on needs no reload; a larger one
@@ -170,6 +190,14 @@ class RunView(QWidget):
     def selected_model(self) -> str:
         text = self.model_selector.currentText().strip()
         return text or load_controller_settings().get("alex_llm_model", DEFAULT_ALEX_MODEL)
+
+    def _dark_mode_changed(self, _state):
+        from PySide6.QtWidgets import QApplication
+        from controller import theme as _theme
+        dark = bool(self.dark_box.isChecked())
+        _theme.remember(dark)
+        _theme.apply(QApplication.instance(), dark)
+        self.note(f"[SYSTEM] {'Dark' if dark else 'Light'} mode — tinted rows update on their next refresh")
 
     def _idle_author_changed(self, _state):
         settings = load_controller_settings()

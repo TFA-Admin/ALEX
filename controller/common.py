@@ -165,6 +165,21 @@ TINTS = {
     "bad":     QColor(220, 53, 69, 60),     # red: rejected / retracted / a slip
     "settled": QColor(128, 128, 128, 45),   # grey: old, backlog, declined
 }
+_TINTS_LIGHT = dict(TINTS)
+# 2026-09-25 (dark mode): the same hues, stronger, since a 55-alpha wash
+# over a near-black base reads as nothing.
+_TINTS_DARK = {
+    "open":    QColor(255, 179, 0, 95),
+    "active":  QColor(66, 133, 244, 100),
+    "good":    QColor(46, 160, 67, 105),
+    "bad":     QColor(220, 53, 69, 110),
+    "settled": QColor(160, 160, 160, 60),
+}
+
+
+def set_dark_tints(dark: bool):
+    """Swaps the tint set in place, so every view's tint_for() follows."""
+    TINTS.update(_TINTS_DARK if dark else _TINTS_LIGHT)
 
 # status or kind text -> tint key (matched by substring, first hit wins)
 _STATE_WORDS = (
