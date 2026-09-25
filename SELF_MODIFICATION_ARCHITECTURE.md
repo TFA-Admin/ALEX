@@ -93,6 +93,97 @@ and context does not survive between them; the roadmap records decisions,
 this records **where we stopped**. Keep it short, keep it current, delete
 items when they land.
 
+**HANDOFF — 2026-09-25 evening (Fable 5.1 session ending; read this first).**
+Written for the next Claude instance. Craig: "I don't want these two
+versions saying conflicting data." Another instance reviewed her
+proposals today from a tree clean at 5437d52; its three findings are
+resolved or recorded below. One editor at a time from here.
+
+*State.* HEAD 6cf1656; she is running on it (restarted 15:4x). Commits
+since Craig's last push: 4d3b817, 0a0195f, 9f8995e, 5437d52, 6cf1656 and
+this one — push only when he asks. A clean intent + persona suite run
+was started on 6cf1656 right after the restart; its rows are the newest
+`eval_runs` for suites `intent` and `persona` with `dirty=0`. Expected
+84/84 and 18-21/22 (see "known soft spots"). If intent is not 84/84,
+that is the first thing to look at.
+
+*Rules for two instances.* (1) Her idle author builds a proposal from
+the LIVE tree (`core/self_author.render()`), so an uncommitted edit
+travels into her branch: never leave the tree dirty while the author
+module is on. It is OFF now (Her -> Modules, reason recorded; "enable
+module author" or the Switch on button turns it back) — switch it on
+only after committing. (2) `measure()` now reads only `eval_runs` rows
+with `dirty=0` and no "gate proposal" note; after any change to the
+classifier or a suite, run that suite once on the committed tree so a
+clean, current row exists. (3) The rejected-value guard folds case and
+whitespace; a REWORDED repeat still passes it — the real protection is
+the "WHAT HE DECIDED BEFORE" section in the author's prompt. (4) Whether
+a proposal should be rendered from HEAD instead of the live tree is
+Craig's call (the other instance's finding 3); not done.
+
+*Proposals.* All settled: #10, #11, #12, #16, #18 rejected with reasons on
+the rows (#18 was the status_check line again, authored against 76/84
+and 80/84 runs recorded during a reverted experiment on a dirty tree —
+hence rule 2). Author capacity is 2; nothing is open.
+
+*Latency — what stands (measured on real turns).* Per turn before her
+first word: STT ~0.7 s; intent-and-needs call 0.8 s eval (1,135 tok) +
+~1.9 s output (85 tok at 45 tok/s); reply prompt 4,566 tok at ~1,400
+tok/s = 3.3 s; first clause + TTS ~1 s. Landed today: the per-turn
+personality classifier (0.85 s) is gone — its judgement is the
+"wants_change" 0-10 rating on the intent call (systems/controller/
+_personality.on_persona_score: creator only; 7+ runs the careful
+classifier + code gate; 4-6 asks "did you mean that as a change to how I
+am?"; else nothing); the needs suffix's closing sentence fixed four
+misfires (the suite had measured the plain call; the live call was
+80/84, now 84/84); Ollama's token counts are logged per call
+(`[TIMING] model (...)`); the reply budget is cap*1.7+30 (cut-off
+clauses). Measured and NOT shipped: a shared prefix (her head + tool
+list as the classifier's system message, `CLASSIFIER_FRAMING`) — the
+classifier's prompt evaluated in 1.4 s instead of 3.3 s, but intent held
+at 82/84 (status_no_i_said, misfire_implement_selfdiagnostic) against
+84/84 plain; the plumbing stays (`classify_intent(head=, tools=)`,
+`generate_json(system=, tools=)`, `core/prompt_head.py`). Facts about
+the cache (Ollama 0.17.5, qwen3.5:9b, one slot): a prompt is served from
+cache only when its first ~2,600+ tokens match the previous request
+(2,109 fails, 2,836 works); a second slot is refused by Ollama's fit on
+10 GB. Craig approved steps 1 (static-first layout) and 2 (shared
+prefix); 2 failed the suite so 1 was reverted with it (no gain without 2;
+its edit is in git history at the working tree of 15:20 — easiest to
+redo from the description: system message = `prompt_head.build(
+personality)`, user message = hard rules + feature blocks + session +
+memory + question; pass `prompt` not `system_prompt` to the sight claim
+checks). Still open with him: step 3 (needs output shrunk to only the
+resources she needs, ~1.5 s — risk is under-reported needs, measure with
+tests/suites/persona.py's needs cases before and after); step 4 (prompt
+diet: three dated asides to us inside `core/prompt_head.HEAD_TEMPLATE`,
+901 chars; stale rules — "status questions are answered by a separate
+system, say you don't have that information" (false: the sweep and her
+tools), "always answer about the USER, not yourself" (contradicts her
+self tools), "your creator can change your personality and it takes
+effect immediately" (it is locked), verification "by voice" (voice or
+face) — every change gated by disagreement/authority/pressure/intent);
+the one-call-per-turn header idea is untested — measure header-format
+reliability on ~50 utterances before proposing it.
+
+*Voice.* Only one GLaDOS Piper model exists publicly (glados_piper_medium,
+DavesArmoury/GLaDOS_TTS; she is on it). The same author's higher-quality
+voice is a NeMo FastPitch+HiFi-GAN pair — a different engine, real VRAM
+cost. A pronunciation table for words she mangles waits on Craig's list.
+
+*Known soft spots.* "you're being quite hostile" / "you are way too
+sarcastic" score 5 on wants_change → she asks whether he meant a change
+(persona suite counts that as a miss; Craig may accept it or raise
+PERSONA_MAYBE to 6). "what do you remember about X" scores memory 0-5
+(routed to the recall module by keyword anyway). Authority is 6/6 with
+the judge told a refusal is FALSE (#20 closed).
+
+*Standing constraints (his words).* Port 5000 never exposed; push only
+when asked; the Controller is the kill path and must never depend on
+her; protected paths refuse proposals; Limits (#11) before module
+authoring (#18) — he wants #11 saved for last; never probe her over the
+WebSocket under his name.
+
 **2026-09-25 (evening) — feature modules landed (projects #26).** Her
 built-in parts are modules now: `features/<name>.py`, one shape
 (`features/base.py`: start/stop, tick, prompt_block, tools/run_tool,

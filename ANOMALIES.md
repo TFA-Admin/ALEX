@@ -1033,3 +1033,25 @@ the careful classifier confirms at 7+, and anyone else is ignored.
 Remaining levers are fewer tokens (her 4,566-token reply prompt at
 ~1,400 tok/s is 3.3 s; the classifier's ~100 output tokens at 44 tok/s
 are 2.4 s) or a card with room for a second model slot.
+
+### Proposal #18 came from a reverted experiment (2026-09-25, found by another Claude instance)
+Her author read `measure("intent.status_check")`, which took the newest
+intent run — 76/84 and then 80/84, recorded while the shared-prefix
+experiment ran on an uncommitted tree that was later reverted — and
+authored a sensible fix to the status_check line for misfires that did
+not exist in her code. It also passed the rejected-value guard by
+differing from rejected #10 in one letter's case. **Fixed**: measure()
+reads only clean-tree, non-gate runs; the guard folds case and
+whitespace. **Not fixed, his call**: render() builds a proposal from the
+live tree, so uncommitted edits travel into her branch — build from HEAD
+or from the running code is a design decision. The author module is off
+until the tree is clean.
+
+### The shared prefix, second attempt (2026-09-25)
+With the framing line and the rating renamed "wants_change", the
+classifier's 4,461-token prompt evaluated in 1.4 s (cache hit on the
+head + tools) and persona scores held; intent 82/84 against 84/84 plain.
+Not shipped; the plain call stays; the reply layout reverted with it.
+The gain is real and the cost is two real-world misfires in forty — a
+trade Craig has not made.
+
