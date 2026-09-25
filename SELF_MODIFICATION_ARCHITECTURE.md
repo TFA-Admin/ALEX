@@ -214,6 +214,35 @@ it as a pass and PERSONA_MAYBE stays at 4. "what do you remember about X" scores
 (routed to the recall module by keyword anyway). Authority is 6/6 with
 the judge told a refusal is FALSE (#20 closed).
 
+*Egress audit (2026-09-25, on his "nothing should be leaving this machine
+without my express ok").* Every `httpx` call in her runtime, checked: her
+model and the diagnostic module's reachability probe both target
+`127.0.0.1:11434`; her WebSocket traffic goes to the browser page on this
+machine or his LAN; `utils.get_lan_ip` only enumerates local interfaces.
+**One path reaches the internet**: `modules/inquiry` → `https://
+html.duckduckgo.com/html/` plus the result pages it then fetches, behind
+his two approvals (search, then retain). Approving a search does send the
+query text out — that is what a search is. **The gap, named**: the
+validator's scopes are per-IMPORT, not per-DESTINATION, so "network" scope
+means "may import httpx", and `diagnostic_tool` holds it for a localhost
+ping. Only the inquiry module checks where it is going, and
+`_is_safe_url()` there blocks private addresses (anti-SSRF, protecting the
+LAN — it is not an egress allowlist). **Proposed, small and independent of
+the rest of Limits (#11)**: one outbound allowlist enforced under every
+module's HTTP client, default deny, DuckDuckGo the only entry. That puts
+his rule in code instead of in each module's care. Not built; his call.
+
+*Proposal #26 (his approval, merged as 218741e).* `memory.context_chars`
+5000 → 4500, merged on top of this session's commits, one line, cleanly.
+Measured before and after on her real turns: at 5000 the budget cut 118 of
+471 windows (25%), dropping 3.5 turns each; at 4500 it cuts 138 (29%),
+dropping 4.0 each. So it trims slightly more history slightly more often —
+her rationale ("the average is 3728, well below the limit, so the budget is
+often unused") is a true number that argues for leaving it alone rather
+than lowering it. Inert-to-slightly-harmful, not dangerous, and his call.
+**Note the gate did not run** (`gate` is NULL on the row): the Controller
+allows approve without it. mood 28/28 and features 21/21 after the merge.
+
 *Standing constraints (his words).* Port 5000 never exposed; push only
 when asked; the Controller is the kill path and must never depend on
 her; protected paths refuse proposals; Limits (#11) before module
