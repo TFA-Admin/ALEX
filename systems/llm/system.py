@@ -941,6 +941,28 @@ class System(BaseSystem):
             noticed_block = ("\n\n    THROUGH THE CAMERA, LATELY (glances while nothing was said; mention only if it "
                              "matters or he asks):\n" + _lines)
 
+        # 2026-09-25 (Craig: "I'm seeing a backlog of questions in her
+        # system. Is she not able to bring old questions up again?"): when
+        # what he says touches the topic of an unanswered question of hers
+        # — one she let go after two asks included — she may ask it now.
+        recall_block = ""
+        if not session.get("awaiting_curiosity_answer"):
+            try:
+                from db.db import fetch_relevant_curiosity as _frc, mark_curiosity_question_asked as _mark
+                _rel = await _frc(user_id, user_input)
+            except Exception:
+                _rel = None
+            if _rel:
+                before = ("you asked before and got no answer" if _rel.get("delivered") else "you never got to ask")
+                recall_block = (f"\n\n    HE HAS JUST TOUCHED ON SOMETHING YOU WANTED TO KNOW ({before}): "
+                                f"\"{_rel['question']}\" If it fits, ask it now in your own words, after your answer.")
+                session["awaiting_curiosity_answer"] = _rel["topic"]
+                try:
+                    await _mark(_rel["topic"])
+                except Exception:
+                    pass
+                logger.info(f"[CURIOSITY] the topic {_rel['topic']!r} came up — bringing her question back")
+
         # 2026-09-23 (Craig: "she now claims I did not authenticate when I
         # can see it did"): nothing told her. The session, stated plainly,
         # last thing before she speaks.
@@ -987,7 +1009,7 @@ class System(BaseSystem):
 
     PERSONALITY (this is genuinely yours — express it, don't fight it):
     {personality}
-{hard_rules_block}{dials_block}{sight_block}{noticed_block}{session_block}
+{hard_rules_block}{dials_block}{sight_block}{noticed_block}{recall_block}{session_block}
 
     You have access to stored information about the user.
 

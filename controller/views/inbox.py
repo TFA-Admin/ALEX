@@ -24,6 +24,31 @@ import json
 import asyncio
 import webbrowser
 
+
+def _plain(p: dict) -> str:
+    """2026-09-25 (Craig, reading her proposals: "'A lower threshold' of
+    what? Increasing turns of what?"). The whitelist has a plain
+    description of every setting and a phrase for each direction; the
+    Inbox never showed them. One line, before her rationale."""
+    try:
+        from core.self_author import WHITELIST, current_value
+        t = WHITELIST.get(p.get("target") or "")
+        if not t:
+            return ""
+        line = f"What this is: {t.about}"
+        if t.kind == "int" and p.get("value") not in (None, ""):
+            try:
+                new, cur = int(p["value"]), int(current_value(t.key))
+                if new != cur:
+                    phrase = t.up if new > cur else t.down
+                    if phrase:
+                        line += f" This change ({cur} -> {new}): {phrase}."
+            except (TypeError, ValueError):
+                pass
+        return line
+    except Exception:
+        return ""
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget,
     QTableWidget, QAbstractItemView, QMessageBox, QInputDialog, QCheckBox,
@@ -280,10 +305,10 @@ class InboxView(QWidget):
             for p in versions.list_proposals(limit=30):
                 if p["status"] == "requested":
                     acts, detail = ["author_version", "reject_version", "open_versions"], \
-                        f"she asked to change {p.get('target')}: {p.get('rationale') or ''}"
+                        f"she asked to change {p.get('target')}: {_plain(p)} {p.get('rationale') or ''}".strip()
                 elif p["status"] == "proposed":
                     acts, detail = ["launch_version", "reject_version", "open_versions"], \
-                        f"branch ready, not yet run — {p.get('rationale') or ''}"
+                        f"branch ready, not yet run — {_plain(p)} {p.get('rationale') or ''}".strip()
                 elif p["status"] == "gated":
                     acts, detail = ["approve_version", "reject_version", "open_versions"], \
                         "gated: " + _gate_summary(p.get("gate")) + " — decide"
@@ -580,7 +605,11 @@ class InboxView(QWidget):
         if not p:
             self.version_detail.setText("Select a proposal.")
             return
-        text = f"#{p['id']} — {p['title']}\nBy {p.get('author')}. {p.get('rationale') or ''}"
+        text = f"#{p['id']} — {p['title']}"
+        plain = _plain(p)
+        if plain:
+            text += "\n" + plain
+        text += f"\nBy {p.get('author')}. {p.get('rationale') or ''}"
         if p.get("branch"):
             text += f"\nBranch {p['branch']}"
         if p.get("gate"):

@@ -92,7 +92,7 @@ WHY THIS IS BEING LOOKED AT:
 {why}
 
 {bounds}
-Propose the value you believe is better, and say why in two or three sentences that refer to the numbers above. A change needs a number behind it: if the numbers show no problem with this setting, propose it UNCHANGED and say so — that is the common, correct answer, not a failure.
+Propose the value you believe is better. Begin your rationale with ONE sentence a person who has not read the code would understand — what this setting is and what your change will do to you in practice (for example: "This is how sure I must be before I look something up; at 6 I will look things up a little more often before answering."). Never say "the threshold" or "the window" without saying of what. Then two or three sentences that refer to the numbers above. A change needs a number behind it: if the numbers show no problem with this setting, propose it UNCHANGED and say so — that is the common, correct answer, not a failure.
 {effect_ask}
 Respond with ONLY a JSON object: {{"new_value": {value_shape}{effect_shape}, "rationale": "<why>"}}"""
 

@@ -745,3 +745,37 @@ split in two, and the Personality page scrolls. Minimum size hint now
 1144 x 380. Dark mode arrived with it (controller/theme.py): Fusion
 style, one palette, stronger row tints, a switch on the Run tab,
 remembered in controller_settings.json, dark by default.
+
+### "'A lower threshold' of what? Increasing turns of what?" (2026-09-25)
+Her first two proposals under the new pacing read, in the Inbox, as
+"deliberation.threshold: 7 -> 6 — A lower threshold would increase the
+frequency of resource checks..." and "memory.window_turns: 12 -> 16 —
+The current 12-turn window results in 27% of prompts being truncated...".
+The whitelist has had a plain description of every setting and a phrase
+for each direction since 2026-09-21; the Inbox never showed them, and
+her author was never asked to say what the thing was. **Fixed:** the
+Inbox puts "What this is: ... This change (7 -> 6): she looks things up
+more often." above her rationale, and the author's prompt requires the
+rationale to open with one sentence a person who has not read the code
+would understand. The review itself: #6 lowers the score at which she
+looks something up before answering from 7 to 6 — affects at most 12 of
+66 recent turns, with zero caught slips to justify it; her rationale
+cited the 37 turns scoring 4 or below, which a threshold of 6 does not
+touch. #7 raises the recent-exchange window from 12 to 16 — but the
+5000-character budget does the truncating (27% of windows), and more
+turns cannot reduce that; where the budget does not bind, four more old
+exchanges is more of the echo that caused the day's denials. Both gates
+clean (19/19, 84/84, 1/1, 2/2). Recommended: reject both, with those
+reasons, so her author learns from them.
+
+### "A backlog of questions in her system" (2026-09-25)
+Craig: "Is she not able to bring old questions up again?" She could,
+once: an unanswered question came back six hours later, and after two
+asks it was let go for good — silently, while the Controller kept
+showing it. Of 17 questions, 15 were answered; two were waiting. **Now:**
+an unanswered question of hers — one she let go included — comes back
+when the topic comes up in what he says (a shared word or stem: "kind"
+touches "gratitude and kindness", "coffee" touches "coffee toxicity"),
+asked in her own words after her answer and captured like any curiosity
+answer; not one asked in the last hour. The Curiosity tab's status says
+what happens next to each question.

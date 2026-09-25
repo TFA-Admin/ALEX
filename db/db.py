@@ -1807,6 +1807,52 @@ async def mark_curiosity_question_asked(topic: str):
         await db.commit()
 
 
+_CURIOSITY_STOP = {"craig", "craig's", "about", "their", "there", "these", "those", "which", "would",
+                   "should", "could", "thing", "things", "nature", "specific", "current", "original"}
+
+
+def _topic_words(text: str) -> set:
+    return {w for w in re.findall(r"[a-z']+", (text or "").lower()) if len(w) >= 4 and w not in _CURIOSITY_STOP}
+
+
+async def fetch_relevant_curiosity(user: str, text: str):
+    """2026-09-25 (Craig: "I'm seeing a backlog of questions in her system.
+    Is she not able to bring old questions up again?"). She could, once,
+    six hours later; after two asks a question was let go for good. Now an
+    unanswered question of hers — including one she let go — comes back
+    when the topic comes up: a word of five letters or more shared between
+    its topic and what he just said. Not one asked in the last hour."""
+    words = _topic_words(text)
+    if not words:
+        return None
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT id, topic, question, delivered, last_asked_at, user FROM curiosity_queue "
+            "WHERE answer IS NULL AND (user=? OR user IS NULL) "
+            "AND (last_asked_at IS NULL OR strftime('%s','now') - strftime('%s', last_asked_at) > 3600) "
+            "ORDER BY id DESC", (user,))
+        rows = await cursor.fetchall()
+    for r in rows:
+        if _touches(_topic_words(r[1]), words):
+            return {"id": r[0], "topic": r[1], "question": r[2], "delivered": r[3] or 0,
+                    "last_asked_at": r[4], "user": r[5]}
+    return None
+
+
+def _touches(a: set, b: set) -> bool:
+    """Shared word, or one the stem of the other: "kind" touches
+    "kindness", "coffee" touches "coffee". Four letters is the shortest
+    stem that counts."""
+    if a & b:
+        return True
+    for x in a:
+        for y in b:
+            short, long_ = (x, y) if len(x) <= len(y) else (y, x)
+            if len(short) >= 4 and long_.startswith(short):
+                return True
+    return False
+
+
 async def fetch_recent_memory_all(limit=20, since_id=0):
     """Recent conversation turns across all users — used by the
     self-reflection loop. `since_id` (2026-07-17, added after Craig found

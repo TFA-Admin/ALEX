@@ -801,12 +801,19 @@ class HerView(QWidget):
 
         self.curiosity_table.setRowCount(len(rows))
         for row, q in enumerate(rows):
+            # 2026-09-25 (Craig: "Is she not able to bring old questions up
+            # again?"): the status says what happens next to each one.
+            from db.db import CURIOSITY_MAX_ASKS, CURIOSITY_REASK_AFTER_S
+            n = int(q.get("delivered") or 0)
             if q.get("answer"):
                 status = f"answered {to_local(q.get('answered_at'))}"
-            elif q.get("delivered"):
-                status = f"asked {q['delivered']}x, no answer yet"
+            elif n >= CURIOSITY_MAX_ASKS:
+                status = f"asked {n}x, no answer — let go; comes back if the topic comes up"
+            elif n:
+                status = (f"asked {n}x, no answer yet — asks again after {CURIOSITY_REASK_AFTER_S // 3600} h, "
+                          "or sooner if the topic comes up")
             else:
-                status = "not asked yet"
+                status = "waiting — asked at his next quiet moment"
             fill_row(self.curiosity_table, row, [
                 to_local(q.get("created_at")), q.get("topic"), q.get("question"), status, q.get("answer") or ""])
         self.curiosity_table.resizeRowsToContents()
