@@ -1009,3 +1009,27 @@ clause the budget had cut. The budget is now a sentence past the cap
 (cap × 1.7 + 30); the prompt still says the cap; the fragment rule stays
 for real overruns. Live through the personality module's hot reload.
 The voice itself is already a GLaDOS Piper model (glados_piper_medium).
+
+### The shared prompt head: measured, and withdrawn (2026-09-25)
+The plan was to start the intent call and her reply with the same text
+so Ollama's prefix cache would carry between them. Two measurements
+killed it. (1) With her head — identity, personality, critical rules —
+as the classifier's system message, the intent suite fell from 84/84 to
+76/84: seven "I'm testing…" sentences read as status checks with her
+rules in front of the judgement. (2) The cache would not have helped
+anyway: on this Ollama (0.17.5) and model, an identical prompt is served
+from cache (0.50 s for 3,160 tokens against 2.0-2.5 s), and so is one
+that differs only in its last few tokens, but one that differs 2,100
+tokens in — the classifier's own text after the head — is re-evaluated
+in full (1.97 s). Her reply prompt changes in the middle every turn (the
+dials, the pet, the memory window), so it can never reuse the cache
+here. The head stays as a module (core/prompt_head.py) and her reply
+still begins with it — same words, rules before the per-turn blocks —
+but the classifier does not use it. What did land from the speed work:
+the personality-command classifier's 0.85 s a turn is gone without a
+word list — the judgement rides on the intent-and-needs call as a 0-10
+"persona" score (tests/suites/persona.py), the creator is asked at 4-6,
+the careful classifier confirms at 7+, and anyone else is ignored.
+Remaining levers are fewer tokens (her 4,566-token reply prompt at
+~1,400 tok/s is 3.3 s; the classifier's ~100 output tokens at 44 tok/s
+are 2.4 s) or a card with room for a second model slot.

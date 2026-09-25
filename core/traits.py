@@ -218,7 +218,7 @@ def render(offsets, mood_line: str = "") -> str:
         lines.append(f"    - Reply length: at most {cap} words. Stop when you have answered; a cut-off reply is worse than a short one.")
     if not lines and not mood_line:
         return ""
-    out = "\n\n    YOUR DIALS (his standing adjustments to the description above, plus how you feel right now; they shape how the personality comes out):\n"
+    out = "\n\n    YOUR DIALS (his standing adjustments to your PERSONALITY description, plus how you feel right now; they shape how the personality comes out):\n"
     if lines:
         out += "\n".join(lines)
     else:

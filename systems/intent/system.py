@@ -13,6 +13,7 @@ import time
 
 from core.system_base import BaseSystem
 from core.intent_classifier import classify_intent
+from core import prompt_head
 from core.text_utils import has_content_words
 from db.db import fetch_recent_memory
 from config.logger_config import logger
@@ -59,11 +60,35 @@ class System(BaseSystem):
                 recent_lines = None
 
         t0 = time.time()
+        # 2026-09-25: tried with her prompt head (core/prompt_head.py) as
+        # the system message so this call and her reply would share Ollama's
+        # prefix cache. Measured the same hour: the intent suite fell from
+        # 84/84 to 76/84 — seven "I'm testing..." sentences read as status
+        # checks with her rules in front of the classifier — and the cache
+        # was not shared anyway (a system message is re-evaluated in full by
+        # this Ollama/model; see ANOMALIES.md). So: no head here.
         intent = await classify_intent(text, with_needs=with_needs, recent_lines=recent_lines)
         logger.info(f"[TIMING] intent classification: {time.time() - t0:.2f}s"
                     + (" (with deliberation needs)" if with_needs else ""))
         session["needs"] = intent.pop("needs", None)
+        persona = int(intent.pop("persona", 0) or 0)
         session["intent"] = intent
+
+        # 2026-09-25 (Craig: "would it be possible for her to determine based
+        # on the sentence whether something is personality related and THEN
+        # kick on that process... if it's the creator role talking then ask
+        # if that was meant to be a personality adjustment"). The judgement
+        # rides on this call; systems/controller/_personality.py decides
+        # what to do with the score — nothing at all for anyone but him.
+        if persona >= 4:
+            from systems.controller import _personality
+            try:
+                result = await _personality.on_persona_score(session, user_id, text, text.lower().strip(), persona)
+            except Exception as e:
+                logger.warning(f"⚠️ persona handling failed: {e}")
+                result = None
+            if result:
+                return result
 
         # only log when something was actually detected — logging "none"
         # for every ordinary message would bury the signal in noise

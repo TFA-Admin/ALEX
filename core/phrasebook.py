@@ -194,6 +194,14 @@ PHRASE_REGISTRY = {
         "Failed to reload '{name}'.",
         "Tell the person a specific system failed to reload. {name} is a placeholder for the system name — keep it in the phrase."
     ),
+    "persona_confirm": (
+        "Did you mean that as a change to how I am?",
+        "Ask the creator, in one short question, whether what he just said was meant as an instruction to change her personality or manner going forward. One sentence; do not guess what the change would be."
+    ),
+    "persona_not_a_change": (
+        "Understood. Not a change.",
+        "Acknowledge in one short sentence that what he said was not meant as a change to her personality; nothing else."
+    ),
     "module_reloaded": (
         "Module '{name}' is back up.",
         "Confirm a specific module of hers was taken offline, re-read from disk and started again. {name} is a placeholder for the module name — keep it in the phrase."

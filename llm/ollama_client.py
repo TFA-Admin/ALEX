@@ -456,7 +456,8 @@ class OllamaManager:
                 await self.aclose()
 
     async def generate_json(self, prompt: str, model: str = DEFAULT_MODEL, timeout: float = 15.0,
-                             temperature: float = None, think: bool = None, num_predict: int = 200):
+                             temperature: float = None, think: bool = None, num_predict: int = 200,
+                             system: str = None):
         """
         Single-shot (non-streaming) call for short structured-extraction
         tasks (name parsing, fact extraction, command parameters) — these
@@ -506,7 +507,11 @@ class OllamaManager:
                 timeout=timeout,
                 json={
                     "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
+                    # 2026-09-25: an optional system message — core/prompt_head.py,
+                    # the same head her reply begins with, so the prefix cache
+                    # is shared between the two calls of a turn.
+                    "messages": (([{"role": "system", "content": system}] if system else [])
+                                 + [{"role": "user", "content": prompt}]),
                     "stream": False,
                     "keep_alive": KEEP_ALIVE,
                     **think_kw,

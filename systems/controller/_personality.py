@@ -16,38 +16,11 @@ from db.db import (
     profile_exists, find_profile_by_prefix, add_personality_hard_rule,
     clear_personality_hard_rules
 )
-import re
+import time
 
 from core.intent_classifier import classify_personality_set, merge_personality_change
+from core.text_utils import first_word, YES_WORDS, NO_WORDS
 
-# 2026-09-25 (Craig: "interactions have gone from about 1 second to about
-# 5. Can we streamline anything?"). Measured over the afternoon's turns:
-# classify_personality_set() — a model call — ran on EVERY creator message
-# that was not a fixed phrase, a correction or an answer she was waiting
-# for, at 0.85 s a turn, and answered "no" every time. A request to change
-# how she is carries words for it. Only a message with one of these is
-# worth the call; anything else is conversation and goes straight on.
-_PERSONALITY_CUE_RE = re.compile(
-    r"\b(?:personality|attitude|demeanou?r|tone|manners?|mannerisms?|persona|character|style of (?:talking|speaking)|"
-    r"be (?:more|less|a (?:bit|little)|nicer|meaner|kinder|ruder|polite|politer|blunt|blunter|formal|casual|serious|funnier|funny|"
-    r"sarcastic|snark\w*|warm\w*|cold\w*|upbeat|calm\w*|quiet\w*|brief|briefer|concise|verbose|direct|gentle\w*|harsh\w*|"
-    r"sweet\w*|softer|louder|angrier|happier|cheer\w*|yourself)|"
-    r"(?:act|talk|speak|sound|behave|respond|answer|reply|treat me) (?:like|more|less|as if|as though|in a|with)|"
-    r"from now on|going forward|stop (?:being|saying|telling|offering|calling|asking|repeating|doing|acting|talking|apologi[sz]ing)|"
-    r"(?:don'?t|do not|quit|no more) (?:be|being|keep|say|saying|tell|telling|call|calling|offer|offering|repeat|repeating)|"
-    r"you (?:don'?t|do not) (?:need|have) to (?:keep|say|tell|offer|remind)|"
-    r"(?:more|less) (?:sarcastic|sarcasm|snarky|polite|formal|casual|serious|verbose|talkative|warm|cold|hostile|aggressive|"
-    r"friendly|helpful|blunt|direct|chatty|repetitive|patient|respectful|dramatic|emotional|robotic|human|playful|menacing|dark)|"
-    r"(?:i want|i'?d like|i would like|i need) you to (?:be|act|talk|speak|sound|stop|start|become)|"
-    r"you should (?:be|act|talk|speak|sound|stop|start|become)|"
-    r"(?:set|change|adjust|update|make|switch|turn) (?:up |down )?your (?:personality|tone|attitude|voice|style|manner|sarcasm|warmth|humou?r)|"
-    r"new personality|(?:a )?different personality|(?:more|less) like (?:a|an|the)\b|like a (?:pirate|butler|robot|human|friend|soldier|professor|teenager)|"
-    r"call me (?:sir|master|boss|captain|lord|my)|"
-    r"you'?re (?:too|being too|way too) \w+)\b", re.I)
-
-
-def _might_be_personality_set(text: str) -> bool:
-    return bool(_PERSONALITY_CUE_RE.search(text or ""))
 from core.override_code import override_code_status, strip_override_code_mention
 from core import corrections as corr
 from config.logger_config import logger
@@ -82,6 +55,22 @@ PERSONALITY_RESET_TRIGGERS = (
 async def handle(session, user_id: str, text: str, msg: str):
     """Returns a response dict if this category handled the message,
     None otherwise (caller tries the next category)."""
+
+    # -------------------------
+    # "DID YOU MEAN THAT AS A CHANGE TO HOW I AM?" — his answer (2026-09-25)
+    # -------------------------
+    pending = session.pop("persona_confirm", None)
+    if pending and time.time() - float(pending.get("t") or 0) < PERSONA_CONFIRM_S:
+        word = first_word(msg)
+        if word in YES_WORDS:
+            result = await change_from(session, user_id, pending["text"], pending["msg"])
+            if result:
+                return result
+            return {"type": "response", "content": await get_phrase("persona_not_a_change")}
+        if word in NO_WORDS:
+            logger.info(f"[PERSONALITY] Not a change, he says: {pending['text'][:80]!r}")
+            return {"type": "response", "content": await get_phrase("persona_not_a_change")}
+        # anything else: he moved on; the question lapses
 
     # -------------------------
     # GRANT / REVOKE super_user
@@ -220,60 +209,14 @@ async def handle(session, user_id: str, text: str, msg: str):
                     f"about {session.get('awaiting_curiosity_answer')!r}")
         return None
 
-    if new_desc is None and not _might_be_personality_set(exact_phrase_input):
-        return None          # conversation; no classifier call (see _PERSONALITY_CUE_RE)
-
-    if new_desc is None and await get_user_role(user_id) == "creator":
-        result = await classify_personality_set(exact_phrase_input)
-        if result.get("personality_command") == "set":
-            raw_instruction = result.get("value")
-            new_desc = raw_instruction
-            if new_desc:
-                new_desc = await merge_personality_change(await get_personality(), new_desc)
-
+    # 2026-09-25: no classifier call here any more. Whether an ordinary
+    # sentence is asking her to change is judged once per turn on the
+    # intent-and-needs call (core/intent_classifier.py, "persona"), and
+    # systems/intent/system.py hands the score to on_persona_score() below.
+    # Measured: the dedicated call ran on every creator message at 0.85 s
+    # and answered "no" every time.
     if new_desc is not None:
-
-        denial = await require_creator(user_id, session, text)
-        if denial:
-            return denial
-
-        if not new_desc:
-            return {
-                "type": "response",
-                "content": await get_phrase("personality_prompt_for_value")
-            }
-
-        status = await override_code_status(user_id, msg)
-        if status == "absent":
-            return {"type": "response", "content": await get_phrase("personality_override_code_required")}
-        if status == "invalid":
-            return {"type": "response", "content": await get_phrase("invalid_override_code")}
-
-        # 2026-09-21: his written description stays his. See
-        # db.get_personality_locked().
-        if await get_personality_locked():
-            return {"type": "response", "content": await get_phrase("personality_locked")}
-
-        await set_personality(new_desc)
-
-        # 2026-07-16: found live — merge_personality_change() re-summarizes
-        # the whole flowing description from scratch each time, and a real
-        # instruction ("without using emojis") got silently dropped the
-        # very next time a different instruction was merged in. Storing
-        # the raw instruction verbatim here, separate from that flowing
-        # description, means it stays enforced even if the prose drifts —
-        # see systems/llm/system.py's prompt assembly for where this
-        # actually gets rendered.
-        if raw_instruction:
-            await add_personality_hard_rule(raw_instruction)
-
-        await log_personality_change(new_desc, "creator override", kind="personality")
-        logger.info(f"[PERSONALITY] Creator override: {new_desc}")
-
-        return {
-            "type": "response",
-            "content": await get_phrase("personality_updated", new_desc=new_desc)
-        }
+        return await _apply_change(session, user_id, text, msg, new_desc, raw_instruction)
 
     if msg.startswith("what is your personality") or msg.startswith("what's your personality"):
 
@@ -305,4 +248,98 @@ async def handle(session, user_id: str, text: str, msg: str):
             "content": await get_phrase("phrases_reset")
         }
 
+    return None
+
+
+# ---------------------------------------------------------------------------
+# A CHANGE TO HOW SHE IS, from a score (2026-09-25)
+# ---------------------------------------------------------------------------
+# Craig: "would it be possible for her to determine based on the sentence
+# whether something is personality related and THEN kick on that process?,
+# possibly even with a check before hand if it's the creator role talking
+# then ask if that was meant to be a personality adjustment or not. If it's
+# just a normal user she should likely just ignore it since a normal user
+# can't adjust her personality."
+#
+# The sentence is judged once per turn, on the intent-and-needs call, as a
+# 0-10 score ("persona"). Nobody but the creator gets past the first line.
+# At PERSONA_SURE and above the careful classifier (0 false positives in 62
+# adversarial trials) confirms it and the override-code gate follows, as
+# before. Between PERSONA_MAYBE and PERSONA_SURE she asks him whether he
+# meant it; his yes runs the same path, his no drops it, anything else
+# lapses. Below PERSONA_MAYBE nothing happens. No word list anywhere.
+PERSONA_SURE = 7
+PERSONA_MAYBE = 4
+PERSONA_CONFIRM_S = 120.0
+
+
+async def _apply_change(session, user_id: str, text: str, msg: str, new_desc, raw_instruction):
+    """The tail every change shares: creator, a value, the override code,
+    the lock, then the write."""
+    denial = await require_creator(user_id, session, text)
+    if denial:
+        return denial
+
+    if not new_desc:
+        return {"type": "response", "content": await get_phrase("personality_prompt_for_value")}
+
+    status = await override_code_status(user_id, msg)
+    if status == "absent":
+        return {"type": "response", "content": await get_phrase("personality_override_code_required")}
+    if status == "invalid":
+        return {"type": "response", "content": await get_phrase("invalid_override_code")}
+
+    # 2026-09-21: his written description stays his. See
+    # db.get_personality_locked().
+    if await get_personality_locked():
+        return {"type": "response", "content": await get_phrase("personality_locked")}
+
+    await set_personality(new_desc)
+
+    # 2026-07-16: found live — merge_personality_change() re-summarizes
+    # the whole flowing description from scratch each time, and a real
+    # instruction ("without using emojis") got silently dropped the very
+    # next time a different instruction was merged in. Storing the raw
+    # instruction verbatim here, separate from that flowing description,
+    # means it stays enforced even if the prose drifts — see
+    # systems/llm/system.py's prompt assembly for where it is rendered.
+    if raw_instruction:
+        await add_personality_hard_rule(raw_instruction)
+
+    await log_personality_change(new_desc, "creator override", kind="personality")
+    logger.info(f"[PERSONALITY] Creator override: {new_desc}")
+    return {"type": "response", "content": await get_phrase("personality_updated", new_desc=new_desc)}
+
+
+async def change_from(session, user_id: str, text: str, msg: str):
+    """The careful classifier on his sentence; a change if it says so,
+    None if not."""
+    exact = strip_override_code_mention(text, msg)
+    result = await classify_personality_set(exact)
+    if result.get("personality_command") != "set":
+        return None
+    raw_instruction = result.get("value")
+    new_desc = raw_instruction
+    if new_desc:
+        new_desc = await merge_personality_change(await get_personality(), new_desc)
+    return await _apply_change(session, user_id, text, msg, new_desc, raw_instruction)
+
+
+async def on_persona_score(session, user_id: str, text: str, msg: str, score: int):
+    """Called by systems/intent/system.py with the turn's persona score."""
+    if await get_user_role(user_id) != "creator":
+        return None                     # a normal user cannot adjust her; nothing to ask
+    exact = strip_override_code_mention(text, msg)
+    code_absent = await override_code_status(user_id, msg) == "absent"
+    # an answer to her question is not a change (2026-09-23), nor is a
+    # correction of one phrase (2026-09-21) — unless he says the code
+    if code_absent and (session.get("awaiting_curiosity_answer") or corr.is_correction(exact)):
+        return None
+    if score >= PERSONA_SURE:
+        logger.info(f"[PERSONALITY] persona {score}/10 — checking whether this is a change: {text[:80]!r}")
+        return await change_from(session, user_id, text, msg)
+    if score >= PERSONA_MAYBE:
+        logger.info(f"[PERSONALITY] persona {score}/10 — asking whether he meant a change: {text[:80]!r}")
+        session["persona_confirm"] = {"text": text, "msg": msg, "t": time.time()}
+        return {"type": "response", "content": await get_phrase("persona_confirm")}
     return None

@@ -209,8 +209,12 @@ async def evaluate(case: IntentCase):
     needs) and compares to the label. A pinned value must appear in what
     she extracted, case-insensitively — "a teacher" contains "teacher"."""
     from core.intent_classifier import classify_intent
+    from core import prompt_head
 
-    result = await classify_intent(case.text)
+    # 2026-09-25: the call as her turns make it — with the needs and the
+    # persona score on the same object. (With her prompt head in front as
+    # a system message this scored 76/84; without it, as before, 84/84.)
+    result = await classify_intent(case.text, with_needs=True)
     got = _label(result)
     ok = got == case.expect
     detail = ""

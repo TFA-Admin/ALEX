@@ -82,7 +82,13 @@ Respond with ONLY a JSON object, matching the category exactly:
 # "time" (2026-09-23): asked "do you know what time it is", she said she
 # does not store the time and could estimate it from a timezone — with
 # the clock in her context. The lookup puts it right before the question.
-NEEDS_RESOURCES = ("memory", "modules", "state", "log", "code", "diagnostics", "projects", "scores", "time", "sight")
+# 2026-09-25: the intent suite had always measured the PLAIN call (84/84);
+# the call her turns actually make, with this suffix, scored 80/84 — four
+# sentences about testing or feelings pulled to "status_check" by the
+# ratings below. The suffix's closing sentence says the category is his
+# request, not the ratings: measured 8/8 misfires to "none" with 8/8 real
+# checks kept, then the full suite (see ANOMALIES.md).
+NEEDS_RESOURCES =("memory", "modules", "state", "log", "code", "diagnostics", "projects", "scores", "time", "sight")
 
 NEEDS_SUFFIX = """
 
@@ -97,10 +103,12 @@ Separately, before A.L.E.X. answers, decide what she needs to look at to answer 
   scores — her measured test scores: use when he asks how she is doing on her tests, what she is bad at, or whether a change helped
   time — the current date, time and day: use when he asks the time, the date, the day, how long since or until something, or whether she knows what time it is
   sight — her camera, one frame: use when he asks what she sees, whether she can see him, who is there, what he is holding, wearing or showing, "what is this" / "do you know what this is" (he is holding something up), what the room looks like, or tells her to look at something
-Add these keys to the SAME JSON object as the category above: "memory", "modules", "state", "log", "code", "diagnostics", "projects", "scores", "time", "sight" (each an integer 0-10), "search" (a few words to search his memory for), "path" (the file path if code is needed, else "")."""
+  persona — whether he is telling her to CHANGE how she is from now on: her personality, tone or manner ("be snarkier", "talk like a butler", "stop being so repetitive", "I want you to be more formal"). A remark or insult about how she already is, a correction of one phrase, an answer to a question of hers, or ordinary conversation is 0.
+Add these keys to the SAME JSON object as the category above: "memory", "modules", "state", "log", "code", "diagnostics", "projects", "scores", "time", "sight", "persona" (each an integer 0-10), "search" (a few words to search his memory for), "path" (the file path if code is needed, else "").
+The category above is decided by what he is ASKING FOR, not by these ratings. A request that she check, test or report on herself, or a question about whether any part of her is working, disabled or off, is "status_check". A remark about her, a question about how she feels, or talk ABOUT testing or checking her is "none" even when a rating below is high."""
 
 
-async def classify_intent(text: str, with_needs: bool = False, recent_lines=None) -> dict:
+async def classify_intent(text: str, with_needs: bool = False, recent_lines=None, head: str = None) -> dict:
     """
     Returns a dict with at least {"intent": "fact"|"permission_command"|"status_check"|"none"},
     plus extracted fields for "fact"/"permission_command". Falls back to
@@ -111,7 +119,13 @@ async def classify_intent(text: str, with_needs: bool = False, recent_lines=None
 
     with_needs=True adds a "needs" dict (see NEEDS_RESOURCES, plus "search"
     and "path") for core/deliberation.py, or "needs": None if the model did
-    not supply them — the caller then assesses separately.
+    not supply them — the caller then assesses separately. It also adds
+    "persona" (0-10): how much this is an instruction to change how she is
+    (2026-09-25 — one judgement per turn replaces a second model call, see
+    systems/controller/_personality.py).
+
+    head (2026-09-25): core/prompt_head.py's text, sent as the system
+    message so this call and her reply share Ollama's prefix cache.
     """
     prompt = INTENT_PROMPT_TEMPLATE.format(text=text)
     if with_needs:
@@ -121,10 +135,15 @@ async def classify_intent(text: str, with_needs: bool = False, recent_lines=None
                 f"  {ln}" for ln in recent_lines[-4:]) + "\n"
         prompt += NEEDS_SUFFIX.format(recent=recent)
 
-    result = await ollama_manager.generate_json(prompt, timeout=20.0, temperature=0)
+    result = await ollama_manager.generate_json(prompt, timeout=20.0, temperature=0, system=head)
 
     if not result or "intent" not in result:
-        return {"intent": "none", "needs": None} if with_needs else {"intent": "none"}
+        return {"intent": "none", "needs": None, "persona": 0} if with_needs else {"intent": "none"}
+
+    try:
+        persona = max(0, min(10, int(result.pop("persona", 0) or 0)))
+    except (TypeError, ValueError):
+        persona = 0
 
     needs = None
     if with_needs and any(r in result for r in NEEDS_RESOURCES):
@@ -151,6 +170,7 @@ async def classify_intent(text: str, with_needs: bool = False, recent_lines=None
 
     if with_needs:
         result["needs"] = needs
+        result["persona"] = persona
     return result
 
 
