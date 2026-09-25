@@ -51,6 +51,8 @@ _CLAIM_RE = re.compile(
     # 2026-09-23: "My sensors detect no matching voice print" — she has no
     # sensors that were consulted; a check she names is a check she claims.
     r"|my (?:sensors?|scanners?|readings?|instruments?) (?:detect|confirm|indicate|show|report|register)\b"
+    # 2026-09-25: "my inquiry modules confirm their current status" — no module ran.
+    r"|my (?:\w+ )?(?:modules?|subsystems?|systems?|diagnostics?) (?:confirm|report|indicate|show|verify|detect)\b"
     r")",
     re.I,
 )

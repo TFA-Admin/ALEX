@@ -299,6 +299,12 @@ class System(BaseSystem):
         # acknowledgement, not an answer, and storing it would close the
         # question while teaching her nothing.
         awaiting_topic = session.pop("awaiting_curiosity_answer", None)
+        # 2026-09-25: if he was already talking before she finished asking,
+        # he was answering what came before, not her question. Keep waiting.
+        if awaiting_topic and time.time() < session.get("curiosity_asked_until", 0):
+            logger.info(f"[ACTION] Curiosity about {awaiting_topic!r}: he spoke before she finished asking — not the answer, still waiting")
+            session["awaiting_curiosity_answer"] = awaiting_topic
+            awaiting_topic = None
         if awaiting_topic and len(user_input.split()) >= 4:
             try:
                 if await answer_curiosity_question(awaiting_topic, user_input):

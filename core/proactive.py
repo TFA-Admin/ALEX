@@ -84,7 +84,11 @@ async def _check_curiosity_delivery():
         # Same as the connect-time path: the next thing he says is
         # probably the answer.
         for session_id in get_active_creator_session_ids():
-            alex_core.get_session(session_id)["awaiting_curiosity_answer"] = q["topic"]
+            s = alex_core.get_session(session_id)
+            s["awaiting_curiosity_answer"] = q["topic"]
+            # 2026-09-25: what he says before she has finished asking is
+            # not the answer (see ws/ws_handlers._ask_when_quiet)
+            s["curiosity_asked_until"] = time.time() + 1.0 + 0.45 * len(q["question"].split())
 
         logger.info(f"[ACTION] Proactively delivered curiosity question mid-session: {q['question']}")
         await mark_curiosity_question_asked(q["topic"])

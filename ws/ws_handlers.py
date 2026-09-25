@@ -651,6 +651,20 @@ async def ws_text(websocket: WebSocket):
             pass
 
 
+# 2026-09-25 (Craig: "When I was answering another question she asked,
+# she suddenly asked a new question causing my previous speech to answer
+# the now current last thing which was her question"). Her greeting had
+# ended "Open it, Craig"; three seconds later the queued question went
+# out; his "Should be open now" was taken as the answer to it. Three
+# seconds of quiet is a breath, not a lull.
+CURIOSITY_CONNECT_QUIET_S = 20.0
+
+
+def _spoken_for(text: str) -> float:
+    """Roughly how long her speaking a line takes, for the guard below."""
+    return 1.0 + 0.45 * len((text or "").split())
+
+
 async def _ask_when_quiet(websocket, session_id, user_id, q, give_up_after: float = 120.0):
     """Delivers a queued curiosity question once she has finished speaking
     and nobody has spoken for a moment. last_addressed_at is the END of
@@ -661,8 +675,9 @@ async def _ask_when_quiet(websocket, session_id, user_id, q, give_up_after: floa
     t0 = time.time()
     while time.time() - t0 < give_up_after:
         session = alex_core.get_session(session_id)
-        quiet_from = session.get("last_addressed_at", 0) + 3.0
-        if time.time() >= quiet_from and idle_author.idle_for() >= 3.0 and not generation_lock.locked():
+        quiet_from = session.get("last_addressed_at", 0) + CURIOSITY_CONNECT_QUIET_S
+        if (time.time() >= quiet_from and idle_author.idle_for() >= CURIOSITY_CONNECT_QUIET_S
+                and not generation_lock.locked()):
             break
         await asyncio.sleep(1.0)
     else:
@@ -678,7 +693,11 @@ async def _ask_when_quiet(websocket, session_id, user_id, q, give_up_after: floa
     logger.info(f"[ACTION] Delivered curiosity question to {user_id}: {q['question']}")
     await say(websocket, q["question"], user_id=user_id)
     await mark_curiosity_question_asked(q["topic"])
-    alex_core.get_session(session_id)["awaiting_curiosity_answer"] = q["topic"]
+    session = alex_core.get_session(session_id)
+    session["awaiting_curiosity_answer"] = q["topic"]
+    # anything he says that ENDS before she has finished asking was not
+    # an answer to it (systems/llm/system.py reads this)
+    session["curiosity_asked_until"] = time.time() + _spoken_for(q["question"])
 
 
 # -------------------------

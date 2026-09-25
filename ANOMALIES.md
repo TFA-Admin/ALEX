@@ -796,3 +796,21 @@ and invisible to the re-ask (answer IS NULL). Repaired to NULL; an empty
 answer now counts as no answer everywhere. Real tally: 7 answered, 8
 open. I had told Craig 15 were answered. (3) The Curiosity tab's status
 now says what happens next to each question.
+
+### Her question landed on his answer to the last thing (2026-09-25 09:30)
+Craig: "When I was answering another question she asked, she suddenly
+asked a new question causing my previous speech to answer the now
+current last thing which was her question." The log: her greeting ended
+"Open it, Craig, or I will be forced to wait indefinitely in the dark";
+three seconds of quiet later the queued curiosity question went out
+("What is the significance of the Craftworld Eldar..."); his "Should be
+open now", spoken before she had finished asking, was stored as the
+answer to it, and she replied "The Craftworld Eldar should be
+accessible; my inquiry modules confirm their current status." Three
+seconds of quiet is a breath, not a lull, and the capture was blind to
+timing. **Fixed:** the connect-time question waits for 20 s of quiet
+(both since her playback ended and since he last spoke); a delivered
+question records when she will have finished asking it, and anything he
+says that ends before then is not taken as the answer (he was answering
+what came before). The stored answer was undone. "My modules confirm" is
+now a claim of work like "my sensors detect".
