@@ -983,8 +983,11 @@ The items, in build order:
       Craig: "give her access to the larger model whenever she is not
       being used directly but still active"). In her process, after 15
       min with nobody speaking (`ALEX_IDLE_AUTHOR_AFTER_S`) and nothing
-      generating, one target per pass (least recently proposed, 7-day
-      cooldown per target, one open proposal at a time), writing ONE
+      generating, one target per pass (least recently looked at; from
+      2026-09-25, Craig: "remove the seven day window... as many as she
+      wants during downtime with a capacity of 2 at a time" — up to two
+      proposals open, never two on one file, an hour's rest per target,
+      no pause after a decision), writing ONE
       `authored` row with target/value/rationale; the Controller's slow
       refresh turns it into a branch (`versions.build_authored`).
       `note_activity()` from `ws/ws_handlers.py` on connect and on every

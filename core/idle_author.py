@@ -28,11 +28,16 @@ HTTP request to Ollama is dropped, and Ollama stops generating — so the
 cost of an idle job to a person arriving is the reload, never a wait for
 the job to finish.
 
-Guards, the same as the module-proposal loop's: one open proposal at a
-time (requested/authored/proposed/gated), one proposal per target per
-COOLDOWN_DAYS, and the switch `idle_author` in
+Guards (2026-09-25, Craig: "remove the seven day window. She should be
+allowed to make as many as she wants during downtime with a capacity of
+2 at a time"): at most MAX_OPEN proposals open at once
+(requested/authored/proposed/gated); never two open on the same file
+(two merges into one file would collide); a target she has just looked
+at rests TARGET_REST_S before she looks again (so a "no change" verdict
+is not re-asked every minute); and the switch `idle_author` in
 config/controller_settings.json (Run view), read every cycle so it
-applies without a restart.
+applies without a restart. The seven-day cooldown per target and the
+six-hour pause after a decision are gone: during downtime she works.
 """
 import os
 import json
@@ -44,12 +49,9 @@ from config.logger_config import logger
 
 IDLE_AFTER_S = int(os.getenv("ALEX_IDLE_AUTHOR_AFTER_S", str(15 * 60)))
 CHECK_EVERY_S = 60
-COOLDOWN_DAYS = 7
+MAX_OPEN = 2                        # proposals waiting on Craig at once
+TARGET_REST_S = 60 * 60             # a target she just looked at waits this long
 OPEN_STATUSES = ("requested", "authored", "proposed", "gated")
-# 2026-09-23 (Craig: "she's already built out another proposal?" — #4 came
-# two minutes after he rejected #2). A decision is a signal; she waits
-# this long after any decision before looking at the next target.
-PAUSE_AFTER_DECISION_S = 6 * 3600
 
 _ALEX_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SETTINGS = os.path.join(_ALEX_DIR, "config", "controller_settings.json")
@@ -104,25 +106,20 @@ def author_model():
 
 
 async def _pick_target():
-    """The whitelisted target she has proposed on least recently, skipping
-    any inside its cooldown. None if an open proposal exists or nothing
-    is due."""
+    """The whitelisted target she has looked at least recently, skipping
+    any looked at within TARGET_REST_S and any whose file already has an
+    open proposal. None when MAX_OPEN proposals are open or nothing is
+    due."""
     from core.self_author import WHITELIST
     from db.db import fetch_proposals
 
     rows = await fetch_proposals(limit=200)
-    if any(r.get("status") in OPEN_STATUSES for r in rows):
+    open_rows = [r for r in rows if r.get("status") in OPEN_STATUSES]
+    if len(open_rows) >= MAX_OPEN:
         return None
-    now_utc = datetime.now(timezone.utc)
-    for r in rows:
-        if r.get("status") in ("rejected", "merged", "declined"):
-            try:
-                when = datetime.strptime(str(r.get("updated_at"))[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-            except ValueError:
-                continue
-            if (now_utc - when).total_seconds() < PAUSE_AFTER_DECISION_S:
-                return None
-    cutoff = datetime.now(timezone.utc) - timedelta(days=COOLDOWN_DAYS)
+    busy_files = {WHITELIST[r["target"]].file for r in open_rows
+                  if r.get("target") in WHITELIST}
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=TARGET_REST_S)
     last = {}
     for r in rows:
         t = r.get("target")
@@ -137,6 +134,7 @@ async def _pick_target():
     now = time.time()
     due = [k for k in WHITELIST
            if (k not in last or last[k] < cutoff)
+           and WHITELIST[k].file not in busy_files
            and now - _attempted.get(k, 0) > RETRY_AFTER_S]
     if not due:
         return None
@@ -152,7 +150,7 @@ async def run_once(force_target: str = None) -> str:
 
     target = force_target or await _pick_target()
     if not target:
-        return "nothing due (an open proposal exists, or every target is in cooldown)"
+        return f"nothing due ({MAX_OPEN} proposals are open, or every target was looked at within the hour)"
 
     reason = ("Idle time. Look at this setting against your scores and what he has said; "
               "propose a change only if you can say what it will do and why that is better.")
@@ -162,7 +160,7 @@ async def run_once(force_target: str = None) -> str:
         error = result.get("error", "")
         # Her own "no change" or a self-contradiction she was refused on is
         # a real look at the target: it goes in as a 'declined' row so the
-        # target rests for COOLDOWN_DAYS like a proposal would (found on
+        # target rests for TARGET_REST_S like a proposal would (found on
         # 2026-09-21 before it ran: without this she would re-think the
         # same setting every minute). A failure to answer at all is not a
         # look; the target is retried after RETRY_AFTER_S.
@@ -170,7 +168,7 @@ async def run_once(force_target: str = None) -> str:
         if looked:
             pid = await create_proposal(f"(looked, no change) {target}", error, "alex",
                                         target=target, status="declined")
-            outcome = f"no change proposed; {target} rests for {COOLDOWN_DAYS} days"
+            outcome = f"no change proposed; {target} rests for {TARGET_REST_S // 60} minutes"
             ref = f"proposals#{pid}"
         else:
             _attempted[target] = time.time()
@@ -199,7 +197,7 @@ async def run():
     """The loop main.py starts. Never raises."""
     global _task, _busy
     logger.info(f"[IDLE AUTHOR] armed: after {IDLE_AFTER_S // 60} min with nobody speaking, "
-                f"one target per pass, one open proposal at a time"
+                f"one target per pass, up to {MAX_OPEN} proposals open at a time, no cooldown"
                 + ("" if enabled() else " — switched OFF in the Controller"))
     await asyncio.sleep(120)          # stay out of the way of the post-restart minutes
     while True:
