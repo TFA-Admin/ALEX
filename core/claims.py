@@ -178,7 +178,8 @@ def lookups_after_claim(user_input: str, clause: str, needs: dict = None, max_lo
 _TOOL_NOUN = {"read_log": "my log", "read_my_source": "my source code", "my_state": "my own state",
               "search_memory": "our earlier conversations", "recent_turns": "our recent exchanges",
               "list_modules": "my modules", "run_diagnostics": "my diagnostics",
-              "my_projects": "his projects", "my_scores": "my scores", "current_time": "the clock", "look": "my camera"}
+              "my_projects": "his projects", "my_scores": "my scores", "current_time": "the clock", "look": "my camera",
+              "pet_status": "my pet", "tend_pet": "my pet"}
 
 
 def honest_lines(block: str) -> str:

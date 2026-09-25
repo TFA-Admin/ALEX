@@ -286,6 +286,20 @@ Respond with ONLY a JSON object:
     if not topic or not question:
         return None
 
+    # 2026-09-25: the topic must come from HIS words (or something she
+    # noticed), never from her own replies. "Your biological pulse and
+    # coffee toxicity" was built from her line "your biological security
+    # is compromised" in a window of test probes; nobody had said pulse.
+    from db.db import _topic_words, _touches
+    theirs = set()
+    for r in recent:
+        theirs |= _topic_words(r.get("prompt") or "")
+    for n in (noticed or []):
+        theirs |= _topic_words(n)
+    if not _touches(_topic_words(topic), theirs):
+        logger.info(f"[ACTION] Curiosity: {topic!r} came from her own words, not his — not queued")
+        return None
+
     # A question already waiting to be asked means she has not had the
     # chance to ask the last one yet. Queuing a second turns an unprompted
     # question into a backlog, which is the failure mode Craig has objected

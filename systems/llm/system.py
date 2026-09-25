@@ -335,6 +335,11 @@ class System(BaseSystem):
         # agreement — "you're right" is not in this list, on purpose.
         if her_mood.THANKS_RE.search(user_input):
             await her_mood.note("thanked", who=user_id)     # creator resolved by name in mood.note
+            try:
+                from core import values as her_values
+                await her_values.note_signal("thanks", user_id, session.get("last_reply"))
+            except Exception as e:
+                logger.warning(f"⚠️ could not keep the thanks signal: {e}")
 
         # -------------------------
         # "STOP SAYING THAT" (2026-09-20)
@@ -417,6 +422,12 @@ class System(BaseSystem):
 
                 session["just_corrected"] = told
                 await her_mood.note("corrected", who=user_id, creator=is_creator)
+                if is_creator:
+                    try:
+                        from core import values as her_values
+                        await her_values.note_signal("correction", user_id, session.get("last_reply"))
+                    except Exception as e:
+                        logger.warning(f"⚠️ could not keep the correction signal: {e}")
             else:
                 # 2026-09-20 (Craig: "would she ask for clarification if I
                 # were to say dont say that on the first utterance"). She
@@ -957,6 +968,29 @@ class System(BaseSystem):
                              "or he asks, and then say what you noticed — never say you glanced, looked, checked "
                              "or are watching):\n" + _lines)
 
+        # 2026-09-25 (Craig: "let reflection conclude 'he values short
+        # answers'... carry those as standing preferences"): core/values.py,
+        # arithmetic on his thanks and corrections, never on agreement.
+        values_block = ""
+        try:
+            from core import values as her_values
+            values_block = her_values.render(await her_values.lines_for(user_id))
+        except Exception as e:
+            logger.warning(f"⚠️ could not read what he values: {e}")
+
+        # 2026-09-25 (Craig: "a virtual pet for her to take care of... give
+        # her something to interact with to teach her things"): its state,
+        # one line (core/pet.py). What she says about it is hers.
+        pet_block = ""
+        try:
+            from core import pet as her_pet
+            _ps = await her_pet.state()
+            pet_block = ("\n\n    YOUR PET — " + her_pet.describe(_ps, her_pet.pet_name())
+                         + ". You tend it yourself in quiet time; in conversation, tend_pet only if a need is "
+                           "suffering or someone asks. Mention it only if it matters or he asks.")
+        except Exception as e:
+            logger.warning(f"⚠️ could not read the pet: {e}")
+
         # 2026-09-25 (Craig: "I'm seeing a backlog of questions in her
         # system. Is she not able to bring old questions up again?"): when
         # what he says touches the topic of an unanswered question of hers
@@ -1025,7 +1059,7 @@ class System(BaseSystem):
 
     PERSONALITY (this is genuinely yours — express it, don't fight it):
     {personality}
-{hard_rules_block}{dials_block}{sight_block}{noticed_block}{recall_block}{session_block}
+{hard_rules_block}{dials_block}{sight_block}{noticed_block}{values_block}{pet_block}{recall_block}{session_block}
 
     You have access to stored information about the user.
 
@@ -1245,6 +1279,7 @@ class System(BaseSystem):
         chat_stream = getattr(ollama_manager, "chat_stream", None)
 
         evidence = {"lookups": evidence_ran, "tools": []}
+        session["last_reply_looked"] = bool(evidence_ran)     # core/values.py reads it with the reply
         user_tail = prompt[len(system_prompt):]
         import inspect as _inspect
         _cs_kwargs = {}

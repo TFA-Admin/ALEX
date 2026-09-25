@@ -79,6 +79,20 @@ async def periodic_glances():
         await asyncio.sleep(sight.GLANCE_EVERY_S)
 
 
+async def periodic_pet():
+    """2026-09-25 (Craig: "a virtual pet for her to take care of"): every
+    ten minutes the pet's needs drift and, in quiet time, she tends the
+    lowest one herself (core/pet.py)."""
+    from core import pet
+    await asyncio.sleep(90)
+    while True:
+        try:
+            await pet.care_pass()
+        except Exception as e:
+            logger.warning(f"⚠️ pet care failed: {e}")
+        await asyncio.sleep(10 * 60)
+
+
 async def periodic_mood_tick():
     """2026-09-23: her mood fades on its own (core/mood.py); the orb is
     told once a minute so it fades too, instead of the page guessing."""
@@ -89,6 +103,12 @@ async def periodic_mood_tick():
         try:
             if _active_connections:
                 await broadcast_signal("__MOOD__" + her_mood.payload(await her_mood.state()))
+                try:
+                    from core import pet as her_pet
+                    import json as _json
+                    await broadcast_signal("__PET__" + _json.dumps(her_pet.status_for_page(await her_pet.state())))
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning(f"⚠️ mood tick failed: {e}")
 
@@ -185,6 +205,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(periodic_mood_tick())
     asyncio.create_task(periodic_retention())
     asyncio.create_task(periodic_glances())
+    asyncio.create_task(periodic_pet())
     # 2026-09-21 (roadmap item 6): her author, when nobody is talking to
     # her. Writes one 'authored' proposal row at a time; nothing more.
     from core import idle_author

@@ -805,8 +805,14 @@ class HerView(QWidget):
             # again?"): the status says what happens next to each one.
             from db.db import CURIOSITY_MAX_ASKS, CURIOSITY_REASK_AFTER_S
             n = int(q.get("delivered") or 0)
+            try:
+                age_days = (datetime.utcnow() - datetime.strptime(str(q.get("created_at"))[:19], "%Y-%m-%d %H:%M:%S")).days
+            except Exception:
+                age_days = 0
             if q.get("answer"):
                 status = f"answered {to_local(q.get('answered_at'))}"
+            elif age_days >= 14 or (n == 0 and age_days >= 7):
+                status = f"{age_days} days old, no answer — let go (too old to bring up)"
             elif n >= CURIOSITY_MAX_ASKS:
                 status = f"asked {n}x, no answer — let go; comes back if the topic comes up"
             elif n:
@@ -1051,6 +1057,30 @@ class HerView(QWidget):
             lines.append("  nothing noticed")
         for o in obs:
             lines.append(f"  {to_local(o.get('created_at'))}  [{o.get('user')}{', ' + o['face'] if o.get('face') else ''}]  {o.get('text')}")
+        # 2026-09-25: her pet (core/pet.py)
+        try:
+            from core import pet as her_pet
+            ps = asyncio.run(her_pet.state())
+            lines.append("")
+            lines.append("Her pet — " + her_pet.describe(ps, her_pet.pet_name()) + "  (name: pet_name in controller_settings.json)")
+            for e in (ps.get("log") or [])[-5:]:
+                lines.append(f"  {_time.strftime('%Y-%m-%d %H:%M', _time.localtime(float(e.get('t', 0))))}  {e.get('by')} {e.get('action')}: "
+                             f"{e.get('need')} {float(e.get('before', 0)):.0f} -> {float(e.get('after', 0)):.0f}")
+            if not ps.get("log"):
+                lines.append("  nothing done for it yet")
+        except Exception as e:
+            lines.append(f"Her pet: could not read ({e})")
+        # 2026-09-25: what he values (core/values.py), the numbers behind it
+        try:
+            from core import values as her_values
+            from db.db import fetch_value_signals
+            sig = asyncio.run(fetch_value_signals("craig", days=her_values.WINDOW_DAYS))
+            vlines = her_values.conclude(sig)
+            lines.append("")
+            lines.append(f"What he values (from {len(sig)} thanks/corrections in {her_values.WINDOW_DAYS} days):")
+            lines.extend(f"  {v}" for v in vlines) if vlines else lines.append("  nothing lopsided enough yet (needs 3 signals, 70% one way)")
+        except Exception as e:
+            lines.append(f"What he values: could not read ({e})")
         try:
             ret = asyncio.run(get_retention_summary())
         except Exception:

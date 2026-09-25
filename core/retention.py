@@ -45,6 +45,7 @@ ALEX_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 POLICY = {
     "observations_days": 14,
+    "value_signals_days": 90,
     "decisions_noise_days": 30,
     "decisions_noise_kinds": ("tool", "speaker"),
     "memory_retracted_days": 30,

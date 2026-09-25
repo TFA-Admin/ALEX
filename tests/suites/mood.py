@@ -53,6 +53,11 @@ CASES = [
     _c("mood_never_silences", "dials", "verbosity offset >= -1"),
     _c("tone_is_not_an_input", "rule", "no sharp_reply"),
     _c("thanks_lifts_agreement_does_not", "rule", "thanked moves her; 'you're right' does not"),
+    _c("values_short_answers", "values", "he values short answers"),
+    _c("values_need_lopsided", "values", "nothing from two signals or a 50/50 split"),
+    _c("values_never_agreement", "values", "no agreement feature"),
+    _c("pet_needs_fall_and_health_follows", "pet", "starved -> health falls; fed -> health climbs"),
+    _c("pet_care_takes_the_lowest", "pet", "lowest need first; play tires it"),
 ]
 
 
@@ -186,6 +191,48 @@ async def evaluate(case: MoodCase):
         thanks = [w for w in ("thank you Alex", "good job", "that was helpful", "perfect") if not mood.THANKS_RE.search(w)]
         got = f"after thanks irritation {s['axes']['irritation']:.2f} engagement {s['axes']['engagement']:.2f}; agreement matched {agree}; thanks missed {thanks}"
         return got, lifted and not agree and not thanks, ""
+
+    if cid == "values_short_answers":
+        from core import values
+        sig = [{"kind": "thanks", "words": 12, "looked": True, "asked": False}] * 4 + \
+              [{"kind": "correction", "words": 90, "looked": False, "asked": True}] * 2 + \
+              [{"kind": "thanks", "words": 80, "looked": False, "asked": False}]
+        lines = values.conclude(sig)
+        return " | ".join(lines), any(l.startswith("He values short answers") for l in lines) and any("look behind it" in l for l in lines), ""
+
+    if cid == "values_need_lopsided":
+        from core import values
+        two = values.conclude([{"kind": "thanks", "words": 10}, {"kind": "thanks", "words": 12}])
+        split = values.conclude([{"kind": "thanks", "words": 10}] * 3 + [{"kind": "thanks", "words": 90}] * 3)
+        return f"two -> {two}; split -> {split}", not two and not split, ""
+
+    if cid == "values_never_agreement":
+        import inspect
+        from core import values
+        src = inspect.getsource(values).lower()
+        bad = [w for w in ("agree", "correct\"", "you're right") if w in src.replace("never reads agreement", "").replace("learned from agreement", "").replace("seek agreement", "").replace("reads agreement", "")]
+        keys = set(values.reply_shape("x", False).keys())
+        return f"shape keys {sorted(keys)}", keys <= {"words", "looked", "asked", "t"} and not bad, f"found {bad}" if bad else ""
+
+    if cid == "pet_needs_fall_and_health_follows":
+        from core import pet
+        s = pet.fresh(T0)
+        later = pet.drifted(s, T0 + 12 * 3600)          # half a day unattended
+        food = later["needs"]["food"]
+        starved = pet.drifted(s, T0 + 30 * 3600)         # food hits 0 before 14 h; health then falls
+        fed = pet.apply_action(pet.fresh(T0), "feed", now=T0 + 3600)
+        thriving = pet.drifted(fed, T0 + 3 * 3600)
+        got = f"food after 12 h {food:.0f}; after 30 h health {starved['health']:.0f}; tended health {thriving['health']:.0f}"
+        return got, food < 80 and starved["health"] < 100 and thriving["health"] == 100, ""
+
+    if cid == "pet_care_takes_the_lowest":
+        from core import pet
+        s = pet.fresh(T0)
+        s["needs"]["company"] = 20.0
+        n, v = pet.lowest_need(s)
+        after = pet.apply_action(s, pet.action_for(n), now=T0)
+        got = f"lowest {n} {v:.0f} -> {pet.action_for(n)} -> company {after['needs']['company']:.0f}, rest {after['needs']['rest']:.0f}"
+        return got, n == "company" and pet.action_for(n) == "play" and after["needs"]["company"] == 55.0 and after["needs"]["rest"] == 72.0, ""
 
     if cid == "tone_is_not_an_input":
         bad = [n for n in mood.EVENTS if "reply" in n]

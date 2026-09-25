@@ -842,3 +842,15 @@ back to her each turn, the retractions, the corrections. Her admission
 was the prompt and the check at work, not a skill gained. Proposed as
 projects #24: caught hallucinations become new patterns the check
 watches for.
+
+### Where "your biological pulse" came from (2026-09-25)
+Craig: "the pulse thing was old, but she brought it back — is there
+anything that says 'maybe this is wrong or too old to bring up?'" There
+was not, and the question was never his: the reflection window of
+2026-09-23 13:39 held my text probes under his name and her reply "Your
+biological security is compromised"; she turned her own words into a
+question about his pulse, it waited two days, and topic recall brought
+it back. **Fixed:** a curiosity question is queued only if its topic
+came from his words or something she noticed — never from her own
+replies; a question has a week to be asked and two to be recalled on
+topic, then it is let go, and the Curiosity tab says so.

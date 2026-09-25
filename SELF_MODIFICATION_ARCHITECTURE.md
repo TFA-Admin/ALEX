@@ -1865,6 +1865,15 @@ game; you will not lie; your name is ALEX.
 - **`model_usage` table is dead:** `log_model_usage()` has no caller (2
   rows, never written since). Drop it with a migration when the schema is
   next touched; `tests/harness.py` still lists it in USER_SCOPED_TABLES.
+- **Landed 2026-09-25, on Craig's yes:** *what he values* (`core/values.py`
+  — arithmetic on his thanks and corrections and the shape of the reply
+  each followed, never agreement; lopsided tallies become WHAT HE VALUES
+  in her prompt), *her pet* (`core/pet.py` — four needs on the clock,
+  health, quiet-time care every ten minutes, tend_pet/pet_status, strain
+  and engagement, the page's pet row, Her → Health), *thanks as a mood
+  signal*, and *curiosity hygiene* (topics only from his words or what
+  she noticed; a week to ask, two to recall, then let go). Still planned:
+  *learned claim shapes* (#24) — caught hallucinations become patterns.
 - **Module authoring by her (Craig, 2026-09-23 07:47):** "what if I want
   you to build a module so that you are aware of what time it is?" She
   answered from the CANNOT rule: "I will not be updated; the controller

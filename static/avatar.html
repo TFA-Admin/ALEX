@@ -499,6 +499,7 @@ body.chat-collapsed .panel-toggle-right{ transform: rotate(180deg); }
       <div id="micContainer"><div id="micLevel"></div></div>
       <div class="tele-row" id="teleEyes"><span>eyes</span><span class="val" id="teleEyesVal">closed</span></div>
       <div class="tele-row" id="teleFace"><span>face</span><span class="val" id="teleFaceVal">—</span></div>
+      <div class="tele-row" id="telePet" title="her pet — needs and health; she tends it herself in quiet time"><span>pet</span><span class="val" id="telePetVal">—</span></div>
       <video id="eyePreview" autoplay muted playsinline></video>
     </div>
 
@@ -1232,6 +1233,15 @@ ws.onmessage = (e)=>{
 
     if(typeof data === "string" && data.startsWith("__FACE__")){
         try { showFace(JSON.parse(data.replace("__FACE__", ""))); } catch(e){}
+        return;
+    }
+
+    if(typeof data === "string" && data.startsWith("__PET__")){
+        try {
+            const p = JSON.parse(data.replace("__PET__", ""));
+            const el = document.getElementById("telePetVal");
+            if(el){ el.textContent = p.word + " (" + p.health + ")"; el.title = JSON.stringify(p.needs); }
+        } catch(e){}
         return;
     }
 

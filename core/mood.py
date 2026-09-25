@@ -72,6 +72,9 @@ EVENTS = {
     # counts for less (the multiplier below runs the other way for this
     # one: only his moves her fully). Agreement is still not an input.
     "thanked":            ({"engagement": +1.0, "irritation": -0.7}, False, "{who} thanked you"),
+    # 2026-09-25: her pet (core/pet.py) — neglect is strain, care is engagement
+    "pet_unwell":         ({"strain": +1.0}, False, "your pet is unwell"),
+    "pet_thriving":       ({"engagement": +0.5}, False, "your pet is thriving"),
 }
 
 THANKS_RE = re.compile(
@@ -89,7 +92,8 @@ THANKS_RE = re.compile(
 # thirteen minutes, and irritation 8/10 made her sharper and shorter,
 # which cut her sentences off, which made him interrupt again.
 COOLDOWN_S = {"talked_over": 120.0, "lookup_found": 90.0, "substantive_turn": 120.0,
-              "ignored": 300.0, "model_slow": 120.0, "tool_failed": 60.0, "thanked": 300.0}
+              "ignored": 300.0, "model_slow": 120.0, "tool_failed": 60.0, "thanked": 300.0,
+              "pet_unwell": 3600.0, "pet_thriving": 6 * 3600.0}
 
 # axis -> the orb colour it shows as (the page's palette, unchanged)
 ORB_KEY = {"irritation": "edge", "engagement": "focused", "strain": "alert"}

@@ -147,6 +147,13 @@ TOOLS = [
         "who is there, what they are holding or wearing, or to look at something. Their page "
         "must have its eyes open; a frame is taken only when you look.",
         {"question": {"type": "string", "description": "what they asked you to look at or for, if anything"}}),
+    _fn("pet_status",
+        "How your pet is: its needs (food, rest, clean, company), its health, and what was done for it lately."),
+    _fn("tend_pet",
+        "Do one thing for your pet now: feed, rest, clean or play. In quiet time you do this yourself; "
+        "in conversation use it when a need is suffering or someone asks you to.",
+        {"action": {"type": "string", "enum": ["feed", "rest", "clean", "play"],
+                    "description": "feed, rest, clean or play"}}, ["action"]),
     _fn("propose_change",
         "Ask your creator to consider a change to one of your own settings. "
         "You may only name a whitelisted target (deliberation.threshold, "
@@ -325,6 +332,24 @@ def _read_my_source(path, start_line=1) -> str:
     footer = (f"\n[lines {start}-{end} of {total}; continue from line {end + 1}]"
               if end < total else f"\n[lines {start}-{end} of {total}; end of file]")
     return f"{rel}:\n{body}{footer}"
+
+
+async def _pet_status() -> str:
+    from core import pet
+    s = await pet.state()
+    lines = [pet.describe(s, pet.pet_name())]
+    for e in (s.get("log") or [])[-5:]:
+        lines.append(f"- {time.strftime('%H:%M', time.localtime(float(e.get('t', 0))))} {e.get('by')} "
+                     f"{e.get('action')}: {e.get('need')} {float(e.get('before', 0)):.0f} -> {float(e.get('after', 0)):.0f}")
+    return "\n".join(lines)
+
+
+async def _tend_pet(action: str) -> str:
+    from core import pet
+    action = (action or "").strip().lower()
+    if action not in pet.ACTIONS:
+        return f"tend_pet takes one of: {', '.join(pet.ACTIONS)}."
+    return await pet.tend(action, by="her", why="asked for, or judged urgent, in conversation")
 
 
 def _current_time() -> str:
@@ -509,6 +534,10 @@ async def run_tool(name: str, args, user_id: str) -> str:
             coro = _my_projects()
         elif name == "propose_change":
             coro = _propose_change(user_id, str(args.get("target", "")), str(args.get("why", "")))
+        elif name == "pet_status":
+            coro = _pet_status()
+        elif name == "tend_pet":
+            coro = _tend_pet(str(args.get("action", "")))
         elif name == "look":
             from core import sight
             coro = sight.look(user_id, str(args.get("question") or args.get("query") or ""))

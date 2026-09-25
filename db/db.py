@@ -135,6 +135,19 @@ async def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''')
 
+        # 👍 VALUE SIGNALS (2026-09-25): his thanks and corrections with
+        # the shape of the reply each followed (core/values.py).
+        await db.execute('''
+        CREATE TABLE IF NOT EXISTS value_signals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user TEXT,
+            kind TEXT,
+            words INTEGER,
+            looked INTEGER,
+            asked INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+
         # 👁 OBSERVATIONS (2026-09-23): what a glance through the camera
         # found while nothing was being said (core/sight.py). Text only,
         # never a frame; pruned after 14 days (core/retention.py).
@@ -1197,6 +1210,25 @@ async def fetch_observations(user: str = None, hours: float = 6.0, limit: int = 
     return [dict(r) for r in rows]
 
 
+async def add_value_signal(user: str, kind: str, words: int, looked: bool, asked: bool) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO value_signals(user, kind, words, looked, asked) VALUES(?,?,?,?,?)",
+            (user, kind, int(words), 1 if looked else 0, 1 if asked else 0))
+        await db.commit()
+        return cur.lastrowid
+
+
+async def fetch_value_signals(user: str, days: int = 30):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT kind, words, looked, asked, created_at FROM value_signals "
+            "WHERE user=? AND created_at >= datetime('now', ?) ORDER BY id DESC LIMIT 500",
+            (user, f"-{int(days)} days"))
+        rows = await cur.fetchall()
+    return [{"kind": r[0], "words": r[1], "looked": bool(r[2]), "asked": bool(r[3]), "created_at": r[4]} for r in rows]
+
+
 async def retention_prune(policy: dict) -> dict:
     """The daily forgetting (core/retention.py). Returns what it removed."""
     out = {}
@@ -1204,6 +1236,9 @@ async def retention_prune(policy: dict) -> dict:
         cur = await db.execute("DELETE FROM observations WHERE created_at < datetime('now', ?)",
                                (f"-{int(policy['observations_days'])} days",))
         out["observations"] = cur.rowcount
+        cur = await db.execute("DELETE FROM value_signals WHERE created_at < datetime('now', ?)",
+                               (f"-{int(policy.get('value_signals_days', 90))} days",))
+        out["value_signals"] = cur.rowcount
         kinds = tuple(policy.get("decisions_noise_kinds") or ())
         if kinds:
             marks = ",".join("?" for _ in kinds)
@@ -1241,6 +1276,25 @@ async def get_retention_summary():
         return json.loads(row[0]) if row and row[0] else None
     except (TypeError, ValueError):
         return None
+
+
+async def get_pet_state():
+    """Her pet (core/pet.py), as last stored, or None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT value FROM system_learning WHERE key='pet_state'")
+        row = await cursor.fetchone()
+    try:
+        return json.loads(row[0]) if row and row[0] else None
+    except (TypeError, ValueError):
+        return None
+
+
+async def set_pet_state(state: dict):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO system_learning(key, value) VALUES('pet_state', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(state),))
+        await db.commit()
 
 
 async def get_personality_locked() -> bool:
@@ -1762,7 +1816,10 @@ async def fetch_undelivered_curiosity_questions(user: str = None, creator: bool 
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "SELECT topic, question, created_at FROM curiosity_queue "
-            "WHERE (answer IS NULL OR answer = '') AND delivered < ? AND (last_asked_at IS NULL OR "
+            # 2026-09-25 (Craig: "is there anything that says 'maybe this is
+            # wrong or too old to bring up?'"): a week, then it is let go.
+            "WHERE (answer IS NULL OR answer = '') AND delivered < ? "
+            "AND created_at >= datetime('now', '-7 days') AND (last_asked_at IS NULL OR "
             "  strftime('%s','now') - strftime('%s', last_asked_at) > ?)" + who +
             " ORDER BY created_at ASC",
             args)
@@ -1829,6 +1886,7 @@ async def fetch_relevant_curiosity(user: str, text: str):
         cursor = await db.execute(
             "SELECT id, topic, question, delivered, last_asked_at, user FROM curiosity_queue "
             "WHERE (answer IS NULL OR answer = '') AND (user=? OR user IS NULL) "
+            "AND created_at >= datetime('now', '-14 days') "
             "AND (last_asked_at IS NULL OR strftime('%s','now') - strftime('%s', last_asked_at) > 3600) "
             "ORDER BY id DESC", (user,))
         rows = await cursor.fetchall()

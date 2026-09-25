@@ -270,6 +270,13 @@ class ResponseHandler:
                     still_playing = max(0.0, first_audio_at + audio_seconds - time.time())
                 session["last_addressed_at"] = time.time() + still_playing
                 await websocket.send_text("__ENGAGED__1")
+            # 2026-09-25: the shape of this reply, for core/values.py — what
+            # his next thanks or correction is about.
+            try:
+                from core import values as her_values
+                session["last_reply"] = her_values.reply_shape(full_response, session.pop("last_reply_looked", False))
+            except Exception:
+                pass
 
         await websocket.send_text("__END__")
 
