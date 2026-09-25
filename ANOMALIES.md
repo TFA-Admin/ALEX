@@ -1142,3 +1142,21 @@ not?"), with the window reset, asked once. A long unrelated sentence
 still drops the question, which is what that branch was built for. The
 word list is now a fast path, not the mechanism.
 
+### The stored phrase layer removed (2026-09-25, Craig's call)
+"So I was right, she hadn't been changing them. Now having said is there
+even an argument for her to have them anymore? Shouldn't those all be live
+for her now with just something like, this is a first connect that is
+unverified as a prompt?" Right on both counts. The layer's whole history:
+self-reflection re-voiced five random phrases per personality change,
+which fired often in July on the 7b and never again once his personality
+was locked. The July text then did double duty — a "voice reference" in
+the composing prompt, where it pulled the new line toward itself, and the
+verbatim fallback on any composing failure. Both uses are gone; the
+intent and a plain default stay in code, and a failure now logs at INFO
+and says the default. One thing improved by accident: the "stay serious"
+rule for denial and identity lines used to be applied only by the
+re-voicer, occasionally; the composer reads it on every utterance.
+Measured after: onboarding 1/1 (the first-connect greeting still elicits
+a parseable name), and the verification prompt is back to asking for any
+phrase rather than a passphrase.
+

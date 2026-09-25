@@ -190,10 +190,14 @@ retracted); a restated search request was read as a refusal; "proceed" /
 announcements of work ("the web surfacing operation has commenced") were
 not claims; nothing-found was offered to him as something to keep; and
 every stored phrase was still a 7b joke rewrite ("Say 'hello, party
-animal'"), now reset to the defaults. If she sounds wrong again, check
-`system_learning` for `phrase:%` rows before anything else, and grep her
-log for "[PHRASE] composed nothing" — the composer falls back to the
-stored wording verbatim and that rate is now logged at INFO. The
+animal'"), now reset to the defaults. **The stored phrase layer is gone entirely** (his call, same
+evening): every standard line is composed from its registry intent and her
+personality at the moment she says it, the re-voicing pass and
+`_reflect_on_phrase` are removed, and the only fallback is the plain
+default in code. If she sounds wrong again, grep her log for "[PHRASE]
+composed nothing" — a high rate there means composing is failing and she
+is reading plain defaults, which is the thing to chase; there is no stored
+text left to go stale. Onboarding 1/1 after the change. The
 approval gate keeps a deterministic word list on purpose (Principle 4
 boundary), but a short non-answer now gets one plain "yes or no?" back
 instead of the question vanishing.
