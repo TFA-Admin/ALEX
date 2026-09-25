@@ -78,6 +78,25 @@ DEFAULT_MODEL = (os.getenv("ALEX_LLM_MODEL") or _model_from_controller_settings(
 _NUM_CTX_BY_MODEL = {"qwen3.5:9b": 6144}
 SHARED_NUM_CTX = int(os.getenv("ALEX_NUM_CTX") or _NUM_CTX_BY_MODEL.get(DEFAULT_MODEL, 8192))
 
+
+def _log_stats(kind: str, data: dict):
+    """2026-09-25 (Craig: "interactions have gone from about 1 second to
+    about 5"): the numbers behind a turn, from Ollama's own counters —
+    how many prompt tokens were evaluated and at what rate, how many
+    were generated and at what rate. Before this the log had durations
+    and no sizes, so "the prompt is too big" was a guess."""
+    try:
+        pc, pd = int(data.get("prompt_eval_count") or 0), float(data.get("prompt_eval_duration") or 0) / 1e9
+        ec, ed = int(data.get("eval_count") or 0), float(data.get("eval_duration") or 0) / 1e9
+        if not pc and not ec:
+            return
+        from config.logger_config import logger
+        logger.info(f"[TIMING] model ({kind}): prompt {pc} tok in {pd:.2f}s"
+                    + (f" ({pc / pd:.0f} tok/s)" if pd else "")
+                    + f"; output {ec} tok in {ed:.2f}s" + (f" ({ec / ed:.0f} tok/s)" if ed else ""))
+    except Exception:
+        pass
+
 # Pool-level default only. Every method still passes its own per-request
 # timeout, which is what actually applies — this just has to be large
 # enough not to bound the streaming path.
@@ -415,6 +434,8 @@ class OllamaManager:
                                 continue
                             if data.get("error"):
                                 raise RuntimeError(str(data["error"]))
+                            if data.get("done"):
+                                _log_stats("reply", data)
                             msg = data.get("message") or {}
                             calls = msg.get("tool_calls")
                             if calls:
@@ -494,6 +515,7 @@ class OllamaManager:
                 }
             )
             data = r.json()
+            _log_stats("json", data)
             content = data.get("message", {}).get("content", "")
             return json.loads(content)
 

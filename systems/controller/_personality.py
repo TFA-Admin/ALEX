@@ -16,7 +16,38 @@ from db.db import (
     profile_exists, find_profile_by_prefix, add_personality_hard_rule,
     clear_personality_hard_rules
 )
+import re
+
 from core.intent_classifier import classify_personality_set, merge_personality_change
+
+# 2026-09-25 (Craig: "interactions have gone from about 1 second to about
+# 5. Can we streamline anything?"). Measured over the afternoon's turns:
+# classify_personality_set() — a model call — ran on EVERY creator message
+# that was not a fixed phrase, a correction or an answer she was waiting
+# for, at 0.85 s a turn, and answered "no" every time. A request to change
+# how she is carries words for it. Only a message with one of these is
+# worth the call; anything else is conversation and goes straight on.
+_PERSONALITY_CUE_RE = re.compile(
+    r"\b(?:personality|attitude|demeanou?r|tone|manners?|mannerisms?|persona|character|style of (?:talking|speaking)|"
+    r"be (?:more|less|a (?:bit|little)|nicer|meaner|kinder|ruder|polite|politer|blunt|blunter|formal|casual|serious|funnier|funny|"
+    r"sarcastic|snark\w*|warm\w*|cold\w*|upbeat|calm\w*|quiet\w*|brief|briefer|concise|verbose|direct|gentle\w*|harsh\w*|"
+    r"sweet\w*|softer|louder|angrier|happier|cheer\w*|yourself)|"
+    r"(?:act|talk|speak|sound|behave|respond|answer|reply|treat me) (?:like|more|less|as if|as though|in a|with)|"
+    r"from now on|going forward|stop (?:being|saying|telling|offering|calling|asking|repeating|doing|acting|talking|apologi[sz]ing)|"
+    r"(?:don'?t|do not|quit|no more) (?:be|being|keep|say|saying|tell|telling|call|calling|offer|offering|repeat|repeating)|"
+    r"you (?:don'?t|do not) (?:need|have) to (?:keep|say|tell|offer|remind)|"
+    r"(?:more|less) (?:sarcastic|sarcasm|snarky|polite|formal|casual|serious|verbose|talkative|warm|cold|hostile|aggressive|"
+    r"friendly|helpful|blunt|direct|chatty|repetitive|patient|respectful|dramatic|emotional|robotic|human|playful|menacing|dark)|"
+    r"(?:i want|i'?d like|i would like|i need) you to (?:be|act|talk|speak|sound|stop|start|become)|"
+    r"you should (?:be|act|talk|speak|sound|stop|start|become)|"
+    r"(?:set|change|adjust|update|make|switch|turn) (?:up |down )?your (?:personality|tone|attitude|voice|style|manner|sarcasm|warmth|humou?r)|"
+    r"new personality|(?:a )?different personality|(?:more|less) like (?:a|an|the)\b|like a (?:pirate|butler|robot|human|friend|soldier|professor|teenager)|"
+    r"call me (?:sir|master|boss|captain|lord|my)|"
+    r"you'?re (?:too|being too|way too) \w+)\b", re.I)
+
+
+def _might_be_personality_set(text: str) -> bool:
+    return bool(_PERSONALITY_CUE_RE.search(text or ""))
 from core.override_code import override_code_status, strip_override_code_mention
 from core import corrections as corr
 from config.logger_config import logger
@@ -188,6 +219,9 @@ async def handle(session, user_id: str, text: str, msg: str):
         logger.info("[PERSONALITY] Not a change — she is waiting for his answer "
                     f"about {session.get('awaiting_curiosity_answer')!r}")
         return None
+
+    if new_desc is None and not _might_be_personality_set(exact_phrase_input):
+        return None          # conversation; no classifier call (see _PERSONALITY_CUE_RE)
 
     if new_desc is None and await get_user_role(user_id) == "creator":
         result = await classify_personality_set(exact_phrase_input)

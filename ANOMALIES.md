@@ -972,3 +972,20 @@ a clause to the status_check intent line that nothing measured calls for
 check; her own rule says an unchanged setting is the right proposal when
 the numbers show no problem.
 
+### "Interactions have gone from about 1 second to about 5" (2026-09-25)
+Measured over six turns of the afternoon (her log's [TIMING] lines):
+before her first word, 0.85 s for the personality-command classifier (a
+model call on EVERY creator message, answering "no" every time), 3.0 s
+for the intent-and-needs classifier, 4.3 s of prompt evaluation on her
+reply; then 1.5-4 s of output and 0.7-1.6 s of TTS. Heard to fully
+spoken: 10-13 s. Three model calls a turn, on one model slot, so no call
+can reuse the previous one's cache. **Done now**: the personality
+classifier runs only when the message carries a word that could be
+asking for a change (`_PERSONALITY_CUE_RE`); Ollama's own token counts
+are logged per call (`[TIMING] model (...)`) so the prompt's size is
+measured, not guessed. **Proposed** (Craig's call, it changes a measured
+feature): the intent-and-needs call gated the same way — every positive
+in the 84-case suite carries a cue word, and a turn with none has
+nothing to look up — and, with that, the static part of her prompt put
+first so consecutive replies reuse the evaluated prefix.
+
