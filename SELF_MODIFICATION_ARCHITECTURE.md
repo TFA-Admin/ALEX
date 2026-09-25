@@ -191,7 +191,12 @@ announcements of work ("the web surfacing operation has commenced") were
 not claims; nothing-found was offered to him as something to keep; and
 every stored phrase was still a 7b joke rewrite ("Say 'hello, party
 animal'"), now reset to the defaults. If she sounds wrong again, check
-`system_learning` for `phrase:%` rows before anything else.
+`system_learning` for `phrase:%` rows before anything else, and grep her
+log for "[PHRASE] composed nothing" — the composer falls back to the
+stored wording verbatim and that rate is now logged at INFO. The
+approval gate keeps a deterministic word list on purpose (Principle 4
+boundary), but a short non-answer now gets one plain "yes or no?" back
+instead of the question vanishing.
 
 *Voice.* Only one GLaDOS Piper model exists publicly (glados_piper_medium,
 DavesArmoury/GLaDOS_TTS; she is on it). The same author's higher-quality

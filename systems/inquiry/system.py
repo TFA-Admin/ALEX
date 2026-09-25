@@ -201,6 +201,24 @@ class System(BaseSystem):
             # fallback for something like "thank you") — it's just no
             # longer treated as a non-answer to the search/retain
             # question.
+            # 2026-09-25 (Craig: "I thought we weren't doing trigger words
+            # like this?"). He is right that the word list above is one, and
+            # a longer list is not the fix — this is. A question SHE asked,
+            # answered with something the gate cannot read, is asked once
+            # more in plain words instead of silently vanishing. So a word
+            # the list does not know costs one turn, not eleven minutes of
+            # her announcing a search that never ran. Short messages only:
+            # a long unrelated sentence means he moved on, which is what
+            # the drop below was built for.
+            if not pending.get("asked_again") and len(msg.split()) <= 12:
+                pending["asked_again"] = True
+                pending["proposed_at"] = time.time()      # his answer gets the full window
+                logger.info(f"[ACTION] Request #{pending['report_id']}: {msg[:50]!r} is neither yes nor no — asking him plainly")
+                return {"type": "response",
+                        "content": await get_phrase("confirm_yes_or_no",
+                                                    question=("searching the web for " + pending.get("query", ""))
+                                                    if pending["stage"] == "search" else "keeping what the search found")}
+
             # 2026-09-25: she is told the question lapsed, so she does not
             # announce a search that never ran (systems/llm/system.py reads
             # this). Live: "the web surfacing operation has commenced".

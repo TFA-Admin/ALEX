@@ -1111,3 +1111,34 @@ a short phrase so I can verify it's you", and the search proposal in her
 own cold register. They will drift again only if the personality changes
 (it is locked).
 
+### Why the joke phrases were spoken VERBATIM (2026-09-25, Craig: "why is she referencing these things verbatim?")
+Worse than "the stored wording was stale". `get_phrase()` composes a fresh
+line each time and falls back to the STORED wording whenever composing
+returns nothing — a timeout, an unparsable answer, a dropped placeholder,
+a rejected line. So every failed composition read the 7b joke out word for
+word. And `_say_it_fresh` already carried an instruction, added after an
+earlier sighting, telling her never to give a phrase to repeat or put one
+in quotes for `voice_verify_prompt` — while the stored fallback was
+exactly "Say 'hello, party animal' so I can make sure it's you". The
+instruction governed the composed line; the fallback ignored it. The rate
+was invisible because the composer's failures logged at DEBUG. **Fixed**:
+the fallback logs at INFO ("composed nothing — saying the stored wording
+verbatim"), so the rate is a measurable fact; and the stored rows are gone,
+so the fallback is now the plain functional default. Nothing was deleted
+in the sense of lost: the defaults live in code (PHRASE_REGISTRY) and are
+what the composer derives from.
+
+### A non-answer to her own question vanished (2026-09-25)
+Craig, on the approval word list: "I thought we weren't doing trigger
+words like this?" Correct, and a longer list is not the fix. The gate's
+yes/no vocabulary is deliberately deterministic — it is the Principle 4
+network boundary, and a model deciding whether he approved an outbound
+call is the wrong shape — but the real defect was that a message the gate
+could not read silently DELETED the pending question, after which the
+model had a search on the table and no idea it existed. **Fixed**: a
+short message that is neither yes nor no gets one plain question back
+("That was neither a yes nor a no. Am I searching the web for X, or
+not?"), with the window reset, asked once. A long unrelated sentence
+still drops the question, which is what that branch was built for. The
+word list is now a fast path, not the mechanism.
+

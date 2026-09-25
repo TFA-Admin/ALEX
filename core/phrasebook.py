@@ -326,6 +326,10 @@ PHRASE_REGISTRY = {
         "I can't run the search right now — the inquiry module didn't load. Ask my creator to look into it.",
         "Tell the person the web-search capability isn't currently available and suggest the creator look into it."
     ),
+    "confirm_yes_or_no": (
+        "That was neither a yes nor a no. Am I {question}, or not?",
+        "She asked a yes-or-no question and what came back was neither. Ask him plainly, in one sentence, for a yes or a no about that one thing. {question} is a placeholder naming what she is waiting on — keep it, and do not change what it says."
+    ),
     "search_nothing_found": (
         "The search for '{query}' came back with nothing. Say it another way and I will look again.",
         "Tell the person a web search ran and returned no results, and that he can ask again in other words. {query} is a placeholder for what was searched — keep it. Never offer to keep or store anything, because there is nothing."
@@ -576,6 +580,15 @@ async def get_phrase(key: str, **kwargs) -> str:
         except Exception:
             pass      # fall through to the stored wording
 
+    # 2026-09-25 (Craig: "why is she referencing these things verbatim?").
+    # Because THIS is the path she took: composing is optional and the
+    # stored wording is the fallback, so every failed composition read the
+    # stored line out word for word — and the stored lines were 7b joke
+    # rewrites ("Say 'hello, party animal'"), which is the very thing
+    # _say_it_fresh's voice_verify_prompt instruction was added to prevent.
+    # The rate was invisible: the composer's failures logged at DEBUG. At
+    # INFO now, so a high fallback rate is a fact rather than a suspicion.
+    logger.info(f"[PHRASE] '{key}' composed nothing — saying the stored wording verbatim")
     try:
         return voice.format(**kwargs)
     except Exception:
