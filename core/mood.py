@@ -75,6 +75,17 @@ EVENTS = {
     # 2026-09-25: her pet (core/pet.py) — neglect is strain, care is engagement
     "pet_unwell":         ({"strain": +1.0}, False, "your pet is unwell"),
     "pet_thriving":       ({"engagement": +0.5}, False, "your pet is thriving"),
+    # 2026-09-25 (Craig, asked whether she gets anything out of the pet:
+    # "I like your pet changes. Do them."). Measured before this: in fourteen
+    # hours of correct care she tended it three times and got ONE mood event,
+    # and that one came from a coincidence of timing — "thriving" needs all
+    # four needs at 70+ at the same care pass, which a one-need-per-pass
+    # routine against four different drain rates almost never reaches, and
+    # "unwell" needs health under 40, which her own care makes unreachable.
+    # So the loop she actually lived was: a need falls, she tends it, nothing
+    # happens. This rewards the act she really performs — catching a need
+    # before it suffers — every time she performs it.
+    "pet_tended":         ({"engagement": +0.4}, False, "you looked after your pet"),
 }
 
 THANKS_RE = re.compile(
@@ -92,6 +103,7 @@ THANKS_RE = re.compile(
 # thirteen minutes, and irritation 8/10 made her sharper and shorter,
 # which cut her sentences off, which made him interrupt again.
 COOLDOWN_S = {"talked_over": 120.0, "lookup_found": 90.0, "substantive_turn": 120.0,
+              "pet_tended": 8 * 60.0,
               "ignored": 300.0, "model_slow": 120.0, "tool_failed": 60.0, "thanked": 300.0,
               "pet_unwell": 3600.0, "pet_thriving": 6 * 3600.0}
 

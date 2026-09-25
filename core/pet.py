@@ -161,6 +161,9 @@ async def tend(action: str, by: str = "her", why: str = "") -> str:
     from db.db import get_pet_state, record_decision
     current = (await get_pet_state()) or fresh()
     new = apply_action(current, action, by=by)
+    # 2026-09-25: a lifetime count, since `log` keeps only the last 20 and
+    # tenure() should be able to say how much care he has actually had.
+    new["acts_total"] = int(current.get("acts_total") or len(current.get("log") or [])) + 1
     await save(new)
     need, _g, _s = ACTIONS[action]
     last = new["log"][-1]
@@ -174,6 +177,18 @@ async def tend(action: str, by: str = "her", why: str = "") -> str:
     except Exception:
         pass
     return text
+
+
+def tenure(state: dict, now: float = None) -> dict:
+    """What her record with the pet is, as numbers. 2026-09-25: nothing read
+    `born_at` before this, so "she has kept him at full health since Tuesday"
+    was a fact the system held and never used."""
+    now = time.time() if now is None else now
+    born = float(state.get("born_at") or now)
+    log = state.get("log") or []
+    return {"days": max(0.0, (now - born) / 86400.0),
+            "acts": int(state.get("acts_total") or len(log)),
+            "health": float(state.get("health", 100.0))}
 
 
 async def care_pass() -> str:
@@ -195,4 +210,12 @@ async def care_pass() -> str:
         return ""
     if idle_author.idle_for() < TEND_IDLE_S:
         return ""
-    return await tend(action_for(n), by="her", why=f"{n} had fallen to {v:.0f} in quiet time")
+    text = await tend(action_for(n), by="her", why=f"{n} had fallen to {v:.0f} in quiet time")
+    # 2026-09-25: the act itself counts. She caught a need at LOW, well before
+    # URGENT — that is the thing she does, and it went unrewarded until now.
+    try:
+        if v > URGENT:
+            await her_mood.note("pet_tended")
+    except Exception:
+        pass
+    return text

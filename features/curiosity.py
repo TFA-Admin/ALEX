@@ -84,7 +84,7 @@ class Feature(Base):
     # ---- the turn: was this his answer? ----------------------------------
     async def on(self, event: str, **kw):
         if event == "reply":
-            await self.on_reply(kw.get("session"), bool(kw.get("interrupted")))
+            await self.on_reply(kw.get("session"), bool(kw.get("interrupted")), kw.get("text") or "")
             return
         if event != "turn":
             return
@@ -150,8 +150,30 @@ class Feature(Base):
             session["awaiting_curiosity_answer"] = awaiting_topic
 
     # ---- the reply: when did her question finish playing? ------------------
-    async def on_reply(self, session, interrupted: bool):
-        if session is None or not session.pop("curiosity_asked_in_reply", False):
+    async def on_reply(self, session, interrupted: bool, text: str = ""):
+        if session is None:
+            return
+        # 2026-09-25 (Craig: "does her curiosity module permit a quick question
+        # formulation when I ask if she has any question for me? She always
+        # says no right now, in some cases when there is something already in
+        # her curiosity queue"). It does now — the waiting question is in her
+        # prompt (prompt_block below) for her to raise if he invites it. But a
+        # question OFFERED to her is not a question ASKED, and treating it as
+        # asked would make his next sentence the answer to something she never
+        # said. So her reply decides: a question mark means she asked it.
+        offered = session.pop("curiosity_offered", None)
+        if offered and not interrupted and "?" in (text or ""):
+            from db.db import mark_curiosity_question_asked
+            from config.logger_config import logger
+            try:
+                await mark_curiosity_question_asked(offered)
+            except Exception:
+                pass
+            logger.info(f"[CURIOSITY] she raised her waiting question about {offered!r} when he invited it")
+            session["awaiting_curiosity_answer"] = offered
+            session["curiosity_asked_in_reply"] = True
+
+        if not session.pop("curiosity_asked_in_reply", False):
             return
         if interrupted:
             # cut off — the question may never have been said; drop the wait
@@ -185,7 +207,7 @@ class Feature(Base):
         except Exception:
             rel = None
         if not rel:
-            return ""
+            return await self.waiting_block(user_id, session)
         before = ("you asked before and got no answer" if rel.get("delivered") else "you never got to ask")
         session["awaiting_curiosity_answer"] = rel["topic"]
         session["curiosity_asked_in_reply"] = True         # on_reply sets curiosity_asked_until
@@ -196,6 +218,29 @@ class Feature(Base):
         logger.info(f"[CURIOSITY] the topic {rel['topic']!r} came up — bringing her question back")
         return (f"\n\n    HE HAS JUST TOUCHED ON SOMETHING YOU WANTED TO KNOW ({before}): "
                 f"\"{rel['question']}\" If it fits, ask it now in your own words, after your answer.")
+
+    async def waiting_block(self, user_id: str, session) -> str:
+        """A question of hers that is queued and unasked, carried in her
+        prompt so that "do you have any questions for me?" can be answered
+        with it. Deliberately not a trigger phrase: the question is simply
+        present, with the one rule that she must not volunteer it. Live,
+        19:05: asked exactly that, with two questions waiting, she said "I
+        don't waste cycles on curiosity."""
+        try:
+            from db.db import fetch_undelivered_curiosity_questions
+            from core.self_reflection import get_creator_name
+            waiting = await fetch_undelivered_curiosity_questions(
+                user=user_id, creator=(user_id == (await get_creator_name() or "craig").lower()))
+        except Exception:
+            waiting = []
+        if not waiting:
+            return ""
+        q = waiting[0]
+        session["curiosity_offered"] = q["topic"]
+        return (f"\n\n    A QUESTION YOU HAVE BEEN WAITING TO ASK HIM: \"{q['question']}\" "
+                f"({len(waiting)} waiting in all.) If he asks whether you have any questions, or invites one, "
+                "this is your answer — ask it in your own words, and never say you have none. Otherwise do not "
+                "volunteer it; it keeps.")
 
     async def diagnose(self):
         from core.self_reflection import get_creator_name

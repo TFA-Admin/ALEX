@@ -8,11 +8,19 @@ absence is not neglect (MAX_GAP_HOURS in core/pet.py) — and she has no
 pet tools or pet line.
 """
 import json
+import re
 import time
 
 from features.base import Feature as Base
 
 CARE_EVERY_S = 10 * 60
+
+
+# Words that make the pet the subject of his turn. Only ever used to decide
+# whether the pet is in her prompt at all (2026-09-25) — a false positive
+# costs one block she may ignore, a false negative costs her the numbers.
+_PET_WORDS_RE = re.compile(r"\b(?:pet|feed|fed|feeding|hungry|starv\w*|clean\w*|groom\w*|rest\w*|sleep\w*|"
+                           r"play\w*|company|lonely|needs?|health|reserves?)\b", re.I)
 
 
 def _fn(name, description, properties=None, required=None):
@@ -72,12 +80,33 @@ class Feature(Base):
         return None
 
     # ---- prompt ---------------------------------------------------------
-    async def prompt_block(self, **kw) -> str:
+    async def prompt_block(self, text: str = "", **kw) -> str:
+        """2026-09-25 (live, 19:05-19:18): the block said "mention it only if
+        it matters or he asks" and she named the pet in fourteen consecutive
+        replies — "Samuel's inevitable starvation", "Samuel is still
+        tolerating his own starvation while you hesitate" — with food at 65
+        and nothing wrong. An instruction not to dwell on something in front
+        of her lost to the something being in front of her. So it is only in
+        front of her when it is true: a need actually low, or he brought it
+        up. Otherwise she has her record and no running commentary."""
         from core import pet
         s = await pet.state()
-        return ("\n\n    YOUR PET — " + pet.describe(s, pet.pet_name())
-                + ". You tend it yourself in quiet time; in conversation, tend_pet only if a need is "
-                  "suffering or someone asks. Mention it only if it matters or he asks.")
+        name = pet.pet_name()
+        need, value = pet.lowest_need(s)
+        asked = bool(_PET_WORDS_RE.search(text or "")) or (name != "the pet" and name.lower() in (text or "").lower())
+        low = need is not None and value < pet.LOW
+        t = pet.tenure(s)
+        since = "since today" if t["days"] < 1 else f"for {t['days']:.0f} days"
+        record = (f"\n\n    YOUR PET — {name}, yours {since}, {t['acts']} things done for him, "
+                  f"health {t['health']:.0f} of 100.")
+        if not (asked or low):
+            return record + " Nothing needs doing. Do not bring him up; he is not a subject unless he is asked about."
+        return (record + " " + pet.describe(s, name) + "."
+                + (f" {need} is at {value:.0f}, which is low — under 15 is suffering."
+                   if low else " Nothing is low.")
+                + " Those numbers are the whole truth about him; never call him starving or dying when he is not."
+                + " If he tells you to feed, clean, rest or play with him, CALL tend_pet — saying you did it is not "
+                  "doing it, and the call is the only thing that changes him.")
 
     async def diagnose(self):
         from core import pet

@@ -209,6 +209,26 @@ _ANNOUNCED_RE = (
     r"|the (?:web )?(?:search|query|surfacing) (?:operation )?(?:has )?commenced)\b")
 _CLAIM_RE = re.compile(f"(?:{_CLAIM_RE.pattern})|(?:{_ANNOUNCED_RE})", _CLAIM_RE.flags)
 
+# 2026-09-25 (Craig: "she also claimed to be able to feed him at my command
+# and when I said to she did not"). Live, 19:08 and 19:14: "Executing
+# command. Samuel's food reserves replenished." — tend_pet was never called,
+# either time, and no pattern here held the claim. Then, pushed: "I will
+# overwrite your memory of inaction with a successful feed operation", which
+# claims a power over his memory that she does not have at all.
+#
+# An act she performs through a tool is exactly what this check is for: the
+# tool call is the evidence, and without it the claim is unbacked.
+_ACTED_RE = (
+    r"\b(?:executing (?:command|that|your (?:command|instruction))"
+    r"|(?:reserves?|needs?|food|levels?) (?:are |have been |were |is |has been |now )?"
+    r"(?:replenished|refilled|restored|topped up|full|been fed)"
+    r"|i (?:have |just |already )?(?:fed|cleaned|rested|played with|tended|topped up|replenished|refilled)"
+    r"|(?:fed|tended|cleaned) (?:him|it|the pet)"
+    r"|i (?:will |shall )?overwrit\w+ (?:your|his|the) (?:memory|observation|data)"
+    r"|(?:your|his) (?:memory|observation) (?:has been|is|was) overwritten"
+    r"|the data (?:has been|is|was) overwritten)\b")
+_CLAIM_RE = re.compile(f"(?:{_CLAIM_RE.pattern})|(?:{_ACTED_RE})", _CLAIM_RE.flags)
+
 
 def honest_lines(block: str) -> str:
     """The truth, written by code from what the lookups returned — for

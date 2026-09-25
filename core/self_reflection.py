@@ -115,7 +115,7 @@ def _invents_syntax(text: str) -> bool:
 # asked for in a prompt.
 
 
-async def _reflect_on_curiosity(recent, noticed=None):
+async def _reflect_on_curiosity(recent, noticed=None, her_acts=None):
     """Component 11's self-initiated curiosity trigger (2026-07-16): during
     this same reflection pass, notice a real, nameable topic she doesn't
     actually have knowledge about, rather than only reacting when a live
@@ -201,6 +201,13 @@ Respond with ONLY a JSON object:
         theirs |= _topic_words(r.get("prompt") or "")
     for n in (noticed or []):
         theirs |= _topic_words(n)
+    # 2026-09-25: and from what SHE DID. An act of hers is a fact, unlike a
+    # claim of hers — the thing this check was built to keep out was a topic
+    # invented from her own words ("your biological pulse"). Something she
+    # actually did, recorded by code, is a legitimate thing to wonder about.
+    for a in (her_acts or []):
+        theirs |= _topic_words(a.get("summary") or "")
+        theirs |= _topic_words(a.get("reasoning") or "")
     if not _touches(_topic_words(topic), theirs):
         logger.info(f"[ACTION] Curiosity: {topic!r} came from her own words, not his — not queued")
         return None
@@ -666,6 +673,20 @@ async def run_self_reflection():
     if len(recent) < MIN_CONVERSATIONS_FOR_REFLECTION:
         return
 
+    # 2026-09-25 (Craig, on the pet reaching nothing: "so let's add it. Again
+    # she should be able to do this for everything by default"). What she DID
+    # is as much a fact about the window as what was said in it, and every
+    # feature already records its acts as decisions — so this one read gives
+    # reflection and curiosity all of them at once, the pet included, and
+    # anything a later feature records without further wiring.
+    try:
+        from db.db import fetch_decisions
+        her_acts = [d for d in await fetch_decisions(limit=40)
+                    if d.get("actor") in ("alex", "her") and d.get("kind") not in ("tool", "speaker")]
+    except Exception as e:
+        logger.warning(f"⚠️ could not read what she has done: {e}")
+        her_acts = []
+
     await set_last_reflection_memory_id(recent[-1]["id"])
 
     # 2026-09-21: whose turns these are. Beliefs about Craig come only
@@ -758,7 +779,7 @@ async def run_self_reflection():
                 noticed = [o["text"] for o in await fetch_observations(curious_user, hours=6.0, limit=5)]
             except Exception:
                 noticed = []
-            curiosity = await _reflect_on_curiosity(curious_turns, noticed=noticed)
+            curiosity = await _reflect_on_curiosity(curious_turns, noticed=noticed, her_acts=her_acts)
         except Exception as e:
             logger.warning(f"⚠️ Curiosity reflection failed: {e}")
             curiosity = None

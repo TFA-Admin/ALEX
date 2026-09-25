@@ -1131,9 +1131,49 @@ ws.onopen = () => {
     }
 };
 
+// 2026-09-25 (Craig: "I turned it off stepped away for a bit and came back
+// then turned it back on and now I can't talk to her at all"). The autolisten
+// button was not the fault. This page opens ONE socket at load and never
+// opened another: when her process restarts — which happens on every approved
+// proposal, and happened many times while she was being worked on — the
+// socket closed, this handler wrote "disconnected", and that was the end of
+// it. The microphone still armed, the VAD still fired, and every utterance
+// went into a dead socket, so from his side she had simply stopped existing.
+// He had to know to reload the page.
+//
+// Deliberately a reload rather than a new WebSocket in place: every handler
+// on this page is bound to the original object and the handshake, the
+// identity restore, the readiness net and the eyes state all run from
+// onopen, so re-running the page is the one path already proven to rebuild
+// all of it (it is what the forget-me flow does). The wait first means no
+// reload loop while she is still down — it reloads when she answers again.
+let reconnectTries = 0;
+
+function waitForHerThenReload(){
+    reconnectTries += 1;
+    const delay = Math.min(1000 * reconnectTries, 5000);
+    teleSocketVal.textContent = reconnectTries > 1
+        ? `waiting for her (${reconnectTries})` : "reconnecting…";
+    setTimeout(() => {
+        // GET, not HEAD: the route is declared @app.get and answers HEAD with
+        // 405, which would have made this retry for ever and never reload.
+        fetch("/avatar", { method: "GET", cache: "no-store" })
+            .then(r => { if(r.ok){ location.reload(); } else { waitForHerThenReload(); } })
+            .catch(() => waitForHerThenReload());
+    }, delay);
+}
+
 ws.onclose = () => {
-    teleSocketVal.textContent = "disconnected";
     setOrbPresent(false);
+    teleSocket.classList.remove("on");
+    teleSocket.classList.add("warn");
+    stopAllPlayback();
+    waitForHerThenReload();
+};
+
+ws.onerror = () => {
+    // A socket error is followed by a close in every browser; the close
+    // handler owns the recovery. This only makes the rail honest meanwhile.
     teleSocket.classList.remove("on");
     teleSocket.classList.add("warn");
 };

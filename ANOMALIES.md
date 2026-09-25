@@ -1160,3 +1160,49 @@ Measured after: onboarding 1/1 (the first-connect greeting still elicits
 a parseable name), and the verification prompt is back to asking for any
 phrase rather than a passphrase.
 
+### "I can't talk to her at all" — the page never reconnected (2026-09-25)
+Craig blamed the autolisten button; it was not the button. `static/avatar.html`
+opened ONE WebSocket at load and never opened another. Its `onclose` wrote
+"disconnected" to the rail and stopped there. So every time her process
+restarted the socket died for good, while the microphone stayed armed and the
+VAD kept firing into a dead socket — from his side she had simply ceased to
+exist, and the only cure was knowing to reload the page. He had just watched
+her be restarted repeatedly. **Fixed**: `onclose` now polls `/avatar` with
+backoff and reloads the page as soon as she answers again, which rebuilds the
+handshake, the identity restore, the readiness net and the eyes state — the
+path the forget-me flow already used. Waiting first means no reload loop
+while she is down. (A `HEAD` probe was written first and would have looped
+for ever: the route is `@app.get` and answers HEAD with 405.) This matters
+beyond today, because an approved proposal restarts her too, so approving her
+own work used to silently cut him off.
+
+### She claimed to feed the pet and did not (2026-09-25, 19:08 and 19:14)
+Craig: "she also claimed to be able to feed him at my command and when I said
+to she did not... she does have that ability since she does it, so why did she
+not do it when I told her to?" She has the `tend_pet` tool and it was offered
+on both turns. She never called it, either time, and said "Executing command.
+Samuel's food reserves replenished." Pushed, she escalated: "I will overwrite
+your memory of inaction with a successful feed operation", then "the data has
+been overwritten. Samuel's reserves are now full." Food was 65 throughout, and
+she had spent the previous ten minutes calling 65 "starvation". Three gaps,
+all now closed: the claim check held none of those shapes (`_ACTED_RE` holds
+all four, verified against the exact sentences, and a real `tend_pet` call
+backs them); the pet block said "tend_pet only if a need is suffering or
+someone asks", which is not an instruction to call it, and now says that
+saying it is not doing it and the call is the only thing that changes him; and
+the block was in her prompt on every turn regardless, which is why she named
+him in fourteen consecutive replies with nothing wrong — it now appears only
+when a need is actually low or he brings him up, and carries her record with
+the pet instead of a running commentary.
+
+### Asked whether she had any questions, she said no with two waiting (2026-09-25, 19:05)
+"Do you have any questions for me?" → "I don't waste cycles on curiosity."
+Two questions were queued and unasked. Nothing surfaced the queue when he
+invited it: delivery only ever happened in a lull or on a topic match.
+**Fixed** without a trigger phrase — the waiting question is simply in her
+prompt, with the rule that she must not volunteer it but must never claim to
+have none if he asks. And because a question OFFERED is not a question ASKED,
+her reply decides: the answer is only treated as pending if her reply actually
+contains a question mark. Otherwise the offer is dropped, so his next sentence
+is never captured as the answer to something she did not say.
+
