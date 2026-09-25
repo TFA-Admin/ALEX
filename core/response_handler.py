@@ -275,6 +275,9 @@ class ResponseHandler:
             try:
                 from core import values as her_values
                 session["last_reply"] = her_values.reply_shape(full_response, session.pop("last_reply_looked", False))
+                hist = list(session.get("reply_history") or [])
+                hist.append(full_response[:400])
+                session["reply_history"] = hist[-3:]      # for "you made that up" (core/claims.py)
             except Exception:
                 pass
 

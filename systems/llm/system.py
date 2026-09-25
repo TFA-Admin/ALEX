@@ -333,6 +333,19 @@ class System(BaseSystem):
         # any kind. I would think my validation at least would mean
         # something"): thanks and praise for what she DID move her. Not
         # agreement — "you're right" is not in this list, on purpose.
+        # 2026-09-25 (projects #24): "you made that up" — the shape of what
+        # she said becomes a pattern the claim check watches for.
+        if her_claims.FABRICATION_RE.search(user_input):
+            try:
+                learned = await her_claims.learn_from_replies(session.get("reply_history") or [], source=user_id)
+                await record_decision(
+                    "fabrication", f"{user_id} said she made it up: {user_input[:100]!r}",
+                    reasoning="His words; the shape of her last reply is kept as a pattern the claim check watches for.",
+                    evidence=" | ".join((session.get("reply_history") or [])[-1:])[:300],
+                    outcome=(f"learned: {', '.join(learned)}" if learned else "nothing new to learn"), actor=user_id)
+                await her_mood.note("corrected", who=user_id)
+            except Exception as e:
+                logger.warning(f"⚠️ could not learn from his correction: {e}")
         if her_mood.THANKS_RE.search(user_input):
             await her_mood.note("thanked", who=user_id)     # creator resolved by name in mood.note
             try:
@@ -1278,6 +1291,7 @@ class System(BaseSystem):
         # then this is exactly the old single-stream path.
         chat_stream = getattr(ollama_manager, "chat_stream", None)
 
+        await her_claims.refresh_learned()                 # the learned shapes, once a minute
         evidence = {"lookups": evidence_ran, "tools": []}
         session["last_reply_looked"] = bool(evidence_ran)     # core/values.py reads it with the reply
         user_tail = prompt[len(system_prompt):]

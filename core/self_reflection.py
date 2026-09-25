@@ -770,6 +770,39 @@ async def run_self_reflection():
     craig_turns = [r for r in recent if r.get("user") == creator]
     other_turns = [r for r in recent if r.get("user") != creator]
 
+    # 2026-09-25 (Craig: "on the off chance I do not catch something can
+    # she check her previous statements for hallucinations and correct?"):
+    # her own review. Every reference to past conversation in her recent
+    # replies is checked against what he actually said; an unsupported
+    # one is retracted from her memory, recorded as a slip she can see,
+    # and its shape learned (core/claims.py).
+    try:
+        from core import claims as her_claims
+        from db.db import fetch_user_prompts, retract_memories
+        by_user = {}
+        for r in recent:
+            by_user.setdefault(r.get("user"), []).append(r)
+        for who, rows in by_user.items():
+            if not who:
+                continue
+            bad = await her_claims.review_replies(rows, await fetch_user_prompts(who, days=30))
+            for mem_id, sent, obj in bad:
+                logger.info(f"[CLAIM] her review: {sent[:90]!r} refers to {obj!r} — nothing in {who}'s words; retracted")
+                try:
+                    await retract_memories([mem_id], f"her own review: a reference to {obj!r} that {who} never said")
+                except Exception:
+                    pass
+                try:
+                    await record_decision(
+                        "fabrication", f"On review she found she had invented a reference: {sent[:100]!r}",
+                        reasoning=f"Her review compared the reference with everything {who} said in 30 days: nothing about {obj!r}.",
+                        evidence=sent[:300], outcome="retracted from her memory; the shape is now watched for", actor="alex")
+                except Exception:
+                    pass
+                await her_claims.learn(her_claims.skeleton(sent), "her review", sent)
+    except Exception as e:
+        logger.warning(f"[CLAIM] her review failed: {e}")
+
     # 2026-07-18 (Craig: "if she's working on something in the background
     # like tuning herself would it show that?") — everything from here to
     # the end of this function is the actual "work" (multiple real LLM

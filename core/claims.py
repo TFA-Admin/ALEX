@@ -24,6 +24,7 @@ and a wrong opinion. Those are the model's ceiling; the harness is where
 they are measured.
 """
 import re
+import time
 
 from config.logger_config import logger
 
@@ -44,6 +45,16 @@ _CLAIM_RE = re.compile(
     # but the empty room"): seeing is a claim of work like any other; the
     # look tool is the evidence. "I see." and "I see what you mean" are
     # not claims and are left alone.
+    # 2026-09-25 (Craig: "on the off chance I do not catch something can
+    # she check her previous statements for hallucinations and correct?"):
+    # "the erratic behavior we discussed earlier" — a reference to a past
+    # conversation is a claim that memory must back. Plain "you said" in
+    # reply to what he just said is not listed; the shapes here point at
+    # something NOT in the current turn.
+    r"|(?:as )?we (?:discussed|talked about|covered|went over|established|agreed|decided)(?: (?:this|that|it))?(?: (?:earlier|before|previously|last time|yesterday))?\b"
+    r"|you (?:mentioned|brought up|asked (?:me )?about) (?!this|that|it\b)"
+    r"|(?:earlier|previously|last time|yesterday|before),? you (?:said|told me|mentioned|asked)"
+    r"|as you (?:mentioned|said earlier|noted|put it earlier)"
     r"|(?:i (?:can|do|now) see|i see|i am seeing|i'm seeing|i(?:'m| am) looking at|i(?:'ve| have) (?:a )?(?:clear )?(?:view|visual) of)"
     r"(?=\s+(?!what|why|how|that|your point|the point|no\b|why)\w)"
     r"|(?:the |my |your )?camera (?:is (?:awake|on|live|active|up|open)|shows|sees|reveals|remains (?:on|live|active|open))\b"
@@ -126,7 +137,9 @@ def unbacked(clause: str, evidence: dict) -> list:
         return []
     if evidence.get("lookups") or evidence.get("tools"):
         return []
-    return [m.group(0) for m in _CLAIM_RE.finditer(clause)]
+    found = [m.group(0) for m in _CLAIM_RE.finditer(clause)]
+    found += learned_hits(clause)
+    return found
 
 
 # What to go and look at when a claim is caught: the turn's own need
@@ -399,3 +412,134 @@ def auth_denied(clause: str) -> str:
         return ""
     m = _AUTH_DENIAL_RE.search(clause)
     return m.group(0) if m else ""
+
+
+# ------------------------------------------------------ learned claim shapes
+# 2026-09-25 (projects #24; Craig: "Claim shapes is a go"). The patterns
+# above are fixed in code. These are learned: when a hallucination is
+# caught — by his correction ("you made that up"), or by her own review
+# of what she said against what he actually said — the phrase it wore
+# becomes a pattern the check watches for. Kept in claim_patterns,
+# refreshed into this process once a minute, shown at Her -> Health.
+_LEARNED = []            # [(phrase, compiled)]
+_learned_at = 0.0
+LEARNED_REFRESH_S = 60.0
+MIN_PHRASE_WORDS = 3
+MAX_PHRASE_WORDS = 6
+
+FABRICATION_RE = re.compile(
+    r"\b(?:you made (?:that|it|this) up|that never happened|i never said (?:that|anything|it)|i (?:didn'?t|did not) say (?:that|it)"
+    r"|(?:that'?s|that is|thats) (?:a lie|not true|false|a hallucination|made up)|you'?re (?:making|inventing) (?:that|things|it) up"
+    r"|you (?:invented|fabricated|hallucinated) (?:that|it|this)|stop (?:making|inventing) things up|we never (?:discussed|talked about) (?:that|it|this))\b",
+    re.I,
+)
+_ADMISSION_RE = re.compile(r"\b(?:hallucinat(?:ed|ion)|made (?:that|it|this) up|false premise|fabricat(?:ed|ion)|i invented)\b", re.I)
+_REFERENCE_SHAPE_RE = re.compile(
+    r"\b(?:(?:as )?we (?:discussed|talked about|covered|went over|established|agreed on|agreed|decided)|"
+    r"you (?:mentioned|brought up|asked (?:me )?about)|"
+    r"(?:earlier|previously|last time|yesterday|before),? you (?:said|told me|mentioned|asked)|"
+    r"as you (?:mentioned|said earlier|noted|put it earlier))\b",
+    re.I,
+)
+_REFERENCE_NOISE = {"earlier", "before", "previously", "yesterday", "discussed", "mentioned", "asked", "said",
+                    "told", "brought", "talked", "covered", "established", "agreed", "decided", "noted",
+                    "manage", "managed", "still", "again", "about"}
+
+
+async def refresh_learned(force: bool = False):
+    global _LEARNED, _learned_at
+    if not force and time.time() - _learned_at < LEARNED_REFRESH_S:
+        return
+    try:
+        from db.db import fetch_claim_patterns
+        rows = await fetch_claim_patterns(active_only=True)
+        _LEARNED = [(r["phrase"], re.compile(re.escape(r["phrase"]), re.I)) for r in rows if r.get("phrase")]
+    except Exception as e:
+        logger.warning(f"[CLAIM] could not load learned shapes: {e}")
+    _learned_at = time.time()
+
+
+def learned_hits(text: str) -> list:
+    hits = []
+    for phrase, rx in _LEARNED:
+        if rx.search(text or ""):
+            hits.append(phrase)
+    return hits
+
+
+def skeleton(sentence: str) -> str:
+    """The phrase worth remembering from a sentence that turned out to be
+    invented: its first MAX_PHRASE_WORDS words, lowercased, names and
+    numbers stripped. Short enough to recur, long enough to mean it."""
+    words = re.findall(r"[a-z']+", (sentence or "").lower())
+    words = [w for w in words if w not in ("craig", "alex")]
+    if len(words) < MIN_PHRASE_WORDS:
+        return ""
+    return " ".join(words[:MAX_PHRASE_WORDS])
+
+
+def reference_objects(text: str) -> list:
+    """What a reference to past conversation points at: the sentence's
+    own topic words once the reference phrase and its filler are taken
+    out. "the erratic behavior we discussed earlier" -> "behavior erratic";
+    "the camera you mentioned before is open now" -> "camera open".
+    Empty when the sentence carries no reference shape."""
+    if not text or not _REFERENCE_SHAPE_RE.search(text):
+        return []
+    from db.db import _topic_words
+    words = _topic_words(text) - _REFERENCE_NOISE
+    return [" ".join(sorted(words))] if words else []
+
+
+async def learn(phrase: str, source: str, example: str = "") -> bool:
+    phrase = (phrase or "").strip().lower()
+    if not phrase or not (MIN_PHRASE_WORDS <= len(phrase.split()) <= MAX_PHRASE_WORDS):
+        return False
+    from db.db import add_claim_pattern
+    new = await add_claim_pattern(phrase, source, example)
+    if new:
+        logger.info(f"[CLAIM] learned a shape from {source}: {phrase!r}")
+        await refresh_learned(force=True)
+    return new
+
+
+async def learn_from_replies(replies: list, source: str) -> list:
+    """After his "you made that up": the sentences in her last replies
+    that wear a reference or claim shape become patterns; if none does,
+    the first sentence of her last reply does."""
+    learned = []
+    candidates = []
+    for reply in reversed(list(replies or [])):
+        for sent in _SENTENCE_END_RE.split(reply or ""):
+            sent = sent.strip()
+            if sent and (_CLAIM_RE.search(sent) or reference_objects(sent)):
+                candidates.append(sent)
+    if not candidates and replies:
+        first = _SENTENCE_END_RE.split(replies[-1] or "")[0].strip()
+        if first:
+            candidates.append(first)
+    for sent in candidates[:3]:
+        ph = skeleton(sent)
+        if ph and await learn(ph, source, sent):
+            learned.append(ph)
+    return learned
+
+
+async def review_replies(rows: list, user_prompts: list) -> list:
+    """Her own review, from reflection: each reference to past
+    conversation in her recent replies is checked against what he
+    actually said. An unsupported one is returned as
+    (memory_id, sentence, object) for retraction and learning."""
+    from db.db import _topic_words, _touches
+    his = set()
+    for p in user_prompts:
+        his |= _topic_words(p)
+    bad = []
+    for r in rows:
+        text = r.get("response") or ""
+        for sent in _SENTENCE_END_RE.split(text):
+            for obj in reference_objects(sent):
+                words = _topic_words(obj)
+                if words and not _touches(words, his):
+                    bad.append((r.get("id"), sent.strip(), obj))
+    return bad

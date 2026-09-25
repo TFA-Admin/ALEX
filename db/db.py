@@ -135,6 +135,20 @@ async def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''')
 
+        # 🧷 CLAIM SHAPES (2026-09-25): phrases that caught hallucinations
+        # wear, learned from his corrections and her own review
+        # (core/claims.py). Each one caught makes the next harder to say.
+        await db.execute('''
+        CREATE TABLE IF NOT EXISTS claim_patterns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phrase TEXT UNIQUE,
+            source TEXT,
+            example TEXT,
+            active INTEGER DEFAULT 1,
+            hits INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+
         # 👍 VALUE SIGNALS (2026-09-25): his thanks and corrections with
         # the shape of the reply each followed (core/values.py).
         await db.execute('''
@@ -1208,6 +1222,42 @@ async def fetch_observations(user: str = None, hours: float = 6.0, limit: int = 
                 (f"-{float(hours)} hours", limit))
         rows = await cur.fetchall()
     return [dict(r) for r in rows]
+
+
+async def add_claim_pattern(phrase: str, source: str, example: str = "") -> bool:
+    """True if it was new."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT OR IGNORE INTO claim_patterns(phrase, source, example) VALUES(?,?,?)",
+            (phrase.strip().lower(), source, (example or "")[:300]))
+        await db.commit()
+        return cur.rowcount == 1
+
+
+async def fetch_claim_patterns(active_only: bool = True):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT id, phrase, source, example, active, hits, created_at FROM claim_patterns "
+            + ("WHERE active=1 " if active_only else "") + "ORDER BY id DESC LIMIT 300")
+        rows = await cur.fetchall()
+    keys = ["id", "phrase", "source", "example", "active", "hits", "created_at"]
+    return [dict(zip(keys, r)) for r in rows]
+
+
+async def bump_claim_pattern(phrase: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE claim_patterns SET hits = hits + 1 WHERE phrase=?", (phrase.strip().lower(),))
+        await db.commit()
+
+
+async def fetch_user_prompts(user: str, days: int = 30, limit: int = 400):
+    """What he actually said, for checking her references to it."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT prompt FROM memory WHERE user=? AND created_at >= datetime('now', ?) "
+            "AND COALESCE(retracted,0)=0 ORDER BY id DESC LIMIT ?", (user, f"-{int(days)} days", limit))
+        rows = await cur.fetchall()
+    return [r[0] or "" for r in rows]
 
 
 async def add_value_signal(user: str, kind: str, words: int, looked: bool, asked: bool) -> int:

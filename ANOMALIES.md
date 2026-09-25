@@ -854,3 +854,16 @@ it back. **Fixed:** a curiosity question is queued only if its topic
 came from his words or something she noticed — never from her own
 replies; a question has a week to be asked and two to be recalled on
 topic, then it is let go, and the Curiosity tab says so.
+
+### Closing the Controller (2026-09-25, Craig: "if I close the controller and reopen it, ALEX is unaffected correct?")
+Correct, by construction: her process and Ollama are started with
+CREATE_NO_WINDOW and no job object, closeEvent stops only the log
+tailers, and the orphan check on reopening flags only processes that
+are NOT serving their port. Her overnight disappearance on the 24th
+happened hours before he reopened the Controller, so it was not that.
+
+### The harness crashed on a failing case with no text (2026-09-25)
+Deterministic suites (mood) have cases without a `text` field; the
+failure printer read `case.text` and the run died after the first FAIL
+with no score recorded. Two of today's runs ended that way unnoticed.
+Fixed: the line prints only when the case carries text.

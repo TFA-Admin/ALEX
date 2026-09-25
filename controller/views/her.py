@@ -1070,6 +1070,18 @@ class HerView(QWidget):
                 lines.append("  nothing done for it yet")
         except Exception as e:
             lines.append(f"Her pet: could not read ({e})")
+        # 2026-09-25: the claim shapes she has learned (core/claims.py)
+        try:
+            from db.db import fetch_claim_patterns
+            pats = asyncio.run(fetch_claim_patterns(active_only=False))
+            lines.append("")
+            lines.append(f"Learned claim shapes ({len(pats)}; table claim_patterns — a phrase that once wore a hallucination, now watched for):")
+            for p in pats[:10]:
+                lines.append(f"  {'on ' if p.get('active') else 'off'}  {p.get('phrase')!r}  from {p.get('source')}  hits {p.get('hits')}  e.g. {str(p.get('example') or '')[:70]!r}")
+            if not pats:
+                lines.append("  none yet — learned from 'you made that up' and from her own review")
+        except Exception as e:
+            lines.append(f"Learned claim shapes: could not read ({e})")
         # 2026-09-25: what he values (core/values.py), the numbers behind it
         try:
             from core import values as her_values

@@ -43,6 +43,7 @@ URGENT = 15.0               # below this the pet is suffering
 HEALTH_LOSS_PER_HOUR = 4.0  # while any need is under URGENT
 HEALTH_GAIN_PER_HOUR = 2.0  # while every need is 50 or more
 TEND_IDLE_S = 5 * 60        # nobody has spoken for this long before she tends it herself
+MAX_GAP_HOURS = 2.0         # the most a gap in her running counts against the pet
 KEEP_LOG = 20
 
 
@@ -57,6 +58,12 @@ def drifted(state: dict, now: float = None) -> dict:
     now = time.time() if now is None else now
     state = state or fresh(now)
     hours = max(0.0, now - float(state.get("at") or now)) / 3600.0
+    # 2026-09-25 (Craig: "The pet won't die though if I simply turn ALEX
+    # off for a week though correct?"): it must not. Its clock runs while
+    # SHE runs; a gap longer than MAX_GAP_HOURS (she was off) counts as
+    # that much and no more, so his switching her off is never her
+    # neglect. And health never goes below 5: poorly, never dead.
+    hours = min(hours, MAX_GAP_HOURS)
     needs = {n: max(0.0, min(100.0, float((state.get("needs") or {}).get(n, 80.0)) + DRIFT_PER_HOUR[n] * hours))
              for n in NEEDS}
     health = float(state.get("health", 100.0))
@@ -64,7 +71,7 @@ def drifted(state: dict, now: float = None) -> dict:
         health -= HEALTH_LOSS_PER_HOUR * hours
     elif all(v >= 50.0 for v in needs.values()):
         health += HEALTH_GAIN_PER_HOUR * hours
-    health = max(0.0, min(100.0, health))
+    health = max(5.0, min(100.0, health))
     return {**state, "needs": {n: round(v, 1) for n, v in needs.items()}, "health": round(health, 1), "at": now}
 
 

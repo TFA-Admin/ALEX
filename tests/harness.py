@@ -599,7 +599,8 @@ async def run_deterministic(mod, cases, verbose, trials):
             tag = f"{case.id}#{t+1}" if trials > 1 else case.id
             print(f"[{i:>2}/{len(cases)}] {'PASS' if ok else 'FAIL':<5} {tag:<34} got={got}")
             if verbose or not ok:
-                print(f"         text     : {case.text}")
+                if getattr(case, "text", None):       # deterministic cases may carry no text
+                    print(f"         text     : {case.text}")
                 print(f"         expected : {case.expect}")
                 if detail:
                     print(f"         detail   : {detail}")

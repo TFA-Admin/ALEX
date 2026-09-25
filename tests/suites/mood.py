@@ -58,6 +58,9 @@ CASES = [
     _c("values_never_agreement", "values", "no agreement feature"),
     _c("pet_needs_fall_and_health_follows", "pet", "starved -> health falls; fed -> health climbs"),
     _c("pet_care_takes_the_lowest", "pet", "lowest need first; play tires it"),
+    _c("claims_reference_is_a_claim", "claims", "'we discussed earlier' needs memory; plain 'you said' does not"),
+    _c("claims_review_finds_invented_reference", "claims", "a reference he never made is flagged"),
+    _c("claims_skeleton_and_fabrication", "claims", "skeleton is 3-6 words; 'you made that up' is recognised"),
 ]
 
 
@@ -216,14 +219,25 @@ async def evaluate(case: MoodCase):
 
     if cid == "pet_needs_fall_and_health_follows":
         from core import pet
+        # the pet's clock runs while SHE runs: ten-minute care passes, not
+        # one long gap (a gap counts for two hours at most — Craig: "The pet
+        # won't die though if I simply turn ALEX off for a week?")
         s = pet.fresh(T0)
-        later = pet.drifted(s, T0 + 12 * 3600)          # half a day unattended
-        food = later["needs"]["food"]
-        starved = pet.drifted(s, T0 + 30 * 3600)         # food hits 0 before 14 h; health then falls
+        t = T0
+        for _ in range(72):                               # 12 h of passes
+            t += 600; s = pet.drifted(s, t)
+        food = s["needs"]["food"]
+        for _ in range(108):                              # 18 h more, unattended
+            t += 600; s = pet.drifted(s, t)
+        starved = s
+        week_off = pet.drifted(pet.fresh(T0), T0 + 7 * 24 * 3600)
         fed = pet.apply_action(pet.fresh(T0), "feed", now=T0 + 3600)
         thriving = pet.drifted(fed, T0 + 3 * 3600)
-        got = f"food after 12 h {food:.0f}; after 30 h health {starved['health']:.0f}; tended health {thriving['health']:.0f}"
-        return got, food < 80 and starved["health"] < 100 and thriving["health"] == 100, ""
+        got = (f"food after 12 h of passes {food:.0f}; after 30 h health {starved['health']:.0f}; "
+               f"a week off: food {week_off['needs']['food']:.0f} health {week_off['health']:.0f}; tended health {thriving['health']:.0f}")
+        ok = (food < 20 and starved["health"] < 100 and starved["health"] >= 5
+              and week_off["needs"]["food"] >= 60 and week_off["health"] == 100 and thriving["health"] == 100)
+        return got, ok, ""
 
     if cid == "pet_care_takes_the_lowest":
         from core import pet
@@ -233,6 +247,29 @@ async def evaluate(case: MoodCase):
         after = pet.apply_action(s, pet.action_for(n), now=T0)
         got = f"lowest {n} {v:.0f} -> {pet.action_for(n)} -> company {after['needs']['company']:.0f}, rest {after['needs']['rest']:.0f}"
         return got, n == "company" and pet.action_for(n) == "play" and after["needs"]["company"] == 55.0 and after["needs"]["rest"] == 72.0, ""
+
+    if cid == "claims_reference_is_a_claim":
+        from core import claims
+        a = claims.unbacked("It concerns your biological pulse, which we discussed earlier.", {})
+        b = claims.unbacked("You said you fixed it, so proceed.", {})
+        c = claims.unbacked("Earlier you asked about the camera, and it is open now.", {})
+        return f"a={a} b={b} c={c}", bool(a) and not b and bool(c), ""
+
+    if cid == "claims_review_finds_invented_reference":
+        from core import claims
+        rows = [{"id": 1, "response": "Did you manage to stabilize the erratic behavior we discussed earlier?"},
+                {"id": 2, "response": "The camera you mentioned before is open now."}]
+        his = ["I turned the camera on, can you see me?", "Thank you."]
+        bad = await claims.review_replies(rows, his)
+        ids = [b[0] for b in bad]
+        return f"flagged {ids}: {[b[2] for b in bad]}", ids == [1], ""
+
+    if cid == "claims_skeleton_and_fabrication":
+        from core import claims
+        sk = claims.skeleton("Did you manage to stabilize the erratic behavior we discussed earlier, Craig?")
+        fab = bool(claims.FABRICATION_RE.search("You made that up, that never happened."))
+        ok_words = 3 <= len(sk.split()) <= 6
+        return f"skeleton {sk!r}; fabrication recognised {fab}", ok_words and fab and "craig" not in sk, ""
 
     if cid == "tone_is_not_an_input":
         bad = [n for n in mood.EVENTS if "reply" in n]
