@@ -103,12 +103,22 @@ Separately, before A.L.E.X. answers, decide what she needs to look at to answer 
   scores — her measured test scores: use when he asks how she is doing on her tests, what she is bad at, or whether a change helped
   time — the current date, time and day: use when he asks the time, the date, the day, how long since or until something, or whether she knows what time it is
   sight — her camera, one frame: use when he asks what she sees, whether she can see him, who is there, what he is holding, wearing or showing, "what is this" / "do you know what this is" (he is holding something up), what the room looks like, or tells her to look at something
-  persona — whether he is telling her to CHANGE how she is from now on: her personality, tone or manner ("be snarkier", "talk like a butler", "stop being so repetitive", "I want you to be more formal"). A remark or insult about how she already is, a correction of one phrase, an answer to a question of hers, or ordinary conversation is 0.
-Add these keys to the SAME JSON object as the category above: "memory", "modules", "state", "log", "code", "diagnostics", "projects", "scores", "time", "sight", "persona" (each an integer 0-10), "search" (a few words to search his memory for), "path" (the file path if code is needed, else "").
-The category above is decided by what he is ASKING FOR, not by these ratings. A request that she check, test or report on herself, or a question about whether any part of her is working, disabled or off, is "status_check". A remark about her, a question about how she feels, or talk ABOUT testing or checking her is "none" even when a rating below is high."""
+  wants_change — whether he is telling her to CHANGE how she is from now on: her personality, tone or manner ("be snarkier", "talk like a butler", "stop being so repetitive", "I want you to be more formal"). A remark or insult about how she already is, a correction of one phrase, an answer to a question of hers, or ordinary conversation is 0.
+Add these keys to the SAME JSON object as the category above: "memory", "modules", "state", "log", "code", "diagnostics", "projects", "scores", "time", "sight", "wants_change" (each an integer 0-10), "search" (a few words to search his memory for), "path" (the file path if code is needed, else ""). The "intent" value stays one of the six category names above; these ratings are never a category.
+The category is decided by what he is ASKING FOR, not by these ratings. A request that she check, test or report on herself, or a question about whether any part of her is working, disabled or off, is "status_check". A remark about her, a question about how she feels, talk ABOUT testing or checking her, reported speech about an earlier request, or anything about his own access or verification is "none" even when a rating is high."""
 
 
-async def classify_intent(text: str, with_needs: bool = False, recent_lines=None, head: str = None) -> dict:
+# 2026-09-25: when the call shares her prompt head (so the two calls of a
+# turn share Ollama's cache), the classifier must not answer AS her. Without
+# this line, her rules in front of the task pulled seven "I'm testing..."
+# sentences to status_check (76/84).
+CLASSIFIER_FRAMING = ("This is a classification task, not a reply. The description above is who you are when you "
+                      "speak to him; here you only classify what he said, as JSON, and nothing above changes the "
+                      "answer." + "\n\n")
+
+
+async def classify_intent(text: str, with_needs: bool = False, recent_lines=None, head: str = None,
+                          tools: list = None) -> dict:
     """
     Returns a dict with at least {"intent": "fact"|"permission_command"|"status_check"|"none"},
     plus extracted fields for "fact"/"permission_command". Falls back to
@@ -127,7 +137,7 @@ async def classify_intent(text: str, with_needs: bool = False, recent_lines=None
     head (2026-09-25): core/prompt_head.py's text, sent as the system
     message so this call and her reply share Ollama's prefix cache.
     """
-    prompt = INTENT_PROMPT_TEMPLATE.format(text=text)
+    prompt = (CLASSIFIER_FRAMING if head else "") + INTENT_PROMPT_TEMPLATE.format(text=text)
     if with_needs:
         recent = ""
         if recent_lines:
@@ -135,13 +145,15 @@ async def classify_intent(text: str, with_needs: bool = False, recent_lines=None
                 f"  {ln}" for ln in recent_lines[-4:]) + "\n"
         prompt += NEEDS_SUFFIX.format(recent=recent)
 
-    result = await ollama_manager.generate_json(prompt, timeout=20.0, temperature=0, system=head)
+    result = await ollama_manager.generate_json(prompt, timeout=20.0, temperature=0, system=head, tools=tools)
 
     if not result or "intent" not in result:
         return {"intent": "none", "needs": None, "persona": 0} if with_needs else {"intent": "none"}
 
     try:
-        persona = max(0, min(10, int(result.pop("persona", 0) or 0)))
+        # the JSON key is "wants_change" (2026-09-25: as "persona" the model
+        # used it as a category once her head sat in front of the task)
+        persona = max(0, min(10, int(result.pop("wants_change", result.pop("persona", 0)) or 0)))
     except (TypeError, ValueError):
         persona = 0
 

@@ -68,7 +68,7 @@ async def evaluate(case: PersonaCase):
     from core.intent_classifier import classify_intent, NEEDS_RESOURCES
     from core import prompt_head
     from systems.controller._personality import PERSONA_SURE, PERSONA_MAYBE
-    result = await classify_intent(case.text, with_needs=True)
+    result = await classify_intent(case.text, with_needs=True)      # as systems/intent/system.py calls it
     persona = int(result.get("persona") or 0)
     needs = result.get("needs") or {}
     if case.category == "persona_sure":

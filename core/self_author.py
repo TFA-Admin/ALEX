@@ -232,6 +232,15 @@ def check_direction(t: Target, current: str, new_value: str, effect: str):
     return f"did not state the expected effect in the given terms (said: {effect!r})"
 
 
+def _same(value) -> str:
+    """2026-09-25: the rejected-value guard compared exact strings, and
+    proposal #18 re-proposed #10's line with one letter's case changed. Case
+    and whitespace do not make a different value. (A reworded clause still
+    does — this is a backstop, not the protection; the protection is that
+    the author reads what he decided and why.)"""
+    return " ".join(str(value or "").split()).casefold()
+
+
 async def decisions_on(key: str, days: int = 30):
     """2026-09-25 (proposal #11 was #6 again — deliberation.threshold 7 -> 6,
     the value he had rejected ninety minutes earlier — because nothing told
@@ -257,7 +266,7 @@ async def decisions_on(key: str, days: int = 30):
         verb = "REJECTED" if r["status"] == "rejected" else "APPROVED"
         reason = (r.get("reason") or "").strip()
         lines.append(f"- {when} UTC — he {verb} \"{r.get('title')}\"" + (f": \"{reason}\"" if reason else ""))
-        value = str(r.get("value") or "").strip()
+        value = _same(r.get("value"))
         if r["status"] == "rejected" and value:
             rejected.setdefault(value, (when, reason or "no reason given"))
     history = "\n".join(lines[:6]) if lines else f"(nothing decided on this setting in the last {days} days)"
@@ -338,8 +347,8 @@ async def propose(key: str, why: str = "", root: str = ALEX_DIR, model: str = No
     # 2026-09-25: a value he rejected in the last 30 days is not proposed
     # again, whatever the rationale. Deterministic, like the direction
     # check; the row this makes rests the target like any other look.
-    if str(value).strip() in rejected:
-        when, reason = rejected[str(value).strip()]
+    if _same(value) in rejected:
+        when, reason = rejected[_same(value)]
         return {"ok": False, "error": (f"refused — he rejected exactly this value ({short(value, 60)}) on {when} UTC: "
                                        f"\"{reason}\". Her rationale: {rationale}")}
     try:
@@ -450,8 +459,12 @@ async def measure(key: str) -> str:
         return await _memory_windows(MEMORY_WINDOW_TURNS, MEMORY_CONTEXT_MAX_CHARS)
     if key == "intent.status_check":
         from db.db import fetch_eval_runs
-        runs = [r for r in await fetch_eval_runs(suite="intent", limit=10)
-                if not (r.get("note") or "").startswith("gate proposal")]
+        # 2026-09-25: only runs from a CLEAN tree, and not gate runs. Proposal
+        # #18 was authored against 76/84 and 80/84 runs recorded during an
+        # experiment on an uncommitted tree that was then reverted — a
+        # sensible fix for a problem that did not exist.
+        runs = [r for r in await fetch_eval_runs(suite="intent", limit=20)
+                if not (r.get("note") or "").startswith("gate proposal") and not r.get("dirty")]
         if not runs:
             return "the intent suite has not been run"
         r = runs[0]

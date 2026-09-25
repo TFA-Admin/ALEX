@@ -457,7 +457,7 @@ class OllamaManager:
 
     async def generate_json(self, prompt: str, model: str = DEFAULT_MODEL, timeout: float = 15.0,
                              temperature: float = None, think: bool = None, num_predict: int = 200,
-                             system: str = None):
+                             system: str = None, tools: list = None):
         """
         Single-shot (non-streaming) call for short structured-extraction
         tasks (name parsing, fact extraction, command parameters) — these
@@ -516,7 +516,12 @@ class OllamaManager:
                     "keep_alive": KEEP_ALIVE,
                     **think_kw,
                     "format": "json",
-                    "options": options
+                    "options": options,
+                    # 2026-09-25: the same tool list her reply is offered, so the
+                    # rendered prefix (system + tools) matches hers token for
+                    # token and the two calls share Ollama's cache. JSON mode
+                    # keeps the answer a JSON object.
+                    **({"tools": tools} if tools else {}),
                 }
             )
             data = r.json()
