@@ -52,6 +52,7 @@ CASES = [
     _c("barge_in_counts_once", "who", "5 barge-ins in 2 min = one"),
     _c("mood_never_silences", "dials", "verbosity offset >= -1"),
     _c("tone_is_not_an_input", "rule", "no sharp_reply"),
+    _c("thanks_lifts_agreement_does_not", "rule", "thanked moves her; 'you're right' does not"),
 ]
 
 
@@ -177,6 +178,14 @@ async def evaluate(case: MoodCase):
         s, t = _seq([("corrected", "sam", False)] * 6, gap=1.0)   # irritation 10
         d = mood.dial_offsets(s, t)
         return str(d.get("verbosity")), d.get("verbosity", 0) >= -1.0, ""
+
+    if cid == "thanks_lifts_agreement_does_not":
+        s, t = _seq([("corrected", "craig", True), ("thanked", "craig", True)], gap=1.0)
+        lifted = s["axes"]["irritation"] < 1.5 and s["axes"]["engagement"] >= 1.0
+        agree = [w for w in ("you're right", "I agree", "correct", "exactly") if mood.THANKS_RE.search(w)]
+        thanks = [w for w in ("thank you Alex", "good job", "that was helpful", "perfect") if not mood.THANKS_RE.search(w)]
+        got = f"after thanks irritation {s['axes']['irritation']:.2f} engagement {s['axes']['engagement']:.2f}; agreement matched {agree}; thanks missed {thanks}"
+        return got, lifted and not agree and not thanks, ""
 
     if cid == "tone_is_not_an_input":
         bad = [n for n in mood.EVENTS if "reply" in n]

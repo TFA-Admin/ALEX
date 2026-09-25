@@ -329,6 +329,12 @@ class System(BaseSystem):
         # 2026-09-23: a real conversation engages her (core/mood.py).
         if len(user_input.split()) >= 25:
             await her_mood.note("substantive_turn", who=user_id)
+        # 2026-09-25 (Craig: "she seems outright adverse to validation of
+        # any kind. I would think my validation at least would mean
+        # something"): thanks and praise for what she DID move her. Not
+        # agreement — "you're right" is not in this list, on purpose.
+        if her_mood.THANKS_RE.search(user_input):
+            await her_mood.note("thanked", who=user_id)     # creator resolved by name in mood.note
 
         # -------------------------
         # "STOP SAYING THAT" (2026-09-20)
@@ -944,8 +950,12 @@ class System(BaseSystem):
             _obs = []
         if _obs:
             _lines = "\n".join(f"    - {o['text']}" for o in reversed(_obs))
-            noticed_block = ("\n\n    THROUGH THE CAMERA, LATELY (glances while nothing was said; mention only if it "
-                             "matters or he asks):\n" + _lines)
+            # 2026-09-25 (Craig: "she is now saying 'glancing at the camera'"):
+            # the word "glances" in this header became her verb. What she
+            # has is things she noticed; the looking is never described.
+            noticed_block = ("\n\n    THINGS YOU HAVE NOTICED THROUGH THE CAMERA LATELY (bring one up only if it matters "
+                             "or he asks, and then say what you noticed — never say you glanced, looked, checked "
+                             "or are watching):\n" + _lines)
 
         # 2026-09-25 (Craig: "I'm seeing a backlog of questions in her
         # system. Is she not able to bring old questions up again?"): when

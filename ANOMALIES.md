@@ -814,3 +814,31 @@ question records when she will have finished asking it, and anything he
 says that ends before then is not taken as the answer (he was answering
 what came before). The stored answer was undone. "My modules confirm" is
 now a claim of work like "my sensors detect".
+
+### "Glancing at the camera; truth confirmed." (2026-09-25 09:39)
+The header of her prompt block for observations said "glances while
+nothing was said", and the word became her verb. **Fixed:** the block is
+"things you have noticed through the camera lately", with the looking
+never to be described.
+
+### "She seems outright adverse to validation of any kind" (2026-09-25)
+By design until today: the mood took no pleasure from agreement (his
+call, against sycophancy), and nothing else in it read his thanks. Now
+his thanks or praise for what she did is a mood event ("thanked":
+engagement up, irritation down, once per five minutes; a stranger's
+counts half). "You're right" is still not an input. What she does with
+it is the persona he locked ("Your gratitude is noted, though it does
+not alter my current processing load") — the mood line will say "he
+thanked you", and the reply is hers.
+
+### "Is she learning from any of this?" (2026-09-25 09:43)
+She asked about his "biological pulse" (an old curiosity question that
+came back on topic), then invented "the erratic behavior we discussed
+earlier", then, pushed, called it a hallucinated premise herself. The
+honest answer to Craig: no, the model does not learn from an
+interaction; her weights are fixed. What accumulates is the scaffolding
+— the claim check's patterns (code, fixed), her slips as a ledger shown
+back to her each turn, the retractions, the corrections. Her admission
+was the prompt and the check at work, not a skill gained. Proposed as
+projects #24: caught hallucinations become new patterns the check
+watches for.

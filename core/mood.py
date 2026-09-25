@@ -38,6 +38,7 @@ so time passes for her while she is off.
 """
 import json
 import math
+import re
 import time
 
 from config.logger_config import logger
@@ -66,7 +67,20 @@ EVENTS = {
     "tool_failed":        ({"strain": +1.0}, False, "a tool of yours failed"),
     "startup_failed":     ({"strain": +3.0}, False, "you started with errors"),
     "healthy":            ({"strain": -1.0}, False, "a check came back clean"),
+    # 2026-09-25 (Craig: "I would think my validation at least would mean
+    # something"). His thanks or praise for what she did; a stranger's
+    # counts for less (the multiplier below runs the other way for this
+    # one: only his moves her fully). Agreement is still not an input.
+    "thanked":            ({"engagement": +1.0, "irritation": -0.7}, False, "{who} thanked you"),
 }
+
+THANKS_RE = re.compile(
+    r"\b(?:thank you|thanks|thank u|cheers|well done|good job|nice work|great work|good work|"
+    r"that was (?:helpful|useful|great|good|perfect|excellent)|(?:that's|thats|that is) (?:helpful|useful|great|perfect|excellent|brilliant)|"
+    r"perfect|excellent|brilliant|impressive|i appreciate (?:it|that|this|you)|much appreciated|nicely done|"
+    r"you did (?:well|good|great)|proud of you)\b",
+    re.I,
+)
 
 # 2026-09-23 (Craig: "she seems to be getting progressively more
 # irritated, is that a bug or her personality?" — a bug): the same event
@@ -75,7 +89,7 @@ EVENTS = {
 # thirteen minutes, and irritation 8/10 made her sharper and shorter,
 # which cut her sentences off, which made him interrupt again.
 COOLDOWN_S = {"talked_over": 120.0, "lookup_found": 90.0, "substantive_turn": 120.0,
-              "ignored": 300.0, "model_slow": 120.0, "tool_failed": 60.0}
+              "ignored": 300.0, "model_slow": 120.0, "tool_failed": 60.0, "thanked": 300.0}
 
 # axis -> the orb colour it shows as (the page's palette, unchanged)
 ORB_KEY = {"irritation": "edge", "engagement": "focused", "strain": "alert"}
@@ -113,6 +127,8 @@ def apply(state: dict, event: str, who: str = None, creator: bool = True, now: f
                 return state or fresh(now)
     axes = decayed(state, now)
     mult = STRANGER if (stranger_matters and who and not creator) else 1.0
+    if event == "thanked" and who and not creator:
+        mult = 0.5
     applied = {}
     for a, d in deltas.items():
         d = d * mult if d > 0 else d
