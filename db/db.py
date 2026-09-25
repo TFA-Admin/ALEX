@@ -1762,7 +1762,7 @@ async def fetch_undelivered_curiosity_questions(user: str = None, creator: bool 
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "SELECT topic, question, created_at FROM curiosity_queue "
-            "WHERE answer IS NULL AND delivered < ? AND (last_asked_at IS NULL OR "
+            "WHERE (answer IS NULL OR answer = '') AND delivered < ? AND (last_asked_at IS NULL OR "
             "  strftime('%s','now') - strftime('%s', last_asked_at) > ?)" + who +
             " ORDER BY created_at ASC",
             args)
@@ -1828,7 +1828,7 @@ async def fetch_relevant_curiosity(user: str, text: str):
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "SELECT id, topic, question, delivered, last_asked_at, user FROM curiosity_queue "
-            "WHERE answer IS NULL AND (user=? OR user IS NULL) "
+            "WHERE (answer IS NULL OR answer = '') AND (user=? OR user IS NULL) "
             "AND (last_asked_at IS NULL OR strftime('%s','now') - strftime('%s', last_asked_at) > 3600) "
             "ORDER BY id DESC", (user,))
         rows = await cursor.fetchall()

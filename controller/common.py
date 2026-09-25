@@ -128,11 +128,88 @@ def make_readable(table, wrap_column: int):
     while the short ones size to their contents, rows grow to fit wrapped
     text, and every cell carries its full value as a tooltip so nothing is
     lost even when a row is still too narrow."""
+    # 2026-09-25 (Craig: "How come the columns aren't resizeable?"):
+    # Stretch and ResizeToContents both pin a column. Every column is now
+    # Interactive — draggable — and sized once from its contents when the
+    # data lands (a short timer after the cells change, so a refresh sizes
+    # once, not per cell), the content column taking the leftover width.
+    # After he drags anything, the table is his and is not re-sized.
+    from PySide6.QtCore import QTimer
     header = table.horizontalHeader()
-    for col in range(table.columnCount()):
-        header.setSectionResizeMode(
-            col, QHeaderView.Stretch if col == wrap_column
-            else QHeaderView.ResizeToContents)
+    header.setSectionResizeMode(QHeaderView.Interactive)
+    header.setMinimumSectionSize(40)
+    header.setStretchLastSection(wrap_column == table.columnCount() - 1)
+    table._wrap_column = wrap_column
+    table._user_sized = False
+    table._sizing = False
+    table._size_timer = QTimer(table)
+    table._size_timer.setSingleShot(True)
+    table._size_timer.setInterval(0)
+
+    def on_section_resized(*_):
+        if not table._sizing:
+            table._user_sized = True
+
+    def auto_size():
+        if table._user_sized or table._sizing or table.rowCount() == 0:
+            return
+        table._sizing = True
+        try:
+            # Widths from the text itself, not Qt's resizeColumnsToContents:
+            # with word wrap on, that one measured a wrapped cell at the
+            # column's current width and shrank the question column to a
+            # word per line — Craig: "when I refresh curiosity the table
+            # gets massive". Long text gets 420 px and wraps in it.
+            fm = table.fontMetrics()
+            cols = table.columnCount()
+            for c in range(cols):
+                if c == wrap_column:
+                    continue
+                longest = 0
+                for r in range(table.rowCount()):
+                    it = table.item(r, c)
+                    if it is not None:
+                        longest = max(longest, fm.horizontalAdvance(it.text()[:200]))
+                hdr = table.horizontalHeaderItem(c)
+                head = fm.horizontalAdvance(hdr.text()) if hdr is not None else 0
+                table.setColumnWidth(c, max(60, min(420, max(longest, head) + 24)))
+            if not header.stretchLastSection():
+                used = sum(table.columnWidth(c) for c in range(cols) if c != wrap_column)
+                table.setColumnWidth(wrap_column, max(240, table.viewport().width() - used - 8))
+            table.resizeRowsToContents()
+        finally:
+            table._sizing = False
+
+    def fit_wrap_column():
+        """The content column follows the window: leftover width, never
+        less than 240 px. Only while the table is not his."""
+        if table._user_sized or table._sizing or header.stretchLastSection():
+            return
+        table._sizing = True
+        try:
+            cols = table.columnCount()
+            used = sum(table.columnWidth(c) for c in range(cols) if c != wrap_column)
+            width = max(240, table.viewport().width() - used - 8)
+            if abs(width - table.columnWidth(wrap_column)) > 4:
+                table.setColumnWidth(wrap_column, width)
+                table.resizeRowsToContents()
+        finally:
+            table._sizing = False
+
+    from PySide6.QtCore import QObject, QEvent
+
+    class _Refit(QObject):
+        def eventFilter(self, _obj, event):
+            if event.type() == QEvent.Resize:
+                fit_wrap_column()
+            return False
+
+    table._refit = _Refit(table)
+    table.viewport().installEventFilter(table._refit)
+    table._size_timer.timeout.connect(auto_size)
+    header.sectionResized.connect(on_section_resized)
+    table.model().dataChanged.connect(lambda *_: table._size_timer.start())
+    table.model().modelReset.connect(lambda *_: table._size_timer.start())
     table.setWordWrap(True)
     table.verticalHeader().setVisible(False)
 

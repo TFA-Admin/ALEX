@@ -779,3 +779,20 @@ touches "gratitude and kindness", "coffee" touches "coffee toxicity"),
 asked in her own words after her answer and captured like any curiosity
 answer; not one asked in the last hour. The Curiosity tab's status says
 what happens next to each question.
+
+### Curiosity tab: rows twenty lines tall, columns fixed, six "answered" that were not (2026-09-25)
+Craig: "How come the columns aren't resizeable?", "You say they're
+answered but a lot of them say asked once no answer", "when I refresh
+curiosity the table gets massive". Three things. (1) Every table's
+columns were Stretch or ResizeToContents — both pin a column, and with
+word wrap on, ResizeToContents measured a wrapped cell at its current
+width and shrank the question column to one word per line; a refresh
+re-ran it. Now every column is Interactive (draggable), sized once from
+the text itself (long text gets 420 px and wraps), the content column
+follows the window, and after he drags anything the table is his. (2)
+Six early questions (2026-09-21, #2-#7) had an empty string stored as
+their answer: "answered" to the count, "asked 1x, no answer" to the tab,
+and invisible to the re-ask (answer IS NULL). Repaired to NULL; an empty
+answer now counts as no answer everywhere. Real tally: 7 answered, 8
+open. I had told Craig 15 were answered. (3) The Curiosity tab's status
+now says what happens next to each question.
