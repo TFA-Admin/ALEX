@@ -1160,22 +1160,43 @@ Measured after: onboarding 1/1 (the first-connect greeting still elicits
 a parseable name), and the verification prompt is back to asking for any
 phrase rather than a passphrase.
 
-### "I can't talk to her at all" — the page never reconnected (2026-09-25)
-Craig blamed the autolisten button; it was not the button. `static/avatar.html`
-opened ONE WebSocket at load and never opened another. Its `onclose` wrote
-"disconnected" to the rail and stopped there. So every time her process
-restarted the socket died for good, while the microphone stayed armed and the
-VAD kept firing into a dead socket — from his side she had simply ceased to
-exist, and the only cure was knowing to reload the page. He had just watched
-her be restarted repeatedly. **Fixed**: `onclose` now polls `/avatar` with
-backoff and reloads the page as soon as she answers again, which rebuilds the
-handshake, the identity restore, the readiness net and the eyes state — the
-path the forget-me flow already used. Waiting first means no reload loop
-while she is down. (A `HEAD` probe was written first and would have looped
-for ever: the route is `@app.get` and answers HEAD with 405.) This matters
-beyond today, because an approved proposal restarts her too, so approving her
-own work used to silently cut him off.
+### "I can't talk to her at all" — two faults, and my first diagnosis was wrong (2026-09-25)
+Craig blamed the autolisten button. I blamed the WebSocket and was wrong: he
+corrected me with the decisive fact — "she was still able to talk to me... she
+was able to ask me a question and everything" — so the socket was alive and
+only HIS audio was going nowhere.
 
+**The real one.** `stopListening()` stops the microphone's tracks, and since
+2026-09-21 it kept the VAD "warm" across cycles (`pause()` rather than
+`destroy()`, so a real model would not be rebuilt every toggle). But MicVAD
+builds its audio graph from the stream it is handed at construction, so
+pausing and resuming left the detector listening to a microphone that had been
+switched off. Turning autolisten back on takes a FRESH stream and gives it to
+the MediaRecorder; the detector kept the dead one. So `onSpeechStart` and
+`onSpeechEnd` never fired again, nothing ever called `recorder.stop()`, no
+`__END_AUDIO__` was ever sent, and she never heard another word from him —
+while she could still speak and push a question, which is exactly what made it
+look like the button. **Fixed**: the detector is destroyed on stop and rebuilt
+by `detect()` on the new stream. The warm-state saving was about 200 ms per
+toggle and the cost was the microphone.
+
+**The second one, which is what "nothing was coming through the controller"
+was.** The Controller's tailer followed the newest `alex_*.log` by mtime, and
+her logger writes a fresh one on IMPORT — so the harness, anything in tools/,
+and every throwaway script that touches her modules creates a log file. Two of
+mine, 105 and 603 bytes, were the newest on disk while she was running and
+talking, and the tailer sat on them. **Fixed**: only a file whose first line is
+her startup line counts as a run, cached per path, with a fallback to the old
+behaviour if that line ever changes.
+
+**And a third, found while looking and real regardless.** `static/avatar.html`
+opens ONE WebSocket at load and never opened another: `onclose` wrote
+"disconnected" and stopped. Any restart of her process ended the page for good
+while the microphone stayed armed. Not what he hit tonight, but an approved
+proposal restarts her too, so approving her own work would have cut him off
+silently. It now polls `/avatar` with backoff and reloads when she answers.
+(A `HEAD` probe was written first and would have looped for ever: the route is
+`@app.get` and answers HEAD with 405.)
 ### She claimed to feed the pet and did not (2026-09-25, 19:08 and 19:14)
 Craig: "she also claimed to be able to feed him at my command and when I said
 to she did not... she does have that ability since she does it, so why did she
@@ -1205,4 +1226,3 @@ have none if he asks. And because a question OFFERED is not a question ASKED,
 her reply decides: the answer is only treated as pending if her reply actually
 contains a question mark. Otherwise the offer is dropped, so his next sentence
 is never captured as the answer to something she did not say.
-

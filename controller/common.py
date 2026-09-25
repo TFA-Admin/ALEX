@@ -324,11 +324,37 @@ class LogFileTailer(QThread):
         self._running = True
         self._current_file = None
         self._position = 0
+        self._run_cache = {}        # path -> is it a real run of hers
+
+    # 2026-09-25 (Craig: "nothing was coming through the controller
+    # anymore"). "Newest by mtime" was not the same thing as "hers". Her
+    # logger writes a fresh alex_<timestamp>.log on IMPORT, so the harness,
+    # anything under tools/, and every throwaway script that touches her
+    # modules each create one — two of them, 105 and 603 bytes, were the
+    # newest files on disk while she was running and talking. The tailer
+    # followed those and went quiet, with her real log still being written
+    # beside it. A real run is the one that logged her startup line.
+    _RUN_FIRST_LINE = "Starting A.L.E.X"
+
+    def _is_a_real_run(self, path: str) -> bool:
+        known = self._run_cache.get(path)
+        if known is not None:
+            return known
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                verdict = self._RUN_FIRST_LINE in fh.readline()
+        except OSError:
+            return False        # not cached: it may be mid-creation
+        self._run_cache[path] = verdict
+        return verdict
 
     def _find_latest_log(self):
         files = glob.glob(os.path.join(self.log_dir, self.pattern))
         if not files:
             return None
+        if self.pattern.startswith("alex_"):
+            runs = [f for f in files if self._is_a_real_run(f)]
+            files = runs or files      # never go blind if the line ever changes
         return max(files, key=os.path.getmtime)
 
     def run(self):

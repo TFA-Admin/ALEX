@@ -1574,11 +1574,25 @@ function stopListening(){
     // looked dropped, and people reloaded the page. Readiness is the
     // server's to say (__READY__), never a side effect of the mic button.
     try{ recorder.stop(); }catch{}
-    // micVad now persists across listen/stop cycles (real VAD models want
-    // to keep their internal state warm) instead of being torn down and
-    // rebuilt every time — pause() instead of destroy() so toggling auto-
-    // listen back on later just calls start() again in detect() above.
-    if(micVad){ try{ micVad.pause(); }catch{} }
+    // 2026-09-25 (Craig: "I turned it off stepped away for a bit and came
+    // back then turned it back on and now I can't talk to her at all. She
+    // was still able to talk to me"). This is that bug, exactly. From
+    // 2026-09-21 the detector was kept "warm" across listen/stop cycles —
+    // pause() instead of destroy() — while the line below still stopped the
+    // microphone's tracks. But MicVAD builds its audio graph from the stream
+    // it is GIVEN at construction, so pausing and resuming left it listening
+    // to a microphone that had been switched off. On the way back in,
+    // startListening() takes a fresh stream and the MediaRecorder gets it;
+    // the detector did not. So onSpeechStart/onSpeechEnd never fired again,
+    // nothing ever called recorder.stop(), no __END_AUDIO__ was ever sent,
+    // and she heard nothing more from him — while she could still speak to
+    // him and push a question, which is what made it look like the button.
+    // Destroyed, so detect() rebuilds it on the new stream. The warm-state
+    // saving was ~200 ms on a toggle and it cost the microphone.
+    if(micVad){
+        try{ micVad.destroy(); }catch{ try{ micVad.pause(); }catch{} }
+        micVad = null;
+    }
     if(stream) stream.getTracks().forEach(t=>t.stop());
 }
 
