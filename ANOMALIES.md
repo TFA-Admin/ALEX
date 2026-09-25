@@ -989,3 +989,23 @@ in the 84-case suite carries a cue word, and a turn with none has
 nothing to look up — and, with that, the static part of her prompt put
 first so consecutive replies reuse the evaluated prefix.
 
+
+### Why her prompt costs 4 s a turn: the intent call empties the cache (2026-09-25)
+Measured directly against Ollama with her real sizes (a 3215-token
+prompt like hers, the real 1004-token intent prompt), num_predict 1:
+two replies in a row, the second evaluates in 0.55 s — Ollama reuses
+the cached prefix; put an intent call between them and the reply costs
+2.3 s again, every turn. A second model slot (OLLAMA_NUM_PARALLEL=2)
+would let each keep its cache, but Ollama's fit logic kept Parallel at 1
+on the 10 GB card (8.83 GB in use); restored to its normal start.
+Conclusion: about 1.7 s a turn is there to recover by having the two
+calls share one static prefix, not by cutting words.
+
+### Words "cut off entirely" (2026-09-25, Craig)
+Four of six afternoon replies logged "[VERBOSITY] dropped a cut-off
+fragment": the token budget was the word cap plus twelve tokens, the
+model does not count words, and the fragment rule then removed the
+clause the budget had cut. The budget is now a sentence past the cap
+(cap × 1.7 + 30); the prompt still says the cap; the fragment rule stays
+for real overruns. Live through the personality module's hot reload.
+The voice itself is already a GLaDOS Piper model (glados_piper_medium).

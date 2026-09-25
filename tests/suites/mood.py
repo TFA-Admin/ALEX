@@ -164,7 +164,7 @@ async def evaluate(case: MoodCase):
     if cid == "cap_past_the_slider":
         tight = traits.word_cap({"verbosity": -7})
         loose = traits.word_cap({"verbosity": 6})
-        return f"-7 -> {tight}; +6 -> {loose}", tight == 10 and loose is None and traits.num_predict({"verbosity": -7}) == 25, ""
+        return f"-7 -> {tight}; +6 -> {loose}", tight == 10 and loose is None and traits.num_predict({"verbosity": -7}) == 47, ""
 
     if cid == "absolute_overrides":
         r = traits.render({"sarcasm": 6})

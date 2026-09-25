@@ -173,15 +173,24 @@ def word_cap(offsets) -> int | None:
 
 
 def num_predict(offsets, default: int = 300) -> int:
-    """Tokens for a reply: ~1.3 per word on this tokenizer, plus room for
-    punctuation and one clause of overrun. Never above the default;
-    exactly the default when nothing has ever been set."""
+    """Tokens for a reply: ~1.3 per word on this tokenizer, plus room to
+    FINISH the sentence. Never above the default; exactly the default when
+    nothing has ever been set.
+
+    2026-09-25 (Craig: "words are spoken oddly, sometimes cut off
+    entirely"): four of six afternoon replies lost a whole clause —
+    "[VERBOSITY] dropped a cut-off fragment" — because the budget was the
+    cap plus twelve tokens, the model does not count words, and the
+    fragment rule then removed what the cap had cut. The cap is still
+    the instruction in her prompt ("at most N words"); the budget is
+    the safety net, and a safety net a sentence wide is no net. Room for
+    a sentence past the cap; the fragment rule stays for real overruns."""
     if offsets is None:
         return default
     cap = word_cap(offsets)
     if cap is None:
         return default
-    return min(default, int(cap * 1.3) + 12)
+    return min(default, int(cap * 1.7) + 30)
 
 
 def phrase(key: str, offset: int) -> str:
