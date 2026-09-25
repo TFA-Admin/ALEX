@@ -68,6 +68,18 @@ class ProcessManager:
         # a PIPE — this way Ollama's output is visible the same way no
         # matter who launches the process, and an unread PIPE can't fill up
         # and block it.
+        # 2026-09-24: rotate a big log here, while nobody holds it. Cutting
+        # it in place (core/retention.py, one day) did not work: Ollama
+        # writes at its own file offset, so the cut refilled with zeros.
+        # Past 5 MB the file is renamed with a timestamp; the two newest
+        # copies are kept, retention removes the rest.
+        try:
+            if os.path.exists(OLLAMA_LOG_PATH) and os.path.getsize(OLLAMA_LOG_PATH) > 5 * 1024 * 1024:
+                stamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+                os.replace(OLLAMA_LOG_PATH, OLLAMA_LOG_PATH.replace("ollama_output.log", f"ollama_output.{stamp}.log"))
+                self.log("[Ollama] Log rotated (it was past 5 MB)")
+        except OSError as e:
+            self.log(f"[Ollama] Could not rotate the log: {e}")
         self.ollama_log_file = open(OLLAMA_LOG_PATH, "ab")
 
         # Was 2, so chat (qwen2.5:7b) and module builds

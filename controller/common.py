@@ -272,7 +272,10 @@ class LogFileTailer(QThread):
                 try:
                     with open(self._current_file, "r", encoding="utf-8", errors="ignore") as f:
                         f.seek(self._position)
-                        new_data = f.read()
+                        # 2026-09-24: a log another process holds open can
+                        # carry a zero-filled gap (see core/retention.py);
+                        # never show NULs.
+                        new_data = f.read().replace(chr(0), "")
                         self._position = f.tell()
 
                     for line in new_data.splitlines():

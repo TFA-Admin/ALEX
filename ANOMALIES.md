@@ -704,3 +704,29 @@ is alive, waits up to six seconds for the port to clear, and kills if
 terminate was ignored; every step is logged. Start ignores a handle
 whose process has exited. Verified: one Stop with no handle cleared
 port 5000 and Start brought her back. Needs the Controller relaunched.
+
+### The Ollama log "trim" refilled the file with zeros (found 2026-09-24, two-day check)
+Retention (2026-09-23) cut ollama_output.log in place to its last
+megabyte when past 5 MB. It ran twice; both times the file was back at
+9.7 MB within the hour, and a read showed it 100% NUL from 1.5 MB to the
+tail. Ollama holds the file open and writes at its own offset; when the
+file was shortened underneath it, the next write landed at the old
+offset and Windows filled the gap with zeros. Nothing else was harmed:
+the log is diagnostic only, and the Controller's tailer reads the end.
+**Fixed:** no in-place cutting. The Controller rotates the log by rename
+at Ollama start when it is past 5 MB (nobody holds it then); retention
+removes rotated copies beyond the newest two; the tailer skips zero
+bytes. The current zero-filled file rotates away at the next Ollama
+restart from the Controller.
+
+### Two days unattended (2026-09-23 16:38 -> 2026-09-24 23:18): clean
+No connections, no errors, no warnings. Retention ran twice on schedule
+(the second time with nothing to remove). Her idle author reported
+"nothing due" every hour: all five targets are inside the seven-day
+cooldown — deliberation.threshold since its rejection on 2026-09-21, so
+her first eligible proposal is 2026-09-28, not the evening of the 23rd
+as I had told Craig. Reflection ran once (20:21 UTC on the 23rd) and
+queued a question about "the nature of Craig's gratitude and kindness";
+Craig retracted conclusion #25 himself from the Controller with a note.
+Memory 21 GB free of 32; GPU 8.9 of 10 GB with the 9b resident; the
+Controller used 1.9% of a core over 31 hours.

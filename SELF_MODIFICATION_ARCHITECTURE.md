@@ -1091,7 +1091,7 @@ The items, in build order:
    - *Retention (landed with it; Craig: "does anything ever get
      removed?"):* `core/retention.py`, daily — observations 14 d,
      tool/speaker decisions 30 d, retracted memory 30 d, sessions 180 d,
-     backups keep 10, the Ollama log cut to its last MB past 5 MB. Her
+     backups keep 10, rotated Ollama logs beyond the newest two (the Controller rotates the live one at Ollama start past 5 MB; cutting it in place refilled it with zeros). Her
      conversation memory, decisions, eval runs, curiosity, facts and
      personality history are never pruned. Measured before: 3.0 MB after
      five months; memory ~160 rows/day, decisions ~80/day mostly noise.

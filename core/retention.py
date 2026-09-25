@@ -20,7 +20,11 @@ a store that is never emptied is a bad habit. So, once a day:
     memory, retracted      older than 30 days       (never read back; kept a month to audit)
     sessions               older than 180 days
     db/backups             all but the newest 10 files
-    ollama_output.log      cut to its last megabyte when past 5 MB
+    ollama_output.*.log    rotated copies beyond the newest 2 (the Controller
+                           rotates the live log at Ollama start when it is
+                           past 5 MB; cutting it in place was wrong — Ollama
+                           writes at its own offset and refilled the gap with
+                           zeros, 100% NUL from 1.5 MB to the tail, 2026-09-24)
 
 What is never pruned: her conversation memory that is not retracted,
 her decisions (conclusions, proposals, corrections, fabrications,
@@ -46,8 +50,7 @@ POLICY = {
     "memory_retracted_days": 30,
     "sessions_days": 180,
     "backups_keep": 10,
-    "ollama_log_mb": 5,
-    "ollama_log_keep_mb": 1,
+    "ollama_logs_keep": 2,          # rotated copies; the live one is the Controller's
 }
 
 BACKUP_DIR = os.path.join(ALEX_DIR, "db", "backups")
@@ -66,28 +69,19 @@ def _prune_backups(keep: int) -> int:
     return removed
 
 
-def _trim_ollama_log(max_mb: float, keep_mb: float) -> int:
-    """Bytes cut. The Controller holds this file open for append; cutting
-    the head and rewriting the tail is fine for an append-only writer."""
-    try:
-        size = os.path.getsize(OLLAMA_LOG)
-    except OSError:
-        return 0
-    if size <= max_mb * 1e6:
-        return 0
-    keep = int(keep_mb * 1e6)
-    try:
-        with open(OLLAMA_LOG, "rb") as f:
-            f.seek(-keep, os.SEEK_END)
-            tail = f.read()
-        nl = tail.find(b"\n")
-        tail = tail[nl + 1:] if nl >= 0 else tail
-        with open(OLLAMA_LOG, "wb") as f:
-            f.write(b"[... earlier output removed by core/retention.py ...]\n" + tail)
-        return size - len(tail)
-    except OSError as e:
-        logger.warning(f"[RETENTION] could not trim the Ollama log: {e}")
-        return 0
+def _prune_ollama_logs(keep: int) -> int:
+    """Rotated Ollama logs beyond the newest `keep`. The live file is never
+    touched here: a process holds it open and writes at its own offset."""
+    pattern = OLLAMA_LOG.replace("ollama_output.log", "ollama_output.*.log")
+    files = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
+    removed = 0
+    for f in files[keep:]:
+        try:
+            os.remove(f)
+            removed += 1
+        except OSError:
+            pass
+    return removed
 
 
 async def prune() -> dict:
@@ -99,7 +93,7 @@ async def prune() -> dict:
         logger.warning(f"[RETENTION] database pass failed: {e}")
         counts = {"error": str(e)[:200]}
     counts["backups_removed"] = _prune_backups(POLICY["backups_keep"])
-    counts["ollama_log_bytes_cut"] = _trim_ollama_log(POLICY["ollama_log_mb"], POLICY["ollama_log_keep_mb"])
+    counts["ollama_logs_removed"] = _prune_ollama_logs(POLICY["ollama_logs_keep"])
     summary = {"at": time.time(), "seconds": round(time.time() - t0, 2), "removed": counts}
     try:
         await set_retention_summary(summary)
