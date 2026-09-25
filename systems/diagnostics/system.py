@@ -27,6 +27,7 @@ going silent, so this stays honest (a real "module error" report) even
 if the module itself breaks, without needing a shadow implementation.
 """
 from core.system_base import BaseSystem
+from config.logger_config import logger
 from core.phrasebook import get_phrase
 from db.db import get_module_registry_entry
 from module_runtime.module_loader import load_module
@@ -111,18 +112,50 @@ class System(BaseSystem):
                 "content": await get_phrase("presence_confirmed")
             }
 
-        status = await self._gather(user_id)
-
-        # 2026-09-21 (Craig: "her 'diagnostic' responds the same way every
-        # time"). The measurement stays exactly this, deterministic; the
-        # wording is now hers. Staged for systems/llm/system.py, which
-        # renders it with the one rule that matters — report it, add
-        # nothing — and falls through so she speaks it. The July reason
-        # for speaking it verbatim (the 7b inventing advice) is recorded
-        # in this file's docstring; if the 9b does the same, this is the
-        # place to come back to.
-        session["diagnostic_context"] = status
+        # 2026-09-25 (Craig: "if I'm asking for a systems check or a
+        # diagnostic I mean everything. Unless I say 'check this module'
+        # or something specific... I'm also using this as a means to tell
+        # what she can and can't see on herself"): a named part is checked
+        # on its own; anything else is the full sweep (core/sweep.py).
+        # The full report goes to his screen as it is, unspoken; what she
+        # SAYS is the summary, in her own words — the 2026-09-21 rule
+        # (report it, add nothing) still applies to that, in
+        # systems/llm/system.py, which she falls through to.
+        from core import sweep
+        try:
+            from db.db import list_module_registry
+            module_names = [e["name"] for e in await list_module_registry()]
+        except Exception:
+            module_names = []
+        try:
+            from modules.diagnostic_tool.module import _discover_system_names
+            system_names = _discover_system_names()
+        except Exception:
+            system_names = []
+        part = sweep.named_part(lower, module_names, system_names)
+        try:
+            if part:
+                shown, spoken = await sweep.check_part(user_id, part)
+                session["diagnostic_context"] = shown
+            else:
+                shown, spoken = sweep.render(await sweep.full_sweep(user_id))
+                await self._show_report(user_id, shown)
+                session["diagnostic_context"] = (spoken + " The full report is already on his screen; "
+                                                 "say the summary, not the list.")
+        except Exception as e:
+            session["diagnostic_context"] = f"The sweep itself failed: {e}"
         return None
+
+    async def _show_report(self, user_id: str, text: str):
+        """The whole report to his page, unspoken, before she speaks."""
+        try:
+            from ws.ws_handlers import _active_connections
+            from core.voice import say
+            for conn in list(_active_connections.values()):
+                if conn.get("user_id") == user_id:
+                    await say(conn["websocket"], text, user_id=user_id, speak=False)
+        except Exception as e:
+            logger.warning(f"[SWEEP] could not show the report: {e}")
 
     async def _gather(self, user_id: str) -> str:
         registry_entry = await get_module_registry_entry("diagnostic_tool")

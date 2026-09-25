@@ -46,7 +46,8 @@ Ask naturally. She chooses to look before answering; these are her tools
 | read her own state: modules, what is off, response times, your standing instructions — **creator only** | `my_state` | "What's switched off on you?" / "How fast have you been answering?" |
 | list her modules and what each does | `list_modules` | "What modules do you have?" |
 | run one of her modules | `run_module` | "Use recall to check for anything about YouTube." |
-| run her diagnostics and report them in her own words | `run_diagnostics` | "Run a diagnostic." |
+| a full sweep of herself — every system's and module's self-check, the model, her senses, memory, mood, pet, author, retention, the tools she has, and what she cannot see; the whole report on your screen, the summary in her own words | `run_diagnostics` | "Run a diagnostic." / "Systems check." / "Check everything." |
+| one part of herself | the same, narrowed | "Check the camera." / "Check the inquiry module." / "Check your memory." / "Check the pet." |
 | read her own log — **creator only**; it carries every user's turns | `read_log` | "Anything in your log I should know about?" |
 | read her own source, a page at a time — **creator only** | `read_my_source` | "Read me the top of core/self_model.py." |
 | the clock | `current_time`, and always in her context | never something she guesses |

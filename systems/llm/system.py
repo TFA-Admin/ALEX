@@ -845,6 +845,7 @@ class System(BaseSystem):
         # rule that failed before stated as the only rule. If the 9b also
         # invents, this is where to see it.
         diag = session.pop("diagnostic_context", None)
+        diag_turn = bool(diag)          # the reply cap is lifted a little for this (below)
         if diag:
             context_blocks.append(
                 "YOUR SYSTEM STATUS, measured just now because he asked:\n"
@@ -955,6 +956,10 @@ class System(BaseSystem):
         dials = her_traits.effective(dials, her_mood.dial_offsets(mood_state) if mood_state else {})
         dials_block = her_traits.render(dials, mood_line=her_mood.line(mood_state) if mood_state else "")
         reply_tokens = her_traits.num_predict(dials)
+        if diag_turn:
+            # 2026-09-25: a sweep summary does not fit in a 20-word cap; she
+            # gets room for the numbers and the problems this one turn.
+            reply_tokens = max(reply_tokens, 160)
 
         # 2026-09-23: a look this turn is repeated here, last thing before
         # she speaks. Among the context blocks it lost to a conversation

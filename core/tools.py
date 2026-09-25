@@ -274,7 +274,12 @@ async def _run_module(user_id: str, name: str, command: str) -> str:
 
 
 async def _run_diagnostics(user_id: str) -> str:
-    return await _run_module(user_id, "diagnostic_tool", "run a diagnostic check")
+    # 2026-09-25: the tool is the same full sweep the spoken request gets
+    # (core/sweep.py) — every system and module, the model, her senses,
+    # memory, mood, pet, author, retention, and what she cannot see.
+    from core import sweep
+    shown, _spoken = sweep.render(await sweep.full_sweep(user_id))
+    return shown
 
 
 def _read_log(lines) -> str:

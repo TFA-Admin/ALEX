@@ -867,3 +867,16 @@ Deterministic suites (mood) have cases without a `text` field; the
 failure printer read `case.text` and the run died after the first FAIL
 with no score recorded. Two of today's runs ended that way unnoticed.
 Fixed: the line prints only when the case carries text.
+
+### "Her diagnostic seems command specific" (2026-09-25)
+Craig: "if I'm asking for a systems check or a diagnostic I mean
+everything... I'm also using this as a means to tell what she can and
+can't see on herself." A diagnostic was the diagnostic_tool module's
+sweep of systems' and modules' self-checks, rendered by her in her own
+words under a 20-word cap. **Now** (`core/sweep.py`): the full sweep —
+systems, modules, the model, her senses, memory counts, mood, pet,
+author, retention, the tools she has, and a plain list of what she
+cannot see — goes to his screen as a report, unspoken, and she speaks
+the summary in her own words with the cap lifted for that turn. A named
+part ("check the camera", "check the inquiry module", "check your
+memory") is checked alone. Measured: 1.2 s, 11 systems, 3 modules.

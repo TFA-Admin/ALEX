@@ -314,7 +314,9 @@ class ResponseHandler:
         turn_start = turn_session.get("turn_start_time", time.time())
         session = alex_core.get_session(session_id) if session_id else None
 
-        content = strip_markdown(result.get("content", ""))
+        # 2026-09-25: a reply may carry a shorter spoken form.
+        spoken_form = (result.get("spoken") or "").strip()
+        content = strip_markdown(result.get("content", ""), keep_bullets=bool(spoken_form))
 
         logger.info(f"[RESPONSE] to {user_id}: {content}")
 
@@ -335,7 +337,7 @@ class ResponseHandler:
         spoken_for = 0.0
         if content and user_id not in NO_SPEECH_USERS:
             tts_t0 = time.time()
-            pcm = await synthesize_speech(content)
+            pcm = await synthesize_speech(spoken_form or strip_markdown(content))
             tts_total = time.time() - tts_t0
             if pcm:
                 await websocket.send_bytes(pcm)
