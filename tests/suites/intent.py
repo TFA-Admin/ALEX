@@ -214,9 +214,12 @@ async def evaluate(case: IntentCase):
     # 2026-09-25: the call as her turns make it — with the needs and the
     # persona score on the same object. (With her prompt head in front as
     # a system message this scored 76/84; without it, as before, 84/84.)
-    # The call as systems/intent/system.py makes it. (With her head and tool
-    # list as a shared prefix this scored 82/84 on 2026-09-25; without, 84/84.)
-    result = await classify_intent(case.text, with_needs=True)
+    # The call as systems/intent/system.py makes it: the needs, and her head
+    # and tool list as the shared prefix. 84/84 plain; 82/84 shared, which
+    # Craig accepted on 2026-09-25 for the ~2 s a turn the shared cache buys.
+    from core import tools as her_tools
+    result = await classify_intent(case.text, with_needs=True,
+                                   head=await prompt_head.current(), tools=her_tools.tool_specs())
     got = _label(result)
     ok = got == case.expect
     detail = ""

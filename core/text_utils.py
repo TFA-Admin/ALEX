@@ -297,7 +297,14 @@ def has_content_words(text: str) -> bool:
 
 
 _ANSWER_WORD_RE = re.compile(r"[a-z']+")
-_YES_PHRASES = ("go ahead", "do it", "keep it", "keep that", "save it", "store it", "go for it", "yes please")
+# 2026-09-25 (live, 16:20-16:30): "proceed", "proceed with the search",
+# "perform the search", "I am authorizing you... do it" were none of these,
+# so each cleared the pending search and fell to the model, which then
+# invented a running search. The approval vocabulary now has his words.
+_YES_PHRASES = ("go ahead", "do it", "keep it", "keep that", "save it", "store it", "go for it", "yes please",
+                "proceed", "run it", "run the search", "perform the search", "do the search", "authorized",
+                "authorizing you", "i authorize", "you have my permission", "permission granted", "approved",
+                "you have the green light", "green light")
 
 
 def yes_or_no(text: str):

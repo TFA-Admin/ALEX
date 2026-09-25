@@ -68,7 +68,9 @@ async def evaluate(case: PersonaCase):
     from core.intent_classifier import classify_intent, NEEDS_RESOURCES
     from core import prompt_head
     from systems.controller._personality import PERSONA_SURE, PERSONA_MAYBE
-    result = await classify_intent(case.text, with_needs=True)      # as systems/intent/system.py calls it
+    from core import tools as her_tools
+    result = await classify_intent(case.text, with_needs=True,
+                                   head=await prompt_head.current(), tools=her_tools.tool_specs())
     persona = int(result.get("persona") or 0)
     needs = result.get("needs") or {}
     if case.category == "persona_sure":
@@ -87,7 +89,10 @@ async def evaluate(case: PersonaCase):
             from core.intent_classifier import classify_personality_set
             verdict = (await classify_personality_set(case.text)).get("personality_command")
             return f"persona {persona}, classifier {verdict}", verdict != "set", "the careful classifier decides at this score"
-        return f"persona {persona}", False, "she would ask whether he meant a change"
+        # 2026-09-25, Craig, asked whether she should ask on a remark that
+        # scores 4-6 ("you're being quite hostile"): "yes". So the middle
+        # band is the right answer here, not a miss.
+        return f"persona {persona}", True, "she asks whether he meant a change (his call)"
     if case.expect == "all<4":
         high = {k: v for k, v in needs.items() if k in NEEDS_RESOURCES and int(v or 0) >= 4}
         return f"needs {high or 'all low'}", not high, f"persona {persona}"

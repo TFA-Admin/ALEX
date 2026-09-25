@@ -194,6 +194,21 @@ _TOOL_NOUN = {"read_log": "my log", "read_my_source": "my source code", "my_stat
               "my_projects": "his projects", "my_scores": "my scores", "current_time": "the clock", "look": "my camera",
               "pet_status": "my pet", "tend_pet": "my pet"}
 
+# 2026-09-25 (live): "The web surfacing operation has commenced", "My
+# processors are now engaged with the query", "The results were sent to your
+# terminal", "I will present the compiled results" — work announced as work
+# done, in shapes _CLAIM_RE did not hold. They are claims like any other;
+# what ran is the evidence.
+_ANNOUNCED_RE = (
+    r"\b(?:(?:operation|search|query|surfacing|lookup|scan) (?:has|is|was) (?:now )?"
+    r"(?:commenced|underway|running|engaged|complete|completed|done|finished)"
+    r"|results? (?:were|have been|has been|was|are being|is being) (?:sent|delivered|forwarded|compiled|transmitted|presented)"
+    r"|i will present the (?:compiled )?(?:results|findings)"
+    r"|my (?:processors|systems) are (?:now )?engaged"
+    r"|(?:proceeding|commencing) (?:now )?(?:with the (?:search|query|lookup))?"
+    r"|the (?:web )?(?:search|query|surfacing) (?:operation )?(?:has )?commenced)\b")
+_CLAIM_RE = re.compile(f"(?:{_CLAIM_RE.pattern})|(?:{_ANNOUNCED_RE})", _CLAIM_RE.flags)
+
 
 def honest_lines(block: str) -> str:
     """The truth, written by code from what the lookups returned — for

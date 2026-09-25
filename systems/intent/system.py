@@ -61,15 +61,21 @@ class System(BaseSystem):
                 recent_lines = None
 
         t0 = time.time()
-        # 2026-09-25: a shared prefix with her reply (her prompt head as the
-        # system message plus the same tool list, so Ollama's cache carries
-        # between the two calls of a turn) was measured and NOT shipped:
-        # the classifier's prompt evaluated in 1.4 s instead of 3.3 s, but
-        # the intent suite held at 82/84 under it, against 84/84 without.
-        # The plumbing stays (classify_intent's head= and tools=,
-        # CLASSIFIER_FRAMING) for the next attempt; see the handoff in
-        # SELF_MODIFICATION_ARCHITECTURE.md. Here: the plain call.
-        intent = await classify_intent(text, with_needs=with_needs, recent_lines=recent_lines)
+        # 2026-09-25: the same fixed prefix as her reply — her prompt head as
+        # the system message and the same tool list — so the two calls of a
+        # turn share Ollama's cache. Measured: the classifier's 4,461-token
+        # prompt evaluates in 1.4 s instead of 3.3 s, and the intent suite
+        # scores 82/84 under it against 84/84 plain, which Craig accepted for
+        # the two seconds a turn it buys ("I say we try it"). The two cases it
+        # costs are status_no_i_said and misfire_implement_selfdiagnostic.
+        # CLASSIFIER_FRAMING tells it that it is classifying, not replying.
+        try:
+            head = await prompt_head.current()
+            specs = her_tools.tool_specs()
+        except Exception as e:
+            logger.warning(f"could not build the shared prefix: {e}")
+            head, specs = None, None
+        intent = await classify_intent(text, with_needs=with_needs, recent_lines=recent_lines, head=head, tools=specs)
         logger.info(f"[TIMING] intent classification: {time.time() - t0:.2f}s"
                     + (" (with deliberation needs)" if with_needs else ""))
         session["needs"] = intent.pop("needs", None)

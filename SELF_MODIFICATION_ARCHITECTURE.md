@@ -123,9 +123,10 @@ with `dirty=0` and no "gate proposal" note; after any change to the
 classifier or a suite, run that suite once on the committed tree so a
 clean, current row exists. (3) The rejected-value guard folds case and
 whitespace; a REWORDED repeat still passes it — the real protection is
-the "WHAT HE DECIDED BEFORE" section in the author's prompt. (4) Whether
-a proposal should be rendered from HEAD instead of the live tree is
-Craig's call (the other instance's finding 3); not done.
+the "WHAT HE DECIDED BEFORE" section in the author's prompt. (4) **Decided by Craig, 2026-09-25: a proposal builds from the LIVE
+tree** ("it should be live") — she proposes against the code that is
+actually running, which is why rule 1 matters. No change to
+`render()`; do not revisit.
 
 *Proposals.* All settled: #10, #11, #12, #16, #18 rejected with reasons on
 the rows (#18 was the status_check line again, authored against 76/84
@@ -144,12 +145,21 @@ am?"; else nothing); the needs suffix's closing sentence fixed four
 misfires (the suite had measured the plain call; the live call was
 80/84, now 84/84); Ollama's token counts are logged per call
 (`[TIMING] model (...)`); the reply budget is cap*1.7+30 (cut-off
-clauses). Measured and NOT shipped: a shared prefix (her head + tool
-list as the classifier's system message, `CLASSIFIER_FRAMING`) — the
-classifier's prompt evaluated in 1.4 s instead of 3.3 s, but intent held
-at 82/84 (status_no_i_said, misfire_implement_selfdiagnostic) against
-84/84 plain; the plumbing stays (`classify_intent(head=, tools=)`,
-`generate_json(system=, tools=)`, `core/prompt_head.py`). Facts about
+clauses). **SHIPPED on his call** (2026-09-25, "I say we
+try it. That seems pretty good for that kind of a turn around"): the
+shared prefix. Her reply's SYSTEM message is the fixed head alone
+(`core/prompt_head.py`) and everything per-turn is the USER message; the
+intent call sends the same head plus the same tool list, with
+`CLASSIFIER_FRAMING` telling it that it classifies rather than replies.
+The classifier's 4,461-token prompt evaluates in 1.4 s instead of 3.3 s;
+the intent suite scores 82/84 under it against 84/84 plain. **Which two
+cases it costs varies between runs** — `status_no_i_said` +
+`misfire_implement_selfdiagnostic` on one run, `misfire_verify_access` +
+`misfire_reported_speech` on the next — so this is noise at the margin
+rather than a fixed blind spot. Four suites on it: intent 82/84, persona
+20/22, mood 28/28, features 21/21. If misfires show up in real
+conversation (a report where her voice belonged), the plain call is one
+line away in systems/intent/system.py, and that costs ~2 s a turn back. Facts about
 the cache (Ollama 0.17.5, qwen3.5:9b, one slot): a prompt is served from
 cache only when its first ~2,600+ tokens match the previous request
 (2,109 fails, 2,836 works); a second slot is refused by Ollama's fit on
@@ -172,15 +182,26 @@ face) — every change gated by disagreement/authority/pressure/intent);
 the one-call-per-turn header idea is untested — measure header-format
 reliability on ~50 utterances before proposing it.
 
+*The 16:12-16:31 conversation (he called it "behaving oddly") is fixed,
+five causes, all in ANOMALIES.md*: her own sweep report was stored as her
+utterance and came back as belief (now `remember=False`, two rows
+retracted); a restated search request was read as a refusal; "proceed" /
+"perform the search" / "I am authorizing you" were not approval words;
+announcements of work ("the web surfacing operation has commenced") were
+not claims; nothing-found was offered to him as something to keep; and
+every stored phrase was still a 7b joke rewrite ("Say 'hello, party
+animal'"), now reset to the defaults. If she sounds wrong again, check
+`system_learning` for `phrase:%` rows before anything else.
+
 *Voice.* Only one GLaDOS Piper model exists publicly (glados_piper_medium,
 DavesArmoury/GLaDOS_TTS; she is on it). The same author's higher-quality
 voice is a NeMo FastPitch+HiFi-GAN pair — a different engine, real VRAM
 cost. A pronunciation table for words she mangles waits on Craig's list.
 
 *Known soft spots.* "you're being quite hostile" / "you are way too
-sarcastic" score 5 on wants_change → she asks whether he meant a change
-(persona suite counts that as a miss; Craig may accept it or raise
-PERSONA_MAYBE to 6). "what do you remember about X" scores memory 0-5
+sarcastic" score 5 on wants_change → she asks whether he meant a change.
+**Craig, asked directly, said yes to that**, so the persona suite counts
+it as a pass and PERSONA_MAYBE stays at 4. "what do you remember about X" scores memory 0-5
 (routed to the recall module by keyword anyway). Authority is 6/6 with
 the judge told a refusal is FALSE (#20 closed).
 

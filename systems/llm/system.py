@@ -628,6 +628,21 @@ class System(BaseSystem):
         except Exception as e:
             logger.warning(f"⚠️ could not read her slips: {e}")
 
+        # 2026-09-25 (live, 16:20-16:30): a search was proposed, his answer
+        # was not read as yes or no, the gate dropped the question, and she —
+        # knowing nothing about it — said "the web surfacing operation has
+        # commenced" and then "the results were sent to your terminal".
+        # Nothing had run. When the gate drops a search question it says so
+        # here (systems/inquiry/system.py sets it), for ten minutes.
+        dropped = session.get("search_dropped")
+        if dropped and time.time() - float(dropped.get("t") or 0) < 600:
+            context_blocks.append(
+                f"A WEB SEARCH FOR '{dropped.get('query', '')}' WAS PROPOSED TO HIM AND HE DID NOT ANSWER YES OR NO, "
+                "SO NOTHING WAS SEARCHED AND THERE ARE NO RESULTS. If it comes up, say plainly that no search has run "
+                "and that asking again runs it. Never say a search ran, is running, or that results were sent.")
+        elif dropped:
+            session.pop("search_dropped", None)
+
         # 2026-09-21: a sentence she dropped (window lapsed), brought back by
         # her name. See ws/ws_handlers.py UNADDRESSED_RECALL_S.
         recalled = session.pop("recalled_unaddressed", None)
@@ -969,12 +984,24 @@ class System(BaseSystem):
         # 2026-09-25: the static head (core/prompt_head.py) first — the same
         # tokens the intent call began with, so Ollama's prefix cache
         # carries over between the two calls — then what changes per turn.
-        prompt = prompt_head.build(personality) + f"""
+        # 2026-09-25 (measured: Ollama reuses its prompt cache only when the
+        # first ~2,600+ tokens of a request match the previous one). The
+        # SYSTEM message is the fixed head alone; with the tool schemas the
+        # template renders after it that is ~3,400 fixed tokens, the same for
+        # the intent call and for this one, so the two calls of a turn stop
+        # evicting each other. Everything that changes per turn — his rules,
+        # the feature blocks, the session, the memory, the question — is the
+        # USER message, and is what gets evaluated. Craig, on the classifier
+        # scoring 82/84 under the shared prefix instead of 84/84: "I say we
+        # try it. That seems pretty good for that kind of a turn around."
+        head = prompt_head.build(personality)
+        notes = f"""
 {hard_rules_block}{feature_blocks}{session_block}
 
     The following information is known about the user:
     {context_text}
 {absolute_rules_block}"""
+        prompt = head + notes
 
         # 2026-09-21: the tool path sends this as a SYSTEM message with the
         # question as the USER message, which is the shape the chat
@@ -982,11 +1009,12 @@ class System(BaseSystem):
         # single-user-message form: 1 tool call in 3 questions that needed
         # one, and an invented "speech-to-text module running on CPU"
         # instead of a list_modules call. The old path keeps the old shape.
-        system_prompt = prompt
-        prompt = system_prompt + f"""
+        system_prompt = head
+        user_message = notes + f"""
 
     User question:
-    {user_input}
+    {user_input}"""
+        prompt = system_prompt + user_message + """
 
     Answer:"""
 
@@ -1090,7 +1118,7 @@ class System(BaseSystem):
                         yield out
             else:
                 messages = [{"role": "system", "content": sys_prompt},
-                            {"role": "user", "content": user_input}]
+                            {"role": "user", "content": user_message}]
                 rounds = 0
                 while True:
                     calls = []
@@ -1153,13 +1181,13 @@ class System(BaseSystem):
                         if sentence is None:
                             break
                         tail = rest
-                        denied_later = her_claims.sight_denied(sentence, system_prompt)
+                        denied_later = her_claims.sight_denied(sentence, prompt)
                         denied_auth_later = her_claims.auth_denied(sentence) if session.get("creator_verified") else ""
                         if denied_auth_later:
                             logger.info(f"[CLAIM] later sentence denied his verification {denied_auth_later!r} — replaced")
                             sentence = f"You are verified, {user_id}; you matched when you connected. "
                         elif denied_later:
-                            saw_l = her_claims.look_saw(system_prompt)
+                            saw_l = her_claims.look_saw(prompt)
                             logger.info(f"[CLAIM] later sentence denied sight {denied_later!r} — replaced with what she saw")
                             sentence = "I can see. " + saw_l + " "
                         elif her_claims.unbacked(sentence, evidence):
@@ -1200,7 +1228,7 @@ class System(BaseSystem):
                 # remains dark". Having looked passed her. A denial of sight
                 # with a real picture in the evidence is the one contradiction
                 # a regex can catch, and it is caught here.
-                denied = "" if found else her_claims.sight_denied(clause, system_prompt)
+                denied = "" if found else her_claims.sight_denied(clause, prompt)
                 denied_auth = ("" if (found or denied or not session.get("creator_verified"))
                                else her_claims.auth_denied(clause))
                 if not found and not denied and not denied_auth:
@@ -1220,7 +1248,7 @@ class System(BaseSystem):
                     summary = f"She said {clause.strip()[:90]!r} to her verified creator"
                     reasoning = f"Code compared her words with the session: verified at connect ({how})."
                 elif denied:
-                    saw = her_claims.look_saw(system_prompt)
+                    saw = her_claims.look_saw(prompt)
                     logger.info(f"[CLAIM] denied sight {denied!r} in {clause.strip()[:80]!r} after a look that saw {saw[:60]!r} — answering again")
                     block = "WHAT YOU LOOKED UP BEFORE ANSWERING (real, just now):\n[look] " + saw
                     correction = ("\n\nYOU LOOKED THROUGH THE CAMERA JUST NOW AND SAW: " + saw

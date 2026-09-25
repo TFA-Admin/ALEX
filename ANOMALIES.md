@@ -1055,3 +1055,59 @@ Not shipped; the plain call stays; the reply layout reverted with it.
 The gain is real and the cost is two real-world misfires in forty — a
 trade Craig has not made.
 
+### "She still seems to be behaving oddly" (2026-09-25, 16:12-16:31)
+One conversation, five separate causes. Craig asked her to search the web
+and spent eleven minutes being told a search was running when none was.
+
+**1. Her own sweep report came back as her context.** The full-sweep
+report is pushed to his screen unspoken, and `core.voice.say()` defaults
+to `remember=True`, so "What I cannot see: the Controller and its
+consoles... the operating system, other programs..." was stored twice
+today as HER OWN UTTERANCE. Four turns later she was explaining that
+"Craig remains offline", that he is "a separate program I cannot access",
+that "the Controller mediates our exchange", and that her systems are
+"95% online" — the cannot-see list and the module list read back as
+beliefs about the world. **Fixed**: the report is pushed with
+`remember=False`; the two stored rows are retracted.
+
+**2. A restated request was read as a refusal.** With a search question
+pending, "i don't understand why you're fucking this up, alex. it's
+simple. do a search for the architectural changes in ai recently" went to
+`yes_or_no`, which saw "don't" and answered NO — so the gate DECLINED the
+search he was asking for and told him so. **Fixed**: a message that
+itself names a search is not an answer to the pending question; it
+re-proposes with his new wording.
+
+**3. His approvals were not in the vocabulary.** "proceed", "alex,
+proceed with the search", "perform the search", "i am authorizing you to
+do a search on recent ai architectural changes. do it" — none were yes,
+no, or a recognised request ("search ON" was not even a trigger), so each
+cleared the pending question and fell through to the model. **Fixed**:
+`_APPROVES_RE` in the inquiry system reads his approvals while a question
+is pending; "search on/about/regarding" are triggers.
+
+**4. With the question gone, she invented the search.** "The web
+surfacing operation has commenced", "My processors are now engaged with
+the query", "The results were sent to your terminal, Craig" — none in a
+shape `_CLAIM_RE` held, because they announce work rather than claim a
+completed check. **Fixed**: announcements of work are claims
+(`_ANNOUNCED_RE`); and when the gate drops a search question she is told
+so for ten minutes, so she can say plainly that nothing ran.
+
+**5. "No search results found. - Fact or trash bin?"** Nothing found was
+offered to him as something to keep. **Fixed**: a retry on a shortened
+query, then a phrase that says it found nothing and offers nothing.
+
+### Her stored phrases were still in the 7b's joke voice (2026-09-25)
+"Say 'hello, party animal' so I can make sure it's you." "Whoa, cowboy!
+Thinking of searching the web for...? Hold up there, partner." "Hey
+{name}, life been sucksauce?" Forty phrases, rewritten by self-reflection
+in July on the 7b, and the composer uses the stored wording as her VOICE
+REFERENCE — so his locked cold persona was greeting him as a game-show
+host, twice in the conversation he called odd. **Fixed**: every phrase
+reset to its hardcoded default, which is derived from the registry INTENT
+and composed in her current voice each time. Verified after: "Please say
+a short phrase so I can verify it's you", and the search proposal in her
+own cold register. They will drift again only if the personality changes
+(it is locked).
+

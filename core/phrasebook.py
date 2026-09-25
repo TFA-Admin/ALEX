@@ -326,6 +326,10 @@ PHRASE_REGISTRY = {
         "I can't run the search right now — the inquiry module didn't load. Ask my creator to look into it.",
         "Tell the person the web-search capability isn't currently available and suggest the creator look into it."
     ),
+    "search_nothing_found": (
+        "The search for '{query}' came back with nothing. Say it another way and I will look again.",
+        "Tell the person a web search ran and returned no results, and that he can ask again in other words. {query} is a placeholder for what was searched — keep it. Never offer to keep or store anything, because there is nothing."
+    ),
     "search_failed": (
         "Something went wrong running that search — nothing was found or kept.",
         "Tell the person a web search failed to run, honestly, without inventing a result."

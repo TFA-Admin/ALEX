@@ -153,7 +153,12 @@ class System(BaseSystem):
             from core.voice import say
             for conn in list(_active_connections.values()):
                 if conn.get("user_id") == user_id:
-                    await say(conn["websocket"], text, user_id=user_id, speak=False)
+                    # 2026-09-25: remember=False. Twice today the report went
+                    # into memory as her own utterance and came back as her
+                    # context: "Craig remains offline", "my systems are 95%
+                    # online", "the Controller mediates our exchange" — her
+                    # reading of the module list and the cannot-see list.
+                    await say(conn["websocket"], text, user_id=user_id, speak=False, remember=False)
         except Exception as e:
             logger.warning(f"[SWEEP] could not show the report: {e}")
 
