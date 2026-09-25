@@ -222,17 +222,6 @@ class ResponseHandler:
         updated = await enrich_profile(user_id)
         await websocket.send_text("__PROFILE__" + json.dumps(updated))
 
-        # 🎭 MOOD — computed after the real response is already fully on
-        # its way, never blocks or slows it down. See core/mood.py.
-        # 2026-09-23: her reply's tone is one input to a real mood state;
-        # what the orb gets is the state (core/mood.py).
-        # 2026-09-25: the reply is an event her features hear (features/):
-        # mood tells the orb, values keeps the reply's shape for his next
-        # thanks or correction.
-        await features.emit("reply", websocket=websocket, user_id=user_id, session=session,
-                            text=full_response, interrupted=interrupted,
-                            looked=bool(session.pop("last_reply_looked", False)) if session is not None else False)
-
         # 2026-07-17 (Craig: "over the course of a long response... when
         # I said I agree she didn't hear it") — the wake-word conversation
         # window (see ws/ws_handlers.py's CONVERSATION_WINDOW_S) only ever
@@ -281,6 +270,15 @@ class ResponseHandler:
                 session["reply_history"] = hist[-3:]      # for "you made that up" (core/claims.py)
             except Exception:
                 pass
+
+        # 🎭 the reply is an event her features hear (features/): mood
+        # tells the orb, values keeps the reply's shape for his next
+        # thanks or correction, curiosity notes when a question she asked
+        # in this reply will have finished playing (last_addressed_at,
+        # set just above — which is why this comes after it).
+        await features.emit("reply", websocket=websocket, user_id=user_id, session=session,
+                            text=full_response, interrupted=interrupted,
+                            looked=bool(session.pop("last_reply_looked", False)) if session is not None else False)
 
         await websocket.send_text("__END__")
 

@@ -1938,6 +1938,15 @@ CURIOSITY_REASK_AFTER_S = 6 * 3600
 CURIOSITY_MAX_ASKS = 2
 
 
+async def get_curiosity_question(topic: str):
+    """The question she asked about a topic (the newest), or None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT question FROM curiosity_queue WHERE topic=? ORDER BY id DESC LIMIT 1", (topic,))
+        row = await cursor.fetchone()
+    return row[0] if row else None
+
+
 async def mark_curiosity_question_asked(topic: str):
     """Records that she asked THIS question, once.
 

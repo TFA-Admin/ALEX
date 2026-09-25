@@ -41,6 +41,50 @@ IDLE_CHECKIN_THRESHOLD_S = 900
 CURIOSITY_QUIET_S = 120
 
 
+# 2026-09-25 (Craig: "She just asked 2 questions back to back and while I
+# was answering one the other was prompted"). Live: 13:06:10 one question,
+# 13:07:15 the next — the 60 s tick fired again while he was still
+# speaking, because idle_for() only knows COMPLETED utterances, and
+# nothing here asked whether a question was already waiting for its
+# answer. His answer to the first was then read as "spoke before she
+# finished asking" the second, and lost. Three conditions, all cheap:
+UNPROMPTED_GAP_S = 15 * 60      # at most one unprompted question this often
+TALKING_WINDOW_S = 4.0          # audio from him within this = he is speaking
+_last_unprompted_at = 0.0
+
+
+def note_unprompted():
+    """Called wherever she asks something unprompted (here and at connect)."""
+    global _last_unprompted_at
+    _last_unprompted_at = time.time()
+
+
+def he_is_talking(session_ids=None) -> bool:
+    """He has started speaking and not finished (the page sends
+    __SPEAKING__ at speech start; the audio arrives at the end), or he
+    finished within the last few seconds and may go on."""
+    from ws.ws_handlers import _active_connections
+    now = time.time()
+    for sid, conn in list(_active_connections.items()):
+        if session_ids is not None and sid not in session_ids:
+            continue
+        started = float(conn.get("speech_started_at") or 0)
+        ended = float(conn.get("utterance_ended_at") or 0)
+        if started > ended and now - started < 120:       # mid-utterance (120 s: a VAD misfire never blocks her for good)
+            return True
+        if now - ended < TALKING_WINDOW_S:
+            return True
+    return False
+
+
+def a_question_is_waiting(session_ids) -> bool:
+    for sid in session_ids:
+        s = alex_core.get_session(sid)
+        if s.get("awaiting_curiosity_answer") or time.time() < float(s.get("curiosity_asked_until") or 0):
+            return True
+    return False
+
+
 async def _check_curiosity_delivery():
     """Connect-time delivery (ws_handlers.py) already covers "just
     reconnected" — this covers "been connected the whole time and a
@@ -58,6 +102,11 @@ async def _check_curiosity_delivery():
     from core import idle_author
     from core.voice import speech_lock
     if idle_author.idle_for() < CURIOSITY_QUIET_S or speech_lock.locked():
+        return
+    sids = get_active_creator_session_ids()
+    if a_question_is_waiting(sids) or he_is_talking(sids):
+        return
+    if time.time() - _last_unprompted_at < UNPROMPTED_GAP_S:
         return
 
     # 2026-09-23: his questions only — the mid-session push reaches the
@@ -81,6 +130,7 @@ async def _check_curiosity_delivery():
     # abrupt — that is what makes it unprompted.
     delivered = await push_to_creator(q["question"])
     if delivered:
+        note_unprompted()
         # Same as the connect-time path: the next thing he says is
         # probably the answer.
         for session_id in get_active_creator_session_ids():

@@ -238,6 +238,20 @@ async def _my_state() -> str:
 
 
 async def _list_modules() -> str:
+    # 2026-09-25: one list, both kinds (features/registry.py) — what each
+    # is, how it runs (full access, or sandboxed inside a granted scope),
+    # and whether it is running. The registry table alone when the
+    # registry is not started in this process.
+    from features import registry as features
+    if features.started():
+        lines = []
+        for st in features.status():
+            how = f"sandboxed: {st['scope']}" if st["kind"] == "sandboxed" else "full access"
+            state = "running" if st["running"] else ("off" if not st["wanted"] else f"NOT running — {st['error']}")
+            gives = (", ".join(st.get("gives") or [])) or ""
+            lines.append(f"- {st['name']} ({how}{(', ' + st['version']) if st['version'] else ''}) [{state}]"
+                         + (f" gives: {gives}." if gives else "") + (f" {st['summary']}" if st["summary"] else ""))
+        return "\n".join(lines) if lines else "No modules."
     lines = []
     for entry in await list_module_registry():
         name = entry["name"]
@@ -251,14 +265,6 @@ async def _list_modules() -> str:
         lines.append(f"- {name} v{entry.get('version')} [{entry.get('status')}] "
                      f"access={entry.get('access_scope') or 'none'}"
                      + (f": {about}" if about else ""))
-    # 2026-09-25: her built-in modules (features/) — what runs inside her.
-    try:
-        from features import registry as features
-        for st in features.status():
-            state = "running" if st["running"] else ("off" if not st["wanted"] else f"NOT running — {st['error']}")
-            lines.append(f"- {st['name']} (built in) [{state}]: {st['summary']}")
-    except Exception:
-        pass
     return "\n".join(lines) if lines else "No modules installed."
 
 

@@ -108,7 +108,12 @@ capture), retention, author. The engines stay in `core/` and each
 feature declares what it `owns`; a reload re-imports those too. Off is
 off: the LLM prompt is `{hard_rules}{feature_blocks}{session}`, tools are
 core + features, and `core/mood.note()` is gated. `tests/suites/features.py`
-(14 cases). Still hand-wired, on purpose: the personality text, hard
+(21 cases). **Same evening, on Craig's "shouldn't they all be in the same
+basket?": one registry for both kinds.** The three sandboxed modules
+(modules/) are adapted into the same shape (`features/sandboxed.py`);
+their on/off stays in `module_registry.status`; every list, table and
+command shows eleven modules with a Scope (full access / sandboxed: the
+scopes granted). Still hand-wired, on purpose: the personality text, hard
 rules and persona switch (the kill path), the claim check, deliberation,
 the systems/ tier. **Next for "change your personality module"**: Limits
 (#11) then module authoring (#18) — the author's whitelist could now

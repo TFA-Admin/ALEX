@@ -44,7 +44,7 @@ Ask naturally. She chooses to look before answering; these are her tools
 | search what was said between you | `search_memory` | "Did I ever mention NASCAR?" |
 | list your recent exchanges | `recent_turns` | "What were we talking about ten minutes ago?" |
 | read her own state: modules, what is off, response times, your standing instructions — **creator only** | `my_state` | "What's switched off on you?" / "How fast have you been answering?" |
-| list her modules and what each does — the command modules and her built-in ones (features/), with what is running | `list_modules` | "What modules do you have?" |
+| list her modules and what each does — one list, with how each runs (full access or sandboxed) and whether it is running | `list_modules` | "What modules do you have?" |
 | run one of her modules | `run_module` | "Use recall to check for anything about YouTube." |
 | a full sweep of herself — every system's and module's self-check, the model, her senses, memory, mood, pet, author, retention, the tools she has, and what she cannot see; the whole report on your screen, the summary in her own words | `run_diagnostics` | "Run a diagnostic." / "Systems check." / "Check everything." |
 | one part of herself | the same, narrowed | "Check the camera." / "Check the inquiry module." / "Check the mood module." / "Check your memory." / "Check the pet." |
@@ -174,8 +174,8 @@ no voice command for either, on purpose.
 
 **Modules** (creator or super user)
 
-- **"disable module NAME"** / **"enable module NAME"** / **"list modules"** — the command modules under modules/ AND her built-in modules (personality, mood, sight, values, pet, curiosity, retention, author). A built-in switched off contributes nothing — no prompt block, no tools, no ticks — and stays off across restarts until switched on, here or at the Controller (Her → Modules).
-- **"reload module NAME"** — creator only. A built-in module is taken offline, its code re-read from disk (with the core files it owns), and brought back up. They also reload themselves when those files change.
+- **"disable module NAME"** / **"enable module NAME"** / **"list modules"** — one list: recall, inquiry, diagnostic_tool (sandboxed, each inside the access you granted) and personality, mood, sight, values, pet, curiosity, retention, author (full access). A module switched off contributes nothing — no command, no prompt block, no tools, no ticks — and stays off across restarts until switched on, here or at the Controller (Her → Modules).
+- **"reload module NAME"** — creator only. The module is taken offline, its code re-read from disk (a full-access one with the core files it owns; a sandboxed one re-checked against its scope), and brought back up. They also reload themselves when their files change.
 - **"list access requests"** / **"list pending access"**
 - **"approve request N"** (or "request N approved") → she reads back exactly what access is being granted → **"yes"**
 

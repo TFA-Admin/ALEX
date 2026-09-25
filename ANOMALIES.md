@@ -922,3 +922,53 @@ Controller's Her -> Modules tab has the switches and what she reports.
 Measured in process: start 0.8 s, all eight prompt blocks 0.10 s, a
 reload of sight 16 ms; features suite 14/14, mood 28/28.
 
+### Two baskets of modules (2026-09-25, Craig: "shouldn't they all be in the same basket? ... a diagnostic is not core but her pet is?")
+Right. The three under modules/ (recall, inquiry, diagnostic_tool) and
+the eight under features/ differed in how they RUN — sandboxed inside a
+granted access scope and re-validated on every load, versus full access
+— not in what they are to her, and I had given them two lists, two
+tables and two names. **Now**: one registry (features/registry.py) holds
+both kinds; a sandboxed module is adapted into the same shape
+(features/sandboxed.py) and its on/off stays in module_registry.status
+where the build flow and rollback keep it. One list everywhere — "list
+modules", the sweep, Her -> Modules (with a Scope column: full access,
+or sandboxed with the scopes granted) — and one set of commands. The
+scope stays visible on every row because Limits (#11) will be built on
+that line. Eleven modules; features suite 21/21.
+
+### She asked two questions back to back (2026-09-25, 13:06-13:07)
+"While I was answering one the other was prompted." The mid-session
+delivery tick (60 s) only knew his COMPLETED utterances: he was still
+speaking his answer to the first question when the tick found the room
+"quiet" and pushed the second; his answer was then judged "spoke before
+she finished asking" the second, and lost. **Fixed**: an unprompted
+question waits while any question of hers is unanswered, while he is
+speaking (the page now sends __SPEAKING__ at speech start — the audio
+itself only arrives when he stops), and for 15 minutes after the last
+one.
+
+### An old statement taken as the answer (2026-09-25, 13:14)
+She asked about the red walls; he restated, nearly word for word, what
+he had said seven minutes earlier about why he created her (his answer to
+the earlier question, which had been discarded); the capture took it for
+the red wall. His real answer came one turn later. **Fixed**, three
+ways: words he BEGAN before she finished asking (less a four-second lead)
+are not the answer — the page's speech-start time travels with the
+utterance; a restatement of something he said in the last hour (five or
+more content words in common, most of the shorter statement's — the real
+pair measured 8 shared, 62%) is not the answer; and a
+request to say more ("what do you mean?", "which question?", "can you
+elaborate", any question back under eight words) is not the answer — she
+restates her question plainly and keeps waiting (Craig: "a way for
+someone to ask her to elaborate on a question without that being
+recorded as the answer"). Three stored answers were wrong on review and
+corrected: the red walls (his real answer put in), Your purpose (his real
+answer put in), system handling (cleared).
+
+### Proposals #10 and #11 decided (2026-09-25, on Craig's instruction)
+Both rejected, with the reasons on the rows. #11 was #6 again. #10 added
+a clause to the status_check intent line that nothing measured calls for
+(84/84 already) and that could make the classifier miss a casual real
+check; her own rule says an unchanged setting is the right proposal when
+the numbers show no problem.
+

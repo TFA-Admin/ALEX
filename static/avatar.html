@@ -1617,6 +1617,13 @@ async function detect(stream){
 
                 utteranceStart = Date.now();
                 setListenState("hearing you");
+                // 2026-09-25: tell her he has STARTED speaking. The audio
+                // itself only goes up when he stops, so without this she
+                // cannot tell "he is talking" from silence — and asked a
+                // second question over his answer to the first.
+                if(ws && ws.readyState === 1){
+                    try { ws.send("__SPEAKING__"); } catch(e){}
+                }
 
                 // 🎙️ Barge-in: same instant reaction as the old volume
                 // trigger, deliberately not waiting for onSpeechRealStart

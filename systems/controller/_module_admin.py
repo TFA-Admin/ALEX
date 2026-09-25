@@ -21,8 +21,9 @@ from core.phrasebook import get_phrase
 
 
 def _feature_named(spoken: str):
-    """'mood', 'the mood module', 'my sight feature' -> the feature's name,
-    or None. Built-in modules live in features/ (see features/base.py)."""
+    """'mood', 'the mood module', 'recall', 'my sight feature' -> the
+    module's name in the registry (features/registry.py — both kinds), or
+    None when the registry does not know it."""
     try:
         from features import registry as features
         known = features.names()
@@ -125,17 +126,18 @@ async def handle(session, user_id: str, text: str, msg: str):
         if not name:
             return {"type": "response", "content": await get_phrase("module_name_missing")}
 
+        # 2026-09-25 (projects #26): one registry for both kinds
+        # (features/registry.py). Off is durable either way — a sandboxed
+        # module's status row, a core module's features_wanted entry.
+        fname = _feature_named(name)
+        if fname:
+            from features import registry as features
+            ok, why = await features.disable(fname, by=user_id, why="asked in conversation")
+            logger.info(f"[ACTION] Module '{fname}' disabled (by {user_id}): {why}")
+            return {"type": "response", "content": await get_phrase("module_disabled", name=fname)}
+
         entry = await get_module_registry_entry(name)
         if not entry:
-            # 2026-09-25 (projects #26): her built-in modules (features/)
-            # answer to the same words. Durable, like the registry: off
-            # stays off across her restarts until switched on.
-            fname = _feature_named(name)
-            if fname:
-                from features import registry as features
-                ok, why = await features.disable(fname, by=user_id, why="asked in conversation")
-                logger.info(f"[ACTION] Built-in module '{fname}' disabled (by {user_id}): {why}")
-                return {"type": "response", "content": await get_phrase("module_disabled", name=fname)}
             return {"type": "response", "content": await get_phrase("module_not_found", name=name)}
 
         await set_module_status(name, "disabled")
@@ -150,15 +152,16 @@ async def handle(session, user_id: str, text: str, msg: str):
 
         name = strip_trailing_punctuation(msg.replace("enable module", "").strip())
 
+        fname = _feature_named(name)
+        if fname:
+            from features import registry as features
+            ok, why = await features.enable(fname, by=user_id, why="asked in conversation")
+            logger.info(f"[ACTION] Module '{fname}' enabled (by {user_id}): {why}")
+            key = "module_enabled" if ok else "module_reload_failed"
+            return {"type": "response", "content": await get_phrase(key, name=fname, why=why)}
+
         entry = await get_module_registry_entry(name)
         if not entry:
-            fname = _feature_named(name)
-            if fname:
-                from features import registry as features
-                ok, why = await features.enable(fname, by=user_id, why="asked in conversation")
-                logger.info(f"[ACTION] Built-in module '{fname}' enabled (by {user_id}): {why}")
-                key = "module_enabled" if ok else "module_reload_failed"
-                return {"type": "response", "content": await get_phrase(key, name=fname, why=why)}
             return {"type": "response", "content": await get_phrase("module_not_found", name=name)}
 
         await set_module_status(name, "enabled")
@@ -184,12 +187,10 @@ async def handle(session, user_id: str, text: str, msg: str):
         if fname:
             from features import registry as features
             ok, why = await features.reload(fname)
-            logger.info(f"[ACTION] Built-in module '{fname}' reload by {user_id}: {why}")
+            logger.info(f"[ACTION] Module '{fname}' reload by {user_id}: {why}")
             if ok:
                 return {"type": "response", "content": await get_phrase("module_reloaded", name=fname)}
             return {"type": "response", "content": await get_phrase("module_reload_failed", name=fname, why=why)}
-        if await get_module_registry_entry(name):
-            return {"type": "response", "content": await get_phrase("module_reloaded", name=name)}
         return {"type": "response", "content": await get_phrase("module_not_found", name=name)}
 
     if msg.startswith("list modules"):
@@ -197,15 +198,16 @@ async def handle(session, user_id: str, text: str, msg: str):
         if denial:
             return denial
 
-        modules = await list_module_registry()
-        lines = [f"{m['name']} (v{m['version']}, {m['status']})" for m in modules]
-        # 2026-09-25: her built-in modules too (features/)
-        try:
-            from features import registry as features
-            lines += [f"{st['name']} (built in, {'running' if st['running'] else ('off' if not st['wanted'] else 'NOT running')})"
-                      for st in features.status()]
-        except Exception:
-            pass
+        # 2026-09-25: one list, both kinds (features/registry.py)
+        from features import registry as features
+        if features.started():
+            lines = [f"{st['name']} ({'sandboxed: ' + st['scope'] if st['kind'] == 'sandboxed' else 'full access'}"
+                     f"{(', ' + st['version']) if st['version'] else ''}, "
+                     f"{'running' if st['running'] else ('off' if not st['wanted'] else 'NOT running')})"
+                     for st in features.status()]
+        else:
+            modules = await list_module_registry()
+            lines = [f"{m['name']} (v{m['version']}, {m['status']})" for m in modules]
 
         if not lines:
             return {"type": "response", "content": await get_phrase("no_modules_built")}

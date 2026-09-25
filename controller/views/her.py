@@ -32,7 +32,7 @@ from db.db import (
     fetch_active_conclusions, fetch_decisions, fetch_curiosity_queue, fetch_eval_runs,
     fetch_projects, create_project, update_project, PROJECT_STATUSES, record_decision,
     list_module_registry, fetch_module_versions, get_module_version_code,
-    get_module_registry_entry, register_module_version,
+    get_module_registry_entry, register_module_version, set_module_status,
     get_features_wanted, set_feature_wanted, get_features_state,
     persona_disabled, PERSONA_FLAG_PATH,
 )
@@ -839,60 +839,47 @@ class HerView(QWidget):
         page = QWidget()
         lay = QVBoxLayout()
 
-        # 2026-09-25 (projects #26; Craig: "she would take it offline,
-        # perform the change and bring it back up"): her built-in modules
-        # (features/). What is WANTED is written here and read by her
-        # process within seconds; what is RUNNING is what she last
-        # reported — this tab never depends on her being up.
+        # 2026-09-25 (projects #26; Craig: "shouldn't they all be in the
+        # same basket?"): one list of her modules (features/registry.py).
+        # Scope says how each runs — full access is core code; a sandboxed
+        # one runs inside the access he granted and is re-checked on every
+        # load. What is WANTED is written here and read by her process
+        # within seconds; what is RUNNING is what she last reported — this
+        # tab never depends on her being up.
         lay.addWidget(QLabel(
-            "Her built-in modules (features/): mood, sight, the pet, what he values, curiosity, retention, "
-            "her author, her dials. Off here is off in her within seconds and stays off across restarts. "
-            "'Running' is what she last reported; while she is down it is her last word."))
-        self.features_table = QTableWidget()
-        self.features_table.setColumnCount(7)
-        self.features_table.setHorizontalHeaderLabels(
-            ["Name", "Wanted", "Running", "What it is", "Tools", "Last tick", "Note"])
-        self.features_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.features_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        make_readable(self.features_table, wrap_column=3)
-        lay.addWidget(self.features_table)
-        fbtns = QHBoxLayout()
-        self.feature_on_btn = QPushButton("▶ Switch on")
-        self.feature_on_btn.clicked.connect(lambda: self._set_feature(True))
-        fbtns.addWidget(self.feature_on_btn)
-        self.feature_off_btn = QPushButton("⏸ Switch off (with reason)")
-        self.feature_off_btn.clicked.connect(lambda: self._set_feature(False))
-        fbtns.addWidget(self.feature_off_btn)
-        self.feature_reload_btn = QPushButton("🔁 Reload from disk")
-        self.feature_reload_btn.setToolTip("She stops it, re-reads its file and the core files it owns, and starts it again")
-        self.feature_reload_btn.clicked.connect(self.reload_feature)
-        fbtns.addWidget(self.feature_reload_btn)
-        fbtns.addStretch(1)
-        self.features_refresh_btn = QPushButton("🔄 Refresh")
-        self.features_refresh_btn.clicked.connect(self.refresh_features)
-        fbtns.addWidget(self.features_refresh_btn)
-        lay.addLayout(fbtns)
-
-        lay.addWidget(QLabel("Installed command modules (modules/, sandboxed):"))
+            "Her modules, one list. Scope is how each runs: full access is core code; sandboxed ones run inside "
+            "the access you granted and are re-checked on every load. Off here is off in her within seconds and "
+            "holds across restarts. 'Running' is what she last reported; while she is down it is her last word."))
         self.module_status_table = QTableWidget()
-        self.module_status_table.setColumnCount(6)
+        self.module_status_table.setColumnCount(9)
         self.module_status_table.setHorizontalHeaderLabels(
-            ["Name", "Version", "Status", "Source", "Access Scope", "Updated At"])
+            ["Name", "Scope", "Version", "Wanted", "Running", "What it is", "Gives her", "Last tick", "Note"])
         self.module_status_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.module_status_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        make_readable(self.module_status_table, wrap_column=0)
+        make_readable(self.module_status_table, wrap_column=5)
         lay.addWidget(self.module_status_table)
+        mbtns = QHBoxLayout()
+        self.module_on_btn = QPushButton("▶ Switch on")
+        self.module_on_btn.clicked.connect(lambda: self._set_module(True))
+        mbtns.addWidget(self.module_on_btn)
+        self.module_off_btn = QPushButton("⏸ Switch off (with reason)")
+        self.module_off_btn.clicked.connect(lambda: self._set_module(False))
+        mbtns.addWidget(self.module_off_btn)
+        self.module_reload_btn = QPushButton("🔁 Reload from disk")
+        self.module_reload_btn.setToolTip("She stops it, re-reads its code (and the core files it owns), and starts it again")
+        self.module_reload_btn.clicked.connect(self.reload_module)
+        mbtns.addWidget(self.module_reload_btn)
+        mbtns.addStretch(1)
+        self.module_status_refresh_btn = QPushButton("🔄 Refresh")
+        self.module_status_refresh_btn.clicked.connect(self.refresh_module_status)
+        mbtns.addWidget(self.module_status_refresh_btn)
+        lay.addLayout(mbtns)
 
-        # 🕓 MODULE VERSION HISTORY + ROLLBACK (2026-07-18) —
-        # register_module_version() has snapshotted every real build's
-        # code since the versioning system was built, specifically "so
-        # rollback has something real to restore" (its own docstring),
-        # but nothing ever exposed that history or let anyone act on it.
-        # Select a module above, Load Version History shows every past
-        # version; Roll Back To Selected reinstalls that version's code
-        # as current — recorded as a NEW version (via
-        # register_module_version), never silently overwriting history.
-        lay.addWidget(QLabel("Version history (select a module above, then load):"))
+        # 🕓 VERSION HISTORY + ROLLBACK (2026-07-18) — for sandboxed modules,
+        # whose every build is snapshotted (register_module_version). Core
+        # modules are versioned by git and change through Inbox -> Versions.
+        lay.addWidget(QLabel("Version history of a sandboxed module (select it above, then load). "
+                             "Core modules are versioned by git and change through Inbox → Versions."))
         self.module_versions_table = QTableWidget()
         self.module_versions_table.setColumnCount(2)
         self.module_versions_table.setHorizontalHeaderLabels(["Version", "Created At"])
@@ -910,54 +897,69 @@ class HerView(QWidget):
         self.rollback_version_btn.clicked.connect(self.rollback_module_version)
         btns.addWidget(self.rollback_version_btn)
         btns.addStretch(1)
-        self.module_status_refresh_btn = QPushButton("🔄 Refresh")
-        self.module_status_refresh_btn.clicked.connect(self.refresh_module_status)
-        btns.addWidget(self.module_status_refresh_btn)
         lay.addLayout(btns)
 
         page.setLayout(lay)
         return page
 
-    def refresh_features(self):
+    def _sandboxed(self) -> dict:
+        try:
+            return {m["name"]: m for m in asyncio.run(list_module_registry())}
+        except Exception as e:
+            self.note(f"⚠️ Failed to read the module registry: {e}")
+            return {}
+
+    def refresh_module_status(self):
         from features import registry as _features
+        sandboxed = self._sandboxed()
         try:
             wanted = asyncio.run(get_features_wanted())
             state = asyncio.run(get_features_state())
         except Exception as e:
-            self.note(f"⚠️ Failed to read her built-in modules: {e}")
+            self.note(f"⚠️ Failed to read her modules: {e}")
             return
         reported = {st["name"]: st for st in (state.get("features") or [])}
         age = _time.time() - float(state.get("at") or 0)
         stale = age > 120
-        names = sorted(set(_features.discover()) | set(reported))
-        self.features_table.setRowCount(len(names))
+        names = sorted(set(_features.discover()) | set(sandboxed) | set(reported))
+        self.module_status_table.setRowCount(len(names))
         for row, name in enumerate(names):
-            w = wanted.get(name) or {}
             st = reported.get(name) or {}
-            want = "on" if w.get("enabled", True) else f"OFF ({w.get('by') or '?'})"
+            if name in sandboxed:
+                m = sandboxed[name]
+                scope = "sandboxed: " + (m.get("access_scope") or "none")
+                version = f"v{m['version']}"
+                want = "on" if m["status"] == "enabled" else "OFF"
+            else:
+                w = wanted.get(name) or {}
+                scope = "full access"
+                version = st.get("version") or ""
+                want = "on" if w.get("enabled", True) else f"OFF ({w.get('by') or '?'})"
             if not st:
                 running = "never reported"
             elif stale:
                 running = ("was running" if st.get("running") else "was off") + f" ({int(age // 60)} min ago)"
             else:
                 running = "running" if st.get("running") else ("off" if not st.get("wanted", True) else "NOT running")
+            w = wanted.get(name) or {}
             note = st.get("error") or st.get("tick_error") or (w.get("why") if not w.get("enabled", True) else "")
             last = st.get("last_tick") or 0
-            fill_row(self.features_table, row, [
-                name, want, running, st.get("summary") or "", ", ".join(st.get("tools") or []),
+            fill_row(self.module_status_table, row, [
+                name, scope, version, want, running, st.get("summary") or "",
+                ", ".join(st.get("gives") or []),
                 _time.strftime("%H:%M:%S", _time.localtime(float(last))) if last else "", note or ""])
-        self.features_table.resizeRowsToContents()
+        self.module_status_table.resizeRowsToContents()
 
-    def _selected_feature(self):
-        rows = selected_rows(self.features_table)
+    def _selected_module(self):
+        rows = selected_rows(self.module_status_table)
         if not rows:
-            self.note("⚠️ Select a built-in module first.")
+            self.note("⚠️ Select a module first.")
             return None
-        item = self.features_table.item(rows[0], 0)
+        item = self.module_status_table.item(rows[0], 0)
         return item.text() if item else None
 
-    def _set_feature(self, on: bool):
-        name = self._selected_feature()
+    def _set_module(self, on: bool):
+        name = self._selected_module()
         if not name:
             return
         why = ""
@@ -968,20 +970,23 @@ class HerView(QWidget):
             if not ok:
                 return
         try:
-            asyncio.run(set_feature_wanted(name, enabled=on, by="craig", why=why.strip()))
+            if name in self._sandboxed():
+                asyncio.run(set_module_status(name, "enabled" if on else "disabled"))
+            else:
+                asyncio.run(set_feature_wanted(name, enabled=on, by="craig", why=why.strip()))
             asyncio.run(record_decision(
-                "module", f"Craig switched the built-in module '{name}' {'on' if on else 'off'}",
+                "module", f"Craig switched the module '{name}' {'on' if on else 'off'}",
                 reasoning=why.strip() or ("switched on at the Controller" if on else "no reason given"),
                 evidence="Her -> Modules", outcome="she applies it within a few seconds while running; it holds across restarts",
                 actor="craig"))
         except Exception as e:
             self.note(f"⚠️ Could not record it: {e}")
             return
-        self.note(f"[SYSTEM] Built-in module '{name}' wanted {'ON' if on else 'OFF'} — she reads this within a few seconds")
-        self.refresh_features()
+        self.note(f"[SYSTEM] Module '{name}' wanted {'ON' if on else 'OFF'} — she reads this within a few seconds")
+        self.refresh_module_status()
 
-    def reload_feature(self):
-        name = self._selected_feature()
+    def reload_module(self):
+        name = self._selected_module()
         if not name:
             return
         try:
@@ -990,22 +995,7 @@ class HerView(QWidget):
             self.note(f"⚠️ Could not request the reload: {e}")
             return
         self.note(f"[SYSTEM] Reload of '{name}' requested — she stops it, re-reads it and starts it again within a few seconds")
-        self.refresh_features()
-
-    def refresh_module_status(self):
-        self.refresh_features()
-        try:
-            modules = asyncio.run(list_module_registry())
-        except Exception as e:
-            self.note(f"⚠️ Failed to load module status: {e}")
-            return
-
-        self.module_status_table.setRowCount(len(modules))
-        for row, m in enumerate(modules):
-            fill_row(self.module_status_table, row, [
-                m["name"], m["version"], m["status"], m["source"] or "",
-                m.get("access_scope") or "", to_local(m["updated_at"])])
-        self.module_status_table.resizeRowsToContents()
+        self.refresh_module_status()
 
     def load_module_versions(self):
         rows = selected_rows(self.module_status_table)
@@ -1023,6 +1013,11 @@ class HerView(QWidget):
             return
 
         module_name = name_item.text()
+        if module_name not in self._sandboxed():
+            self.note(f"⚠️ '{module_name}' is a core module: versioned by git, changed through Inbox → Versions. No rollback here.")
+            self.module_versions_table.setRowCount(0)
+            self._versions_loaded_for = None
+            return
         # Remembered so rollback_module_version() knows which module the
         # version table below is actually showing — the versions table
         # itself has no module-name column, just version/created_at.

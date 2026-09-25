@@ -538,6 +538,11 @@ async def ws_text(websocket: WebSocket):
             # -------------------------
             if message.get("bytes") is not None:
                 audio.add_audio(message["bytes"])
+                # 2026-09-25: he is speaking right now — an unprompted
+                # question must wait (core/proactive.he_is_talking)
+                conn_ = _active_connections.get(session_id)
+                if conn_ is not None:
+                    conn_["last_audio_at"] = time.time()
                 continue
 
             # -------------------------
@@ -573,6 +578,17 @@ async def ws_text(websocket: WebSocket):
                             {"enrolled": False, "reason": "verify by voice first"}))
                     else:
                         await sight.enrol_frame(websocket, user_id, msg[len("__FRAME__enrol:"):])
+                continue
+
+            # 2026-09-25: he has started speaking (the page's VAD). The
+            # audio arrives only when he stops, so this is the one signal
+            # that says "talking now": an unprompted question waits
+            # (core/proactive.he_is_talking), and the start time says
+            # whether what he said began before she finished asking.
+            if msg == "__SPEAKING__":
+                conn_ = _active_connections.get(session_id)
+                if conn_ is not None:
+                    conn_["speech_started_at"] = time.time()
                 continue
 
             if msg == "__INTERRUPT__":
@@ -613,8 +629,25 @@ async def ws_text(websocket: WebSocket):
             # this one had been read. See AudioProcessor.take_buffer().
             captured_audio = audio.take_buffer() if captured_msg == "__END_AUDIO__" else None
 
-            async def safe_process(local_msg, local_audio):
+            # 2026-09-25: when this utterance began and ended, taken NOW —
+            # it may wait behind her reply for the lock below, and the
+            # curiosity capture must know whether he started speaking
+            # before she had finished asking (features/curiosity.py).
+            ended_at = time.time()
+            conn_ = _active_connections.get(session_id) or {}
+            started_at = float(conn_.get("speech_started_at") or 0.0)
+            if captured_msg == "__END_AUDIO__":
+                if not started_at or started_at <= float(conn_.get("utterance_ended_at") or 0.0):
+                    started_at = ended_at - (len(captured_audio or b"") / 32000.0)     # 16 kHz, 16-bit mono
+            else:
+                started_at = ended_at
+            conn_["utterance_ended_at"] = ended_at
+
+            async def safe_process(local_msg, local_audio, started=started_at, ended=ended_at):
                 async with generation_lock:
+                    s_ = alex_core.get_session(session_id)
+                    s_["utterance_started_at"] = started
+                    s_["utterance_ended_at"] = ended
                     await process_message(
                         websocket,
                         local_msg,
@@ -672,13 +705,15 @@ async def _ask_when_quiet(websocket, session_id, user_id, q, give_up_after: floa
     her playback (core/response_handler.py), so waiting for it to pass is
     waiting for her to go quiet. If the conversation keeps moving, this
     gives up and leaves the question to core/proactive.py's lull."""
-    from core import idle_author
+    from core import idle_author, proactive
     t0 = time.time()
     while time.time() - t0 < give_up_after:
         session = alex_core.get_session(session_id)
         quiet_from = session.get("last_addressed_at", 0) + CURIOSITY_CONNECT_QUIET_S
         if (time.time() >= quiet_from and idle_author.idle_for() >= CURIOSITY_CONNECT_QUIET_S
-                and not generation_lock.locked()):
+                and not generation_lock.locked()
+                and not proactive.he_is_talking([session_id])            # 2026-09-25
+                and not proactive.a_question_is_waiting([session_id])):
             break
         await asyncio.sleep(1.0)
     else:
@@ -692,6 +727,7 @@ async def _ask_when_quiet(websocket, session_id, user_id, q, give_up_after: floa
     if session_id not in _active_connections:
         return
     logger.info(f"[ACTION] Delivered curiosity question to {user_id}: {q['question']}")
+    proactive.note_unprompted()
     await say(websocket, q["question"], user_id=user_id)
     await mark_curiosity_question_asked(q["topic"])
     session = alex_core.get_session(session_id)
