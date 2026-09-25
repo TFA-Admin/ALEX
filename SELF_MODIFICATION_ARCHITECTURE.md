@@ -103,9 +103,14 @@ resolved or recorded below. One editor at a time from here.
 since Craig's last push: 4d3b817, 0a0195f, 9f8995e, 5437d52, 6cf1656 and
 this one — push only when he asks. A clean intent + persona suite run
 was started on 6cf1656 right after the restart; its rows are the newest
-`eval_runs` for suites `intent` and `persona` with `dirty=0`. Expected
-84/84 and 18-21/22 (see "known soft spots"). If intent is not 84/84,
-that is the first thing to look at.
+`eval_runs` for suites `intent` and `persona` with `dirty=0`. The run on
+5cfe78d came back intent 83/84 (status_no_i_said — "no, i said alex run a
+system diagnostic" — read as none: a clause added for the shared-prefix
+attempt, "reported speech about an earlier request is none", took a
+repeated request with it) and persona 19/22 (the three known soft
+spots). The clause was removed in the commit after 5cfe78d and the suite
+re-run on it; expect 84/84 there. If it is not, that is the first thing
+to look at.
 
 *Rules for two instances.* (1) Her idle author builds a proposal from
 the LIVE tree (`core/self_author.render()`), so an uncommitted edit
