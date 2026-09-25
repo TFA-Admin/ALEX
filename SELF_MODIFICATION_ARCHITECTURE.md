@@ -109,15 +109,16 @@ system diagnostic" — read as none: a clause added for the shared-prefix
 attempt, "reported speech about an earlier request is none", took a
 repeated request with it) and persona 19/22 (the three known soft
 spots). The clause was removed in the commit after 5cfe78d and the suite
-re-run on it; expect 84/84 there. If it is not, that is the first thing
-to look at.
+re-run on it: 84/84, `eval_runs` #70 on 209ae51, clean. That is the row
+her author reads now.
 
 *Rules for two instances.* (1) Her idle author builds a proposal from
 the LIVE tree (`core/self_author.render()`), so an uncommitted edit
 travels into her branch: never leave the tree dirty while the author
-module is on. It is OFF now (Her -> Modules, reason recorded; "enable
-module author" or the Switch on button turns it back) — switch it on
-only after committing. (2) `measure()` now reads only `eval_runs` rows
+module is on. It was switched OFF for the afternoon's edits and back ON
+at 209ae51 with the tree clean (both recorded as decisions). Before
+editing, switch it off (Her -> Modules, or "disable module author");
+switch it on again only after committing. (2) `measure()` now reads only `eval_runs` rows
 with `dirty=0` and no "gate proposal" note; after any change to the
 classifier or a suite, run that suite once on the committed tree so a
 clean, current row exists. (3) The rejected-value guard folds case and
