@@ -61,6 +61,8 @@ PROTECTED_PATHS = (
     "core/override_code.py",
     "core/self_author.py",
     "core/tools.py",
+    "features/base.py",        # 2026-09-25: the module machinery, not a module
+    "features/registry.py",
     "systems/controller/_role_gates.py",
     ".gitignore",
     "certs/",
@@ -472,8 +474,8 @@ def author_from_request(p: dict, log=print) -> int:
         log(f"[VERSIONS] Her author could not propose for {target}: {reason}")
         return p["id"]
     files = {data["file"]: data["content"]}
-    from core.self_author import short as _short
-    title = f"{target}: {_short(data['current'])} -> {_short(data['value'])}"
+    from core.self_author import change_title
+    title = change_title(target, data["current"], data["value"])
     rationale = data.get("rationale") or ""
     # the request row becomes the proposal row
     asyncio.run(update_proposal(p["id"], title=title, rationale=rationale))

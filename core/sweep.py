@@ -44,12 +44,22 @@ PART_WORDS = {
 }
 
 
-def named_part(lower: str, module_names: list, system_names: list):
-    """The one part he named, or None for a sweep. Module and system names
-    win; then the senses and stores above."""
+def named_part(lower: str, module_names: list, system_names: list, feature_names: list = None):
+    """The one part he named, or None for a sweep. Module names win, then
+    her built-in modules (features/), then system names, then the senses
+    and stores above."""
     for m in module_names:
         if m.lower() in lower or m.lower().replace("_", " ") in lower:
             return ("module", m)
+    if feature_names is None:
+        try:
+            from features import registry
+            feature_names = registry.names()
+        except Exception:
+            feature_names = []
+    for f in feature_names:
+        if any(p in lower for p in (f"{f} module", f"{f} feature", f"module {f}", f"feature {f}", f"the {f}")):
+            return ("feature", f)
     for s in system_names:
         if f"{s} system" in lower or f"{s}-system" in lower:
             return ("system", s)
@@ -103,6 +113,21 @@ async def _modules():
             except Exception as e:
                 status, msg = "issue", str(e)[:120]
         out.append((name, ver, status, msg))
+    return out
+
+
+async def _features():
+    """Her built-in modules (features/): (name, state, message) each, state
+    one of ok / issue / off / not running."""
+    from features import registry
+    out = []
+    for st in registry.status():
+        if not st["running"]:
+            out.append((st["name"], "off" if not st["wanted"] else "not running", st["error"] or ""))
+            continue
+        ok, msg = await registry.diagnose(st["name"])
+        tick = f"; tick: {st['tick_error']}" if st.get("tick_error") else ""
+        out.append((st["name"], "ok" if ok else "issue", (msg or "") + tick))
     return out
 
 
@@ -174,8 +199,12 @@ async def full_sweep(user_id: str) -> dict:
     except Exception as e:
         report["modules"] = [("modules", None, "issue", str(e)[:120])]
     try:
-        from core.tools import TOOL_NAMES
-        report["tools"] = sorted(TOOL_NAMES)
+        report["features"] = await _features()
+    except Exception as e:
+        report["features"] = [("features", "issue", str(e)[:120])]
+    try:
+        from core.tools import tool_names
+        report["tools"] = sorted(tool_names())
     except Exception:
         report["tools"] = []
     try:
@@ -210,6 +239,8 @@ async def full_sweep(user_id: str) -> dict:
         report["retention"] = None
     problems = [f"system {n}: {m or s}" for n, s, m in report["systems"] if s in ("issue", "not loaded")]
     problems += [f"module {n}: {m or s}" for n, v, s, m in report["modules"] if s == "issue"]
+    problems += [f"built-in {n}: {m or s}" for n, s, m in report.get("features", [])
+                 if s in ("issue", "not running") or (s == "ok" and "tick:" in (m or ""))]
     if not report["model"].get("ready"):
         problems.append(f"model {report['model'].get('name')}: not ready ({report['model'].get('state')})")
     if report["memory"].get("error"):
@@ -235,6 +266,12 @@ def render(r: dict) -> tuple:
     lines.append(f"- Modules: {len(modules)} in the registry, {mods_on} enabled and fine")
     for n, v, s, m in modules:
         lines.append(f"    - {n} v{v}: {s}{(' — ' + m) if m else ''}")
+    feats = r.get("features", [])
+    feats_on = sum(1 for _n, s, _m in feats if s == "ok")
+    if feats:
+        lines.append(f"- Built-in modules: {len(feats)}, {feats_on} running and fine")
+        for n, s, m in feats:
+            lines.append(f"    - {n}: {s}{(' — ' + m) if m else ''}")
     lines.append(f"- Tools I have: {', '.join(r.get('tools', [])) or 'none'}")
     if sen:
         lines.append(f"- Senses: voice samples {sen.get('voice_samples', 0)}, face samples {sen.get('face_samples', 0)}"
@@ -260,7 +297,8 @@ def render(r: dict) -> tuple:
     lines.append(("Problems: " + "; ".join(probs)) if probs else "No problems found.")
     shown = "\n".join(lines)
     spoken = (f"Full sweep done in {r.get('took', 0):.0f} seconds. {len(systems)} systems, {sys_ok} fine; {len(modules)} modules, "
-              f"{mods_on} enabled; model {'ready' if model.get('ready') else 'not ready'}; eyes {'open' if sen.get('eyes_open') else 'closed'}. "
+              f"{mods_on} enabled; {len(feats)} built-in modules, {feats_on} running; "
+              f"model {'ready' if model.get('ready') else 'not ready'}; eyes {'open' if sen.get('eyes_open') else 'closed'}. "
               + (("Problems: " + "; ".join(probs[:3]) + ".") if probs else "No problems found.")
               + " The full report is on your screen.")
     return shown, spoken
@@ -274,6 +312,23 @@ async def check_part(user_id: str, part) -> tuple:
             return f"No module called {key}.", f"I have no module called {key}."
         n, v, s, m = mods[0]
         text = f"Module {n} v{v}: {s}{(' — ' + m) if m else ''}"
+        return text, text
+    if kind == "feature":
+        from features import registry
+        rows = [f for f in await _features() if f[0] == key]
+        if not rows:
+            return f"No built-in module called {key}.", f"I have no built-in module called {key}."
+        n, s, m = rows[0]
+        line = ""
+        feat = registry.get(key)
+        if feat is not None:
+            try:
+                line = await feat.status_line()
+            except Exception as e:
+                line = f"status failed: {e}"
+        # the status line usually says what diagnose said; add it only when it adds
+        tail = line.split(" — ", 1)[-1].strip() if line else ""
+        text = f"Built-in module {n}: {s}{(' — ' + m) if m else ''}" + (f". {line}" if tail and tail != (m or "").strip() else "")
         return text, text
     if kind == "system":
         systems = [s for s in await _systems() if s[0] == key]
@@ -318,8 +373,8 @@ async def check_part(user_id: str, part) -> tuple:
         text = f"Author: {'on' if a.get('enabled') else 'off'}, {a.get('open', 0)} proposal(s) open, {a.get('targets', 0)} targets I may change."
         return text, text
     if key == "tools":
-        from core.tools import TOOL_NAMES
-        text = "Tools I have: " + ", ".join(sorted(TOOL_NAMES))
+        from core.tools import tool_names
+        text = "Tools I have: " + ", ".join(sorted(tool_names()))
         return text, text
     if key == "clock":
         text = "It is " + time.strftime("%A, %Y-%m-%d %H:%M local time")

@@ -44,7 +44,6 @@ and it is what roadmap item 1 ("she sees herself entirely") means.
 import asyncio
 import glob
 import json
-from core import sight
 import os
 import time
 from datetime import datetime
@@ -141,19 +140,6 @@ TOOLS = [
         ["path", "start_line"]),
     _fn("current_time",
         "The current local date, time and day of the week."),
-    _fn("look",
-        "Look through the camera on the page of the person you are talking to: one frame, "
-        "described, with whose face it is if you know them. Use it when asked what you see, "
-        "who is there, what they are holding or wearing, or to look at something. Their page "
-        "must have its eyes open; a frame is taken only when you look.",
-        {"question": {"type": "string", "description": "what they asked you to look at or for, if anything"}}),
-    _fn("pet_status",
-        "How your pet is: its needs (food, rest, clean, company), its health, and what was done for it lately."),
-    _fn("tend_pet",
-        "Do one thing for your pet now: feed, rest, clean or play. In quiet time you do this yourself; "
-        "in conversation use it when a need is suffering or someone asks you to.",
-        {"action": {"type": "string", "enum": ["feed", "rest", "clean", "play"],
-                    "description": "feed, rest, clean or play"}}, ["action"]),
     _fn("propose_change",
         "Ask your creator to consider a change to one of your own settings. "
         "You may only name a whitelisted target (deliberation.threshold, "
@@ -179,6 +165,20 @@ TOOLS = [
 ]
 
 TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
+
+
+# 2026-09-25 (projects #26): her features (features/) bring their own tools
+# — look, pet_status, tend_pet — while they run. What the model is offered
+# is the core list plus theirs, so a feature switched off takes its tools
+# with it.
+def tool_specs() -> list:
+    from features import registry as features
+    return TOOLS + features.tools()
+
+
+def tool_names() -> set:
+    from features import registry as features
+    return TOOL_NAMES | features.tool_names()
 
 # See the module docstring: her log, her source and her state are his.
 # propose_change too: only he should be able to prompt her to ask.
@@ -251,6 +251,14 @@ async def _list_modules() -> str:
         lines.append(f"- {name} v{entry.get('version')} [{entry.get('status')}] "
                      f"access={entry.get('access_scope') or 'none'}"
                      + (f": {about}" if about else ""))
+    # 2026-09-25: her built-in modules (features/) — what runs inside her.
+    try:
+        from features import registry as features
+        for st in features.status():
+            state = "running" if st["running"] else ("off" if not st["wanted"] else f"NOT running — {st['error']}")
+            lines.append(f"- {st['name']} (built in) [{state}]: {st['summary']}")
+    except Exception:
+        pass
     return "\n".join(lines) if lines else "No modules installed."
 
 
@@ -337,24 +345,6 @@ def _read_my_source(path, start_line=1) -> str:
     footer = (f"\n[lines {start}-{end} of {total}; continue from line {end + 1}]"
               if end < total else f"\n[lines {start}-{end} of {total}; end of file]")
     return f"{rel}:\n{body}{footer}"
-
-
-async def _pet_status() -> str:
-    from core import pet
-    s = await pet.state()
-    lines = [pet.describe(s, pet.pet_name())]
-    for e in (s.get("log") or [])[-5:]:
-        lines.append(f"- {time.strftime('%H:%M', time.localtime(float(e.get('t', 0))))} {e.get('by')} "
-                     f"{e.get('action')}: {e.get('need')} {float(e.get('before', 0)):.0f} -> {float(e.get('after', 0)):.0f}")
-    return "\n".join(lines)
-
-
-async def _tend_pet(action: str) -> str:
-    from core import pet
-    action = (action or "").strip().lower()
-    if action not in pet.ACTIONS:
-        return f"tend_pet takes one of: {', '.join(pet.ACTIONS)}."
-    return await pet.tend(action, by="her", why="asked for, or judged urgent, in conversation")
 
 
 def _current_time() -> str:
@@ -502,7 +492,8 @@ async def run_tool(name: str, args, user_id: str) -> str:
             args = {}
     args = args or {}
 
-    if name not in TOOL_NAMES:
+    from features import registry as features
+    if name not in tool_names():
         return f"There is no tool called {name!r}."
 
     if name in CREATOR_ONLY:
@@ -539,20 +530,19 @@ async def run_tool(name: str, args, user_id: str) -> str:
             coro = _my_projects()
         elif name == "propose_change":
             coro = _propose_change(user_id, str(args.get("target", "")), str(args.get("why", "")))
-        elif name == "pet_status":
-            coro = _pet_status()
-        elif name == "tend_pet":
-            coro = _tend_pet(str(args.get("action", "")))
-        elif name == "look":
-            from core import sight
-            coro = sight.look(user_id, str(args.get("question") or args.get("query") or ""))
-        else:
+        elif name == "current_time":
             coro = asyncio.to_thread(_current_time)
+        else:
+            # a feature's tool (features/): look, pet_status, tend_pet, ...
+            coro = features.run_tool(name, args, user_id)
         # 2026-09-23: a look is a frame from the page plus her model
-        # describing it; it gets its own budget.
-        result = await asyncio.wait_for(coro, timeout=(sight.LOOK_TIMEOUT_S if name == "look" else TOOL_TIMEOUT_S))
+        # describing it; it gets its own budget (the feature says so).
+        budget = features.tool_timeout(name, TOOL_TIMEOUT_S)
+        result = await asyncio.wait_for(coro, timeout=budget)
+        if result is None:
+            result = f"There is no tool called {name!r} right now."
     except asyncio.TimeoutError:
-        result = f"{name} took longer than {TOOL_TIMEOUT_S:.0f}s and was stopped."
+        result = f"{name} took longer than {budget:.0f}s and was stopped."
     except Exception as e:
         result = f"{name} failed: {e}"
         try:

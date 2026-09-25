@@ -1566,6 +1566,59 @@ async def set_system_value(key: str, value: str):
         await db.commit()
 
 
+# -------------------------
+# HER BUILT-IN MODULES (2026-09-25, projects #26; features/registry.py)
+# -------------------------
+# Two JSON values in system_learning. `features_wanted` is what he wants —
+# written by the Controller or by "disable module X" in conversation, read
+# by her process every few seconds. `features_state` is what she reports
+# is actually running — written by her registry, read by the Controller.
+# Separate on purpose: the Controller never depends on her being up.
+FEATURES_WANTED_KEY = "features_wanted"
+FEATURES_STATE_KEY = "features_state"
+
+
+async def get_features_wanted() -> dict:
+    raw = await get_system_value(FEATURES_WANTED_KEY, "{}")
+    try:
+        value = json.loads(raw or "{}")
+        return value if isinstance(value, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
+async def set_feature_wanted(name: str, enabled=None, by: str = "", why: str = "", reload: bool = False):
+    """Records a wish about one built-in module: on/off (enabled=True/False,
+    None to leave it), and/or a reload request (a timestamp her registry
+    honours once)."""
+    import time as _time
+    wanted = await get_features_wanted()
+    entry = dict(wanted.get(name) or {})
+    if enabled is not None:
+        entry["enabled"] = bool(enabled)
+        entry["by"] = by or ""
+        entry["why"] = (why or "")[:300]
+        entry["at"] = _time.time()
+    if reload:
+        entry["reload_at"] = _time.time()
+        entry["reload_by"] = by or ""
+    wanted[name] = entry
+    await set_system_value(FEATURES_WANTED_KEY, json.dumps(wanted))
+
+
+async def get_features_state() -> dict:
+    raw = await get_system_value(FEATURES_STATE_KEY, "{}")
+    try:
+        value = json.loads(raw or "{}")
+        return value if isinstance(value, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
+async def set_features_state(state: dict):
+    await set_system_value(FEATURES_STATE_KEY, json.dumps(state))
+
+
 async def get_learned_phrase(key: str, default: str) -> str:
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(

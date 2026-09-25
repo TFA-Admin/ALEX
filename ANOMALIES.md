@@ -880,3 +880,45 @@ cannot see — goes to his screen as a report, unspoken, and she speaks
 the summary in her own words with the cap lifted for that turn. A named
 part ("check the camera", "check the inquiry module", "check your
 memory") is checked alone. Measured: 1.2 s, 11 systems, 3 modules.
+
+### Proposal #11 was proposal #6 again (2026-09-25)
+Craig asked for a check of her open proposals. #11 (deliberation.threshold
+7 -> 6, 14:53) is the change he rejected as #6 at 13:20, re-proposed
+ninety minutes later with the same reasoning, because nothing told the
+author what he had decided: it saw the setting, the scores and the
+numbers, never his verdicts. **Fixed** (`core/self_author.py`): the
+prompt now carries WHAT HE DECIDED BEFORE ON THIS SETTING — his
+rejections and approvals of the last 30 days, with his reasons — and a
+value he rejected in that window is refused in code before it reaches
+him, the way a backwards direction is. #11 itself still waits for his
+decision; the fix stops the next one.
+
+### The rejection reasons on #6 and #7 were swapped (2026-09-25)
+#6 (deliberation.threshold) carried "the 5000-character budget does the
+truncating…", which is about memory.window_turns; #7 (memory.window_turns)
+carried "a threshold of 6 doesn't touch those…". Each names the other's
+subject, so they were typed into the other's dialog (the dialog shows the
+proposal's title; the Inbox code takes the row at the moment of the
+click, so it was not a stale selection). Swapped back on both rows and
+recorded as a correction decision; the original decision rows (#244,
+#245) stand as the record of what was typed. It matters now because the
+author reads these reasons.
+
+### Her built-in parts were not modules (2026-09-25, projects #26)
+Craig: "Are we still placing these additions into modules or have we lost
+sight of that?" We had: mood, sight, the pet, what he values, curiosity,
+retention and her author were each a loop in main.py, a block in the LLM
+system's prompt, a tool in core/tools.py and a send in the WebSocket
+handler. **Now** (`features/`): one shape (features/base.py — start/stop,
+tick, prompt block, tools, events, self-check) and a registry
+(features/registry.py) that starts them, ticks them, reloads them when
+their files change, and switches them off and on from the database the
+Controller writes. Eight features: personality (her dials), mood, sight,
+values, pet, curiosity, retention, author. "Off" is off: no prompt block,
+no tools, no ticks, and the engine's gate (core/mood.note) does nothing.
+The engines stay in core/ — modularity is about self-adjustment, not
+packaging. She answers "disable/enable/reload module mood"; the
+Controller's Her -> Modules tab has the switches and what she reports.
+Measured in process: start 0.8 s, all eight prompt blocks 0.10 s, a
+reload of sight 16 ms; features suite 14/14, mood 28/28.
+

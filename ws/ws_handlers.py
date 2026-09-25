@@ -14,6 +14,7 @@ from llm.ollama_client import locked_fields
 from identity.identity_manager import identity_manager
 from core import sight
 from core import readiness
+from features import registry as features
 from core.voice import say
 from db.db import remember_own_utterance, session_opened, session_verified, session_heard, session_closed
 from core import idle_author
@@ -313,10 +314,10 @@ async def ws_text(websocket: WebSocket):
         except Exception:
             pass
         # 2026-09-23: her mood as it is now (core/mood.py), so the orb
-        # does not open calm when she is not.
+        # does not open calm when she is not. 2026-09-25: an event her
+        # features hear (features/mood.py sends the orb its state).
         try:
-            from core import mood as _mood
-            await websocket.send_text("__MOOD__" + _mood.payload(await _mood.state()))
+            await features.emit("connect", websocket=websocket, session=session, user_id=user_id)
         except Exception:
             pass
 
@@ -410,7 +411,7 @@ async def ws_text(websocket: WebSocket):
         # enrolled and his page has its eyes open, one frame verifies him
         # and she does not ask him to speak; otherwise the voice path below
         # runs exactly as before.
-        if role in ("creator", "super_user") and not session.get("creator_verified"):
+        if role in ("creator", "super_user") and not session.get("creator_verified") and features.is_on("sight"):
             try:
                 await sight.verify_at_connect(websocket, _active_connections[session_id], session, session_id, user_id)
             except Exception as e:
@@ -509,8 +510,8 @@ async def ws_text(websocket: WebSocket):
                 # greeted me and immediately cut herself off to propose a
                 # curiosity she had"). The wait runs beside the main loop so
                 # his next words are not held up by it.
-                questions = await fetch_undelivered_curiosity_questions(
-                    user=user_id, creator=(role == "creator"))
+                questions = (await fetch_undelivered_curiosity_questions(
+                    user=user_id, creator=(role == "creator"))) if features.is_on("curiosity") else []
 
                 if questions:
                     asyncio.create_task(_ask_when_quiet(websocket, session_id, user_id, questions[0]))

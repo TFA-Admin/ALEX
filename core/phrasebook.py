@@ -194,6 +194,14 @@ PHRASE_REGISTRY = {
         "Failed to reload '{name}'.",
         "Tell the person a specific system failed to reload. {name} is a placeholder for the system name — keep it in the phrase."
     ),
+    "module_reloaded": (
+        "Module '{name}' is back up.",
+        "Confirm a specific module of hers was taken offline, re-read from disk and started again. {name} is a placeholder for the module name — keep it in the phrase."
+    ),
+    "module_reload_failed": (
+        "Module '{name}' did not come back: {why}",
+        "Tell the person a specific module of hers failed to reload and is stopped. {name} and {why} are placeholders — keep both in the phrase."
+    ),
     "db_table_name_missing": (
         "Specify a table name.",
         "Ask for a database table name because none was given."

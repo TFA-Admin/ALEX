@@ -19,6 +19,25 @@ from systems.controller._role_gates import require_privileged, require_creator
 from core.text_utils import strip_trailing_punctuation, first_word
 from core.phrasebook import get_phrase
 
+
+def _feature_named(spoken: str):
+    """'mood', 'the mood module', 'my sight feature' -> the feature's name,
+    or None. Built-in modules live in features/ (see features/base.py)."""
+    try:
+        from features import registry as features
+        known = features.names()
+    except Exception:
+        return None
+    words = [w for w in re.sub(r"[^a-z0-9_ ]", " ", (spoken or "").lower()).split()
+             if w not in ("the", "my", "your", "her", "module", "feature", "built", "in")]
+    key = "_".join(words)
+    if key in known:
+        return key
+    for w in words:
+        if w in known:
+            return w
+    return None
+
 # user_id -> request_id awaiting a yes/no confirmation. Module-level
 # state (not session-scoped), same short-lived two-turn pattern
 # systems/modules/system.py's pending_builds already uses reliably.
@@ -108,6 +127,15 @@ async def handle(session, user_id: str, text: str, msg: str):
 
         entry = await get_module_registry_entry(name)
         if not entry:
+            # 2026-09-25 (projects #26): her built-in modules (features/)
+            # answer to the same words. Durable, like the registry: off
+            # stays off across her restarts until switched on.
+            fname = _feature_named(name)
+            if fname:
+                from features import registry as features
+                ok, why = await features.disable(fname, by=user_id, why="asked in conversation")
+                logger.info(f"[ACTION] Built-in module '{fname}' disabled (by {user_id}): {why}")
+                return {"type": "response", "content": await get_phrase("module_disabled", name=fname)}
             return {"type": "response", "content": await get_phrase("module_not_found", name=name)}
 
         await set_module_status(name, "disabled")
@@ -124,6 +152,13 @@ async def handle(session, user_id: str, text: str, msg: str):
 
         entry = await get_module_registry_entry(name)
         if not entry:
+            fname = _feature_named(name)
+            if fname:
+                from features import registry as features
+                ok, why = await features.enable(fname, by=user_id, why="asked in conversation")
+                logger.info(f"[ACTION] Built-in module '{fname}' enabled (by {user_id}): {why}")
+                key = "module_enabled" if ok else "module_reload_failed"
+                return {"type": "response", "content": await get_phrase(key, name=fname, why=why)}
             return {"type": "response", "content": await get_phrase("module_not_found", name=name)}
 
         await set_module_status(name, "enabled")
@@ -131,17 +166,50 @@ async def handle(session, user_id: str, text: str, msg: str):
 
         return {"type": "response", "content": await get_phrase("module_enabled", name=name)}
 
+    if msg.startswith("reload module"):
+        # 2026-09-25 (Craig: "she would take it offline, perform the change
+        # and bring it back up"): a built-in module is stopped, re-read from
+        # disk with the core files it owns, and started again. Creator only,
+        # like "reload system". Sandboxed modules (modules/) reload
+        # themselves on every call, so for them this only confirms.
+        denial = await require_creator(user_id, session, text)
+        if denial:
+            return denial
+
+        name = strip_trailing_punctuation(msg.replace("reload module", "").strip())
+        if not name:
+            return {"type": "response", "content": await get_phrase("module_name_missing")}
+
+        fname = _feature_named(name)
+        if fname:
+            from features import registry as features
+            ok, why = await features.reload(fname)
+            logger.info(f"[ACTION] Built-in module '{fname}' reload by {user_id}: {why}")
+            if ok:
+                return {"type": "response", "content": await get_phrase("module_reloaded", name=fname)}
+            return {"type": "response", "content": await get_phrase("module_reload_failed", name=fname, why=why)}
+        if await get_module_registry_entry(name):
+            return {"type": "response", "content": await get_phrase("module_reloaded", name=name)}
+        return {"type": "response", "content": await get_phrase("module_not_found", name=name)}
+
     if msg.startswith("list modules"):
         denial = await require_privileged(user_id, session, text)
         if denial:
             return denial
 
         modules = await list_module_registry()
+        lines = [f"{m['name']} (v{m['version']}, {m['status']})" for m in modules]
+        # 2026-09-25: her built-in modules too (features/)
+        try:
+            from features import registry as features
+            lines += [f"{st['name']} (built in, {'running' if st['running'] else ('off' if not st['wanted'] else 'NOT running')})"
+                      for st in features.status()]
+        except Exception:
+            pass
 
-        if not modules:
+        if not lines:
             return {"type": "response", "content": await get_phrase("no_modules_built")}
 
-        lines = [f"{m['name']} (v{m['version']}, {m['status']})" for m in modules]
         return {"type": "response", "content": "\n".join(lines)}
 
     # -------------------------

@@ -48,69 +48,21 @@ async def periodic_decay():
 
 
 # -------------------------
+# HER BUILT-IN MODULES (2026-09-25, projects #26)
+# -------------------------
+# Retention, glances, the pet's care pass, the mood tick and her idle
+# author each used to be a loop here. They are features now
+# (features/*.py, one shape: start/stop, tick, prompt block, tools,
+# events, self-check), started by features/registry.py below, switched
+# on and off from the Controller or by "disable module X", and reloaded
+# when their files change. Craig: "in the future I can say to her to make
+# a change to her personality module, and she would take it offline,
+# perform the change and bring it back up as needed."
+
+
+# -------------------------
 # SELF-REFLECTION LOOP (personality — fully autonomous, no approval gate)
 # -------------------------
-async def periodic_retention():
-    """2026-09-23: once a day she forgets what is not worth keeping
-    (core/retention.py). First pass ten minutes after start."""
-    from core import retention
-    await asyncio.sleep(600)
-    while True:
-        try:
-            await retention.prune()
-        except Exception as e:
-            logger.warning(f"⚠️ retention failed: {e}")
-        await asyncio.sleep(24 * 3600)
-
-
-async def periodic_glances():
-    """2026-09-23 (Craig: "snapshots, not video... glances, an
-    observation store, and observations feeding her curiosity"). While a
-    page has its eyes open and nothing is being said, one frame a
-    minute, compared cheaply with the last; only a changed scene goes to
-    her model (core/sight.py)."""
-    from core import sight
-    await asyncio.sleep(30)
-    while True:
-        try:
-            await sight.glance_all()
-        except Exception as e:
-            logger.warning(f"⚠️ glance pass failed: {e}")
-        await asyncio.sleep(sight.GLANCE_EVERY_S)
-
-
-async def periodic_pet():
-    """2026-09-25 (Craig: "a virtual pet for her to take care of"): every
-    ten minutes the pet's needs drift and, in quiet time, she tends the
-    lowest one herself (core/pet.py)."""
-    from core import pet
-    await asyncio.sleep(90)
-    while True:
-        try:
-            await pet.care_pass()
-        except Exception as e:
-            logger.warning(f"⚠️ pet care failed: {e}")
-        await asyncio.sleep(10 * 60)
-
-
-async def periodic_mood_tick():
-    """2026-09-23: her mood fades on its own (core/mood.py); the orb is
-    told once a minute so it fades too, instead of the page guessing."""
-    from core import mood as her_mood
-    from ws.ws_handlers import broadcast_signal, _active_connections
-    while True:
-        await asyncio.sleep(60)
-        try:
-            if _active_connections:
-                await broadcast_signal("__MOOD__" + her_mood.payload(await her_mood.state()))
-                try:
-                    from core import pet as her_pet
-                    import json as _json
-                    await broadcast_signal("__PET__" + _json.dumps(her_pet.status_for_page(await her_pet.state())))
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.warning(f"⚠️ mood tick failed: {e}")
 
 
 async def periodic_self_reflection():
@@ -202,16 +154,18 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(periodic_decay())
     asyncio.create_task(periodic_self_reflection())
     asyncio.create_task(periodic_proactive_check())
-    asyncio.create_task(periodic_mood_tick())
-    asyncio.create_task(periodic_retention())
-    asyncio.create_task(periodic_glances())
-    asyncio.create_task(periodic_pet())
-    # 2026-09-21 (roadmap item 6): her author, when nobody is talking to
-    # her. Writes one 'authored' proposal row at a time; nothing more.
-    from core import idle_author
-    asyncio.create_task(idle_author.run())
+    # 2026-09-25: her built-in modules — mood, sight, the pet, what he
+    # values, curiosity, retention, her author, her dials — as features.
+    from features import registry as features
+    await features.start_all()
+    logger.info("🧩 Features started")
 
     yield
+
+    try:
+        await features.stop_all()
+    except Exception as e:
+        logger.warning(f"⚠️ stopping features: {e}")
 
     # 2026-07-18: the persistent Piper process (speech/tts_engine.py)
     # needs an explicit kill on shutdown — exactly the kind of orphaned

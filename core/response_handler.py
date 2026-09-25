@@ -26,6 +26,7 @@ from core.alex_core import alex_core
 _SENTENCE_ENDS = ".!?\u2026\"'\u201d\u2019)]*"
 _ANY_SENTENCE_END = re.compile(r"[.!?\u2026]")
 from core import mood as her_mood
+from features import registry as features
 from db.db import record_response_timing
 from config.logger_config import logger
 
@@ -225,9 +226,12 @@ class ResponseHandler:
         # its way, never blocks or slows it down. See core/mood.py.
         # 2026-09-23: her reply's tone is one input to a real mood state;
         # what the orb gets is the state (core/mood.py).
-        if not interrupted and full_response:
-            await her_mood.note_reply(full_response, user_id)
-            await websocket.send_text("__MOOD__" + her_mood.payload(await her_mood.state()))
+        # 2026-09-25: the reply is an event her features hear (features/):
+        # mood tells the orb, values keeps the reply's shape for his next
+        # thanks or correction.
+        await features.emit("reply", websocket=websocket, user_id=user_id, session=session,
+                            text=full_response, interrupted=interrupted,
+                            looked=bool(session.pop("last_reply_looked", False)) if session is not None else False)
 
         # 2026-07-17 (Craig: "over the course of a long response... when
         # I said I agree she didn't hear it") — the wake-word conversation
@@ -270,11 +274,8 @@ class ResponseHandler:
                     still_playing = max(0.0, first_audio_at + audio_seconds - time.time())
                 session["last_addressed_at"] = time.time() + still_playing
                 await websocket.send_text("__ENGAGED__1")
-            # 2026-09-25: the shape of this reply, for core/values.py — what
-            # his next thanks or correction is about.
+            # 2026-09-25: her last replies, for "you made that up" (core/claims.py)
             try:
-                from core import values as her_values
-                session["last_reply"] = her_values.reply_shape(full_response, session.pop("last_reply_looked", False))
                 hist = list(session.get("reply_history") or [])
                 hist.append(full_response[:400])
                 session["reply_history"] = hist[-3:]      # for "you made that up" (core/claims.py)
@@ -347,8 +348,8 @@ class ResponseHandler:
         await websocket.send_text("__PROFILE__" + json.dumps(updated))
 
         if content:
-            await her_mood.note_reply(content, user_id)
-            await websocket.send_text("__MOOD__" + her_mood.payload(await her_mood.state()))
+            await features.emit("reply", websocket=websocket, user_id=user_id, session=session,
+                                text=content, interrupted=False, looked=False)
 
         # See the matching comments in _handle_stream — refreshes the
         # wake-word conversation window from when she finishes speaking,

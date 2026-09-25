@@ -66,6 +66,16 @@ async def current_disabled() -> dict:
     except Exception:
         pass      # a registry read failing must never break a conversation
 
+    # 2026-09-25: her built-in modules (features/) switched off by him —
+    # something she should notice and may ask about, like the rest.
+    try:
+        from db.db import get_features_wanted
+        for name, entry in (await get_features_wanted()).items():
+            if not (entry or {}).get("enabled", True):
+                off[f"feature:{name}"] = f"your built-in '{name}' module"
+    except Exception:
+        pass
+
     return off
 
 

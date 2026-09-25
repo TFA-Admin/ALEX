@@ -33,6 +33,7 @@ from db.db import (
     fetch_projects, create_project, update_project, PROJECT_STATUSES, record_decision,
     list_module_registry, fetch_module_versions, get_module_version_code,
     get_module_registry_entry, register_module_version,
+    get_features_wanted, set_feature_wanted, get_features_state,
     persona_disabled, PERSONA_FLAG_PATH,
 )
 from core.intent_classifier import merge_personality_change
@@ -838,7 +839,41 @@ class HerView(QWidget):
         page = QWidget()
         lay = QVBoxLayout()
 
-        lay.addWidget(QLabel("Installed modules:"))
+        # 2026-09-25 (projects #26; Craig: "she would take it offline,
+        # perform the change and bring it back up"): her built-in modules
+        # (features/). What is WANTED is written here and read by her
+        # process within seconds; what is RUNNING is what she last
+        # reported — this tab never depends on her being up.
+        lay.addWidget(QLabel(
+            "Her built-in modules (features/): mood, sight, the pet, what he values, curiosity, retention, "
+            "her author, her dials. Off here is off in her within seconds and stays off across restarts. "
+            "'Running' is what she last reported; while she is down it is her last word."))
+        self.features_table = QTableWidget()
+        self.features_table.setColumnCount(7)
+        self.features_table.setHorizontalHeaderLabels(
+            ["Name", "Wanted", "Running", "What it is", "Tools", "Last tick", "Note"])
+        self.features_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.features_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        make_readable(self.features_table, wrap_column=3)
+        lay.addWidget(self.features_table)
+        fbtns = QHBoxLayout()
+        self.feature_on_btn = QPushButton("▶ Switch on")
+        self.feature_on_btn.clicked.connect(lambda: self._set_feature(True))
+        fbtns.addWidget(self.feature_on_btn)
+        self.feature_off_btn = QPushButton("⏸ Switch off (with reason)")
+        self.feature_off_btn.clicked.connect(lambda: self._set_feature(False))
+        fbtns.addWidget(self.feature_off_btn)
+        self.feature_reload_btn = QPushButton("🔁 Reload from disk")
+        self.feature_reload_btn.setToolTip("She stops it, re-reads its file and the core files it owns, and starts it again")
+        self.feature_reload_btn.clicked.connect(self.reload_feature)
+        fbtns.addWidget(self.feature_reload_btn)
+        fbtns.addStretch(1)
+        self.features_refresh_btn = QPushButton("🔄 Refresh")
+        self.features_refresh_btn.clicked.connect(self.refresh_features)
+        fbtns.addWidget(self.features_refresh_btn)
+        lay.addLayout(fbtns)
+
+        lay.addWidget(QLabel("Installed command modules (modules/, sandboxed):"))
         self.module_status_table = QTableWidget()
         self.module_status_table.setColumnCount(6)
         self.module_status_table.setHorizontalHeaderLabels(
@@ -883,7 +918,82 @@ class HerView(QWidget):
         page.setLayout(lay)
         return page
 
+    def refresh_features(self):
+        from features import registry as _features
+        try:
+            wanted = asyncio.run(get_features_wanted())
+            state = asyncio.run(get_features_state())
+        except Exception as e:
+            self.note(f"⚠️ Failed to read her built-in modules: {e}")
+            return
+        reported = {st["name"]: st for st in (state.get("features") or [])}
+        age = _time.time() - float(state.get("at") or 0)
+        stale = age > 120
+        names = sorted(set(_features.discover()) | set(reported))
+        self.features_table.setRowCount(len(names))
+        for row, name in enumerate(names):
+            w = wanted.get(name) or {}
+            st = reported.get(name) or {}
+            want = "on" if w.get("enabled", True) else f"OFF ({w.get('by') or '?'})"
+            if not st:
+                running = "never reported"
+            elif stale:
+                running = ("was running" if st.get("running") else "was off") + f" ({int(age // 60)} min ago)"
+            else:
+                running = "running" if st.get("running") else ("off" if not st.get("wanted", True) else "NOT running")
+            note = st.get("error") or st.get("tick_error") or (w.get("why") if not w.get("enabled", True) else "")
+            last = st.get("last_tick") or 0
+            fill_row(self.features_table, row, [
+                name, want, running, st.get("summary") or "", ", ".join(st.get("tools") or []),
+                _time.strftime("%H:%M:%S", _time.localtime(float(last))) if last else "", note or ""])
+        self.features_table.resizeRowsToContents()
+
+    def _selected_feature(self):
+        rows = selected_rows(self.features_table)
+        if not rows:
+            self.note("⚠️ Select a built-in module first.")
+            return None
+        item = self.features_table.item(rows[0], 0)
+        return item.text() if item else None
+
+    def _set_feature(self, on: bool):
+        name = self._selected_feature()
+        if not name:
+            return
+        why = ""
+        if not on:
+            from PySide6.QtWidgets import QInputDialog
+            why, ok = QInputDialog.getText(
+                self, "Switch off", f"Why is '{name}' being switched off? She may ask; this is the answer she gets.")
+            if not ok:
+                return
+        try:
+            asyncio.run(set_feature_wanted(name, enabled=on, by="craig", why=why.strip()))
+            asyncio.run(record_decision(
+                "module", f"Craig switched the built-in module '{name}' {'on' if on else 'off'}",
+                reasoning=why.strip() or ("switched on at the Controller" if on else "no reason given"),
+                evidence="Her -> Modules", outcome="she applies it within a few seconds while running; it holds across restarts",
+                actor="craig"))
+        except Exception as e:
+            self.note(f"⚠️ Could not record it: {e}")
+            return
+        self.note(f"[SYSTEM] Built-in module '{name}' wanted {'ON' if on else 'OFF'} — she reads this within a few seconds")
+        self.refresh_features()
+
+    def reload_feature(self):
+        name = self._selected_feature()
+        if not name:
+            return
+        try:
+            asyncio.run(set_feature_wanted(name, by="craig", reload=True))
+        except Exception as e:
+            self.note(f"⚠️ Could not request the reload: {e}")
+            return
+        self.note(f"[SYSTEM] Reload of '{name}' requested — she stops it, re-reads it and starts it again within a few seconds")
+        self.refresh_features()
+
     def refresh_module_status(self):
+        self.refresh_features()
         try:
             modules = asyncio.run(list_module_registry())
         except Exception as e:

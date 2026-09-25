@@ -126,7 +126,8 @@ async def periodic_proactive_check():
     while True:
         await asyncio.sleep(PROACTIVE_CHECK_INTERVAL_S)
         try:
-            await _check_curiosity_delivery()
+            # 2026-09-25: curiosity delivery is the curiosity feature's tick
+            # (features/curiosity.py); this loop keeps the idle check-in.
             await _check_idle_checkin()
         except Exception as e:
             logger.exception(f"❌ Proactive check failed: {e}")

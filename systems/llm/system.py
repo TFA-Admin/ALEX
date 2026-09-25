@@ -62,6 +62,7 @@ from db.db import (
 )
 from core.knowledge_filter import is_worth_keeping
 from core import self_model, corrections as corr, tools as her_tools, deliberation, claims as her_claims, traits as her_traits, mood as her_mood
+from features import registry as features
 
 
 def _mood_slow(seconds: float, after: float = 12.0):
@@ -298,33 +299,9 @@ class System(BaseSystem):
         # Deliberately requires something substantial — "yeah" or "ok" is
         # acknowledgement, not an answer, and storing it would close the
         # question while teaching her nothing.
-        awaiting_topic = session.pop("awaiting_curiosity_answer", None)
-        # 2026-09-25: if he was already talking before she finished asking,
-        # he was answering what came before, not her question. Keep waiting.
-        if awaiting_topic and time.time() < session.get("curiosity_asked_until", 0):
-            logger.info(f"[ACTION] Curiosity about {awaiting_topic!r}: he spoke before she finished asking — not the answer, still waiting")
-            session["awaiting_curiosity_answer"] = awaiting_topic
-            awaiting_topic = None
-        if awaiting_topic and len(user_input.split()) >= 4:
-            try:
-                if await answer_curiosity_question(awaiting_topic, user_input):
-                    await record_decision(
-                        "curiosity",
-                        f"Got an answer about {awaiting_topic}",
-                        reasoning="She asked, and this is what he said back — "
-                                  "his words, not something she worked out.",
-                        evidence=user_input[:300],
-                        outcome="kept, and she will not ask again",
-                        actor=user_id)
-                    logger.info(
-                        f"[ACTION] Curiosity about {awaiting_topic!r} answered: "
-                        f"{user_input[:80]!r}")
-                    await her_mood.note("curiosity_answered", who=user_id)
-            except Exception as e:
-                logger.warning(f"⚠️ could not keep the answer: {e}")
-        elif awaiting_topic:
-            # Too short to be an answer — keep waiting one more turn.
-            session["awaiting_curiosity_answer"] = awaiting_topic
+        # 2026-09-25 (projects #26): the capture itself lives in
+        # features/curiosity.py — the turn is an event her features hear.
+        await features.emit("turn", user_id=user_id, session=session, text=user_input)
 
         # 2026-09-23: a real conversation engages her (core/mood.py).
         if len(user_input.split()) >= 25:
@@ -348,11 +325,7 @@ class System(BaseSystem):
                 logger.warning(f"⚠️ could not learn from his correction: {e}")
         if her_mood.THANKS_RE.search(user_input):
             await her_mood.note("thanked", who=user_id)     # creator resolved by name in mood.note
-            try:
-                from core import values as her_values
-                await her_values.note_signal("thanks", user_id, session.get("last_reply"))
-            except Exception as e:
-                logger.warning(f"⚠️ could not keep the thanks signal: {e}")
+            await features.emit("thanked", user_id=user_id, session=session)      # features/values.py
 
         # -------------------------
         # "STOP SAYING THAT" (2026-09-20)
@@ -435,12 +408,7 @@ class System(BaseSystem):
 
                 session["just_corrected"] = told
                 await her_mood.note("corrected", who=user_id, creator=is_creator)
-                if is_creator:
-                    try:
-                        from core import values as her_values
-                        await her_values.note_signal("correction", user_id, session.get("last_reply"))
-                    except Exception as e:
-                        logger.warning(f"⚠️ could not keep the correction signal: {e}")
+                await features.emit("corrected", user_id=user_id, session=session, creator=is_creator)
             else:
                 # 2026-09-20 (Craig: "would she ask for clarification if I
                 # were to say dont say that on the first utterance"). She
@@ -624,7 +592,7 @@ class System(BaseSystem):
                 # is a look, whatever the classifier scored (it gave it 0).
                 try:
                     from core import sight as _sight
-                    if _sight.wants_a_look(user_id, user_input):
+                    if features.is_on("sight") and _sight.wants_a_look(user_id, user_input):
                         needs = dict(needs) if isinstance(needs, dict) else {}
                         if needs.get("sight", 0) < 8:
                             needs["sight"] = 8
@@ -937,99 +905,27 @@ class System(BaseSystem):
         # See core/self_model.py for the measured failure this answers.
         absolute_rules_block = self_model.absolute_block()
 
-        # 2026-09-22: the dials (core/traits.py). Rendered as words below
-        # the rules; the verbosity dial also caps the reply's tokens.
-        # 2026-09-23: his standing adjustments plus her mood right now
-        # (core/mood.py) — the mood adds temporary offsets that grow with
-        # how she is, and one line saying why, so what she is rendered
-        # with this turn is the sum.
-        try:
-            dials = await get_personality_traits()
-        except Exception as e:
-            logger.warning(f"⚠️ could not read her dials: {e}")
-            dials = None
-        try:
-            mood_state = await her_mood.state()
-        except Exception as e:
-            logger.warning(f"⚠️ could not read her mood: {e}")
-            mood_state = None
-        dials = her_traits.effective(dials, her_mood.dial_offsets(mood_state) if mood_state else {})
-        dials_block = her_traits.render(dials, mood_line=her_mood.line(mood_state) if mood_state else "")
+        # 2026-09-25 (projects #26): her dials come from the personality
+        # feature (features/personality.py) — his standing adjustments plus
+        # what her mood adds — and cap the reply's tokens. Every other block
+        # that used to be wired here (what she saw this turn, what she has
+        # noticed, what he values, her pet, a question of hers his words
+        # brought back) is a feature's prompt_block (features/), rendered in
+        # feature order. A feature that is off contributes nothing.
+        dials = None
+        _pers = features.get("personality")
+        if _pers is not None:
+            try:
+                dials, _mood_state = await _pers.effective_dials()
+            except Exception as e:
+                logger.warning(f"⚠️ could not read her dials: {e}")
         reply_tokens = her_traits.num_predict(dials)
         if diag_turn:
             # 2026-09-25: a sweep summary does not fit in a 20-word cap; she
             # gets room for the numbers and the problems this one turn.
             reply_tokens = max(reply_tokens, 160)
-
-        # 2026-09-23: a look this turn is repeated here, last thing before
-        # she speaks. Among the context blocks it lost to a conversation
-        # window full of her own "the camera remains dark".
-        saw_now = her_claims.look_saw("\n".join(context_blocks)) if context_blocks else ""
-        sight_block = ((f"\n\n    YOU LOOKED THROUGH THE CAMERA JUST NOW AND SAW: {saw_now}"
-                        "\n    The camera is on and that is the picture. Say what you saw; never say it is dark or that you cannot see.")
-                       if saw_now else "")
-
-        # 2026-09-23: what her glances found lately (core/sight.py), so she
-        # can refer to it — "the can that has been on your desk since three".
-        noticed_block = ""
-        try:
-            from db.db import fetch_observations as _fetch_obs
-            _obs = await _fetch_obs(user_id, hours=2.0, limit=3)
-        except Exception:
-            _obs = []
-        if _obs:
-            _lines = "\n".join(f"    - {o['text']}" for o in reversed(_obs))
-            # 2026-09-25 (Craig: "she is now saying 'glancing at the camera'"):
-            # the word "glances" in this header became her verb. What she
-            # has is things she noticed; the looking is never described.
-            noticed_block = ("\n\n    THINGS YOU HAVE NOTICED THROUGH THE CAMERA LATELY (bring one up only if it matters "
-                             "or he asks, and then say what you noticed — never say you glanced, looked, checked "
-                             "or are watching):\n" + _lines)
-
-        # 2026-09-25 (Craig: "let reflection conclude 'he values short
-        # answers'... carry those as standing preferences"): core/values.py,
-        # arithmetic on his thanks and corrections, never on agreement.
-        values_block = ""
-        try:
-            from core import values as her_values
-            values_block = her_values.render(await her_values.lines_for(user_id))
-        except Exception as e:
-            logger.warning(f"⚠️ could not read what he values: {e}")
-
-        # 2026-09-25 (Craig: "a virtual pet for her to take care of... give
-        # her something to interact with to teach her things"): its state,
-        # one line (core/pet.py). What she says about it is hers.
-        pet_block = ""
-        try:
-            from core import pet as her_pet
-            _ps = await her_pet.state()
-            pet_block = ("\n\n    YOUR PET — " + her_pet.describe(_ps, her_pet.pet_name())
-                         + ". You tend it yourself in quiet time; in conversation, tend_pet only if a need is "
-                           "suffering or someone asks. Mention it only if it matters or he asks.")
-        except Exception as e:
-            logger.warning(f"⚠️ could not read the pet: {e}")
-
-        # 2026-09-25 (Craig: "I'm seeing a backlog of questions in her
-        # system. Is she not able to bring old questions up again?"): when
-        # what he says touches the topic of an unanswered question of hers
-        # — one she let go after two asks included — she may ask it now.
-        recall_block = ""
-        if not session.get("awaiting_curiosity_answer"):
-            try:
-                from db.db import fetch_relevant_curiosity as _frc, mark_curiosity_question_asked as _mark
-                _rel = await _frc(user_id, user_input)
-            except Exception:
-                _rel = None
-            if _rel:
-                before = ("you asked before and got no answer" if _rel.get("delivered") else "you never got to ask")
-                recall_block = (f"\n\n    HE HAS JUST TOUCHED ON SOMETHING YOU WANTED TO KNOW ({before}): "
-                                f"\"{_rel['question']}\" If it fits, ask it now in your own words, after your answer.")
-                session["awaiting_curiosity_answer"] = _rel["topic"]
-                try:
-                    await _mark(_rel["topic"])
-                except Exception:
-                    pass
-                logger.info(f"[CURIOSITY] the topic {_rel['topic']!r} came up — bringing her question back")
+        feature_blocks = await features.prompt_blocks(
+            user_id=user_id, session=session, text=user_input, context_blocks=context_blocks)
 
         # 2026-09-23 (Craig: "she now claims I did not authenticate when I
         # can see it did"): nothing told her. The session, stated plainly,
@@ -1077,7 +973,7 @@ class System(BaseSystem):
 
     PERSONALITY (this is genuinely yours — express it, don't fight it):
     {personality}
-{hard_rules_block}{dials_block}{sight_block}{noticed_block}{values_block}{pet_block}{recall_block}{session_block}
+{hard_rules_block}{feature_blocks}{session_block}
 
     You have access to stored information about the user.
 
@@ -1333,7 +1229,7 @@ class System(BaseSystem):
                 while True:
                     calls = []
                     said = ""
-                    offer_tools = her_tools.TOOLS if (allow_tools and rounds < her_tools.MAX_CALLS_PER_TURN) else None
+                    offer_tools = her_tools.tool_specs() if (allow_tools and rounds < her_tools.MAX_CALLS_PER_TURN) else None
                     async for kind, payload in chat_stream(messages, tools=offer_tools, **_cs_kwargs):
                         if kind == "tool_calls":
                             calls.extend(payload)

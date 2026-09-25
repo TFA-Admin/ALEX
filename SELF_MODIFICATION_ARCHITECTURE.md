@@ -93,6 +93,29 @@ and context does not survive between them; the roadmap records decisions,
 this records **where we stopped**. Keep it short, keep it current, delete
 items when they land.
 
+**2026-09-25 (evening) — feature modules landed (projects #26).** Her
+built-in parts are modules now: `features/<name>.py`, one shape
+(`features/base.py`: start/stop, tick, prompt_block, tools/run_tool,
+on(event), diagnose, status_line) and a registry (`features/registry.py`)
+that discovers them, starts the wanted ones, ticks them on their own
+intervals, hot-reloads them when their file or any owned core file
+changes, and reads what he WANTS from `system_learning.features_wanted`
+(written by the Controller's Her -> Modules tab or by "disable/enable/
+reload module X") while writing what RUNS to `features_state` (read by
+the Controller). Eight features: personality (dials), mood, sight
+(look + glances), values, pet, curiosity (delivery + recall + answer
+capture), retention, author. The engines stay in `core/` and each
+feature declares what it `owns`; a reload re-imports those too. Off is
+off: the LLM prompt is `{hard_rules}{feature_blocks}{session}`, tools are
+core + features, and `core/mood.note()` is gated. `tests/suites/features.py`
+(14 cases). Still hand-wired, on purpose: the personality text, hard
+rules and persona switch (the kill path), the claim check, deliberation,
+the systems/ tier. **Next for "change your personality module"**: Limits
+(#11) then module authoring (#18) — the author's whitelist could now
+name `features/personality.py` as a target, but not before Limits.
+Also today: the author reads his past decisions on a setting and
+refuses a value he rejected within 30 days (#11 had repeated #6).
+
 **2026-09-21 (next session, Fable): read "## Landed 2026-09-21" below
 first.** It corrects two claims made in the small hours of 2026-09-21 and
 records a loop that was closed and reopened the same day.

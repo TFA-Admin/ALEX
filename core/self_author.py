@@ -91,6 +91,9 @@ WHAT THE NUMBERS SAY ABOUT THIS SETTING (measured just now, from your own logs a
 WHY THIS IS BEING LOOKED AT:
 {why}
 
+WHAT HE DECIDED BEFORE ON THIS SETTING (his words; a value he rejected is NOT to be proposed again unless your rationale answers his reason directly — and even then, prefer a different value):
+{history}
+
 {bounds}
 Propose the value you believe is better. Begin your rationale with ONE sentence a person who has not read the code would understand — what this setting is and what your change will do to you in practice (for example: "This is how sure I must be before I look something up; at 6 I will look things up a little more often before answering."). Never say "the threshold" or "the window" without saying of what. Then two or three sentences that refer to the numbers above. A change needs a number behind it: if the numbers show no problem with this setting, propose it UNCHANGED and say so — that is the common, correct answer, not a failure.
 {effect_ask}
@@ -186,6 +189,22 @@ def short(text, n: int = 100) -> str:
     return text if len(text) <= n else text[:n - 1].rstrip() + "\u2026"
 
 
+def change_title(key: str, current, value, n: int = 100) -> str:
+    """A proposal's title. Numbers read "7 -> 6". 2026-09-25, proposal #10:
+    a reworded prompt line was titled with the same first hundred characters
+    on both sides of the arrow, because the change was at the end. For a
+    line, the title shows where the two differ."""
+    cur, new = str(current), str(value)
+    if len(cur) <= n and len(new) <= n:
+        return f"{key}: {cur} -> {new}"
+    p = 0
+    while p < min(len(cur), len(new)) and cur[p] == new[p]:
+        p += 1
+    p = max(0, cur.rfind(" ", 0, p))          # back to a word boundary
+    head = "\u2026" if p else ""
+    return f"{key}: {head}{short(cur[p:].strip(), n // 2)} -> {head}{short(new[p:].strip(), n // 2)}"
+
+
 def check_direction(t: Target, current: str, new_value: str, effect: str):
     """2026-09-21, after proposal #1 (Craig: "why did she propose it
     wrong? Can she not see it or does she not understand it?" — she saw
@@ -211,6 +230,38 @@ def check_direction(t: Target, current: str, new_value: str, effect: str):
         return (f"self-contradictory: {cur} -> {new} means '{expected}', "
                 f"but she expects '{opposite}'")
     return f"did not state the expected effect in the given terms (said: {effect!r})"
+
+
+async def decisions_on(key: str, days: int = 30):
+    """2026-09-25 (proposal #11 was #6 again — deliberation.threshold 7 -> 6,
+    the value he had rejected ninety minutes earlier — because nothing told
+    the author what he had decided). Returns (history text for the prompt,
+    {rejected value: (when, reason)}) from the proposals table."""
+    from datetime import datetime, timedelta
+    from db.db import fetch_proposals
+    lines, rejected = [], {}
+    since = datetime.utcnow() - timedelta(days=days)
+    try:
+        rows = await fetch_proposals(limit=300)
+    except Exception:
+        rows = []
+    for r in rows:
+        if r.get("target") != key or r.get("status") not in ("rejected", "approved"):
+            continue
+        when = str(r.get("updated_at") or r.get("created_at") or "")[:16]
+        try:
+            if datetime.strptime(when, "%Y-%m-%d %H:%M") < since:
+                continue
+        except ValueError:
+            pass
+        verb = "REJECTED" if r["status"] == "rejected" else "APPROVED"
+        reason = (r.get("reason") or "").strip()
+        lines.append(f"- {when} UTC — he {verb} \"{r.get('title')}\"" + (f": \"{reason}\"" if reason else ""))
+        value = str(r.get("value") or "").strip()
+        if r["status"] == "rejected" and value:
+            rejected.setdefault(value, (when, reason or "no reason given"))
+    history = "\n".join(lines[:6]) if lines else f"(nothing decided on this setting in the last {days} days)"
+    return history, rejected
 
 
 async def propose(key: str, why: str = "", root: str = ALEX_DIR, model: str = None,
@@ -255,10 +306,12 @@ async def propose(key: str, why: str = "", root: str = ALEX_DIR, model: str = No
         numbers = await measure(key)
     except Exception as e:
         numbers = f"(no measurement: {e})"
+    history, rejected = await decisions_on(key)
 
     prompt = _PROMPT.format(key=key, about=t.about, file=t.file, current=cur,
                             context=_context(text, idx), scores=scores, numbers=numbers,
                             why=why or "(no specific reason given — judge from the scores)",
+                            history=history,
                             bounds=bounds, value_shape=value_shape,
                             effect_ask=effect_ask, effect_shape=effect_shape)
     use_model = model or os.getenv("ALEX_AUTHOR_MODEL") or DEFAULT_MODEL
@@ -282,6 +335,13 @@ async def propose(key: str, why: str = "", root: str = ALEX_DIR, model: str = No
     problem = check_direction(t, cur, value, effect)
     if problem:
         return {"ok": False, "error": f"refused — {problem}. Her rationale: {rationale}"}
+    # 2026-09-25: a value he rejected in the last 30 days is not proposed
+    # again, whatever the rationale. Deterministic, like the direction
+    # check; the row this makes rests the target like any other look.
+    if str(value).strip() in rejected:
+        when, reason = rejected[str(value).strip()]
+        return {"ok": False, "error": (f"refused — he rejected exactly this value ({short(value, 60)}) on {when} UTC: "
+                                       f"\"{reason}\". Her rationale: {rationale}")}
     try:
         content = render(key, value, root)
     except (OSError, ValueError) as e:

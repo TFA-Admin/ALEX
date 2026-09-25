@@ -267,7 +267,20 @@ async def _creator_name() -> str:
         return "craig"
 
 
+def _on() -> bool:
+    """2026-09-25: mood is a feature (features/mood.py). Off means off —
+    nothing noted, and the state reads calm. Anywhere the registry is not
+    running (the Controller, the harness) this is True."""
+    try:
+        from features import registry
+        return registry.is_on("mood")
+    except Exception:
+        return True
+
+
 async def state() -> dict:
+    if not _on():
+        return fresh()
     from db.db import get_mood_state
     try:
         return (await get_mood_state()) or fresh()
@@ -282,6 +295,8 @@ async def note(event: str, who: str = None, creator: bool = None, note_text: str
     if event not in EVENTS:
         logger.warning(f"[MOOD] unknown event {event!r}")
         return await state()
+    if not _on():
+        return fresh()
     if creator is None:
         creator = (who or "").lower() == await _creator_name() if who else True
     from db.db import get_mood_state, set_mood_state
