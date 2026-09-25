@@ -6,18 +6,37 @@ Every scripted line ALEX says has two parts: what it needs to ACCOMPLISH
 (the functional intent — e.g. "elicit the person's name") and the actual
 WORDING used to accomplish it. The intent stays fixed, since other code
 depends on it (e.g. identity_manager expects a response to the greeting
-that can be parsed for a name). The wording is hers — the self-reflection
-loop can rewrite it any time, no approval needed, via set_learned_phrase().
+that can be parsed for a name). The wording is hers: composed at the
+moment of speaking, from that intent and her personality as it is now.
 
-get_phrase() always has a hardcoded default as a safety net, so a missing
-or corrupted stored phrase never breaks a flow — it just falls back to the
-plain, functional default wording.
+2026-09-25 — the stored wording is GONE. Craig: "so I was right, she
+hadn't been changing them. Now having said is there even an argument for
+her to have them anymore? Shouldn't those all be live for her now with
+just something like, this is a first connect that is unverified as a
+prompt?" No argument left, and he had the design right: the situation is
+the prompt.
+
+What the stored layer actually did, over two months: self-reflection
+re-voiced five random phrases whenever the personality changed and wrote
+them to `system_learning`. That fired often in July on the 7b, produced
+lines like "Say 'hello, party animal' so I can make sure it's you" and
+"Hey {name}, life been sucksauce?", and then never fired again, because
+his personality has been locked since. Those July lines stayed, and they
+were used twice over: as a "voice reference" in the composing prompt,
+where they dragged the composed line toward themselves, and as the
+VERBATIM fallback whenever composing failed — which is how a locked cold
+persona greeted him as a game-show host in September.
+
+So: the intent and a plain functional default live in code
+(PHRASE_REGISTRY). Every line is composed fresh. If composing fails, she
+says the plain default, and that fallback is logged at INFO so its rate
+is a fact rather than a suspicion. Nothing about a line persists between
+turns, so nothing can go stale.
 """
 import re
 
 from db.db import (
-    get_learned_phrase, get_personality, get_personality_hard_rules,
-    persona_disabled,
+    get_personality, get_personality_hard_rules, persona_disabled,
 )
 from config.logger_config import logger
 
@@ -375,11 +394,13 @@ PHRASE_REGISTRY = {
 # reset button and try again": "I don't want to force a mood, but I would
 # think she should be aware that something like that would be serious.")
 # — these are the lines that fire specifically when someone failed an
-# authorization/identity check. core/self_reflection.py's
-# _reflect_on_phrase() reads this set to add an explicit "stay serious"
-# constraint to its own rewording prompt for exactly these keys — the fix
-# is her genuinely treating this category as grave regardless of overall
+# authorization/identity check. _say_it_fresh() below reads this set and adds
+# an explicit "stay serious" constraint for exactly these keys — the fix is
+# her genuinely treating this category as grave regardless of overall
 # personality, not an external mood tag layered on after the fact.
+# 2026-09-25: this used to be read by self-reflection's re-voicing pass as
+# well, which is gone. It now applies on EVERY utterance of these lines
+# rather than occasionally when a rewrite happened, which is stricter.
 SECURITY_SENSITIVE_PHRASES = {
     # 2026-09-20: added. Every other entry here is a DENIAL — "you are not
     # authorized", "invalid code". This one is the prompt that *initiates*
@@ -406,22 +427,30 @@ SECURITY_SENSITIVE_PHRASES = {
 }
 
 
-# How long a fresh wording gets before she falls back to the stored one.
+# How long composing gets before she falls back to the registry's plain
+# default (2026-09-25: there is no stored wording to fall back to any more).
 # Generation measures ~0.45s since llm/ollama_client.py started pooling its
 # connection; this is the point at which waiting is worse than repeating
 # herself. A scripted line is usually the WHOLE reply (a greeting, a
 # refusal), so this sits directly in front of the user.
 FRESH_PHRASE_TIMEOUT_S = 6.0
 
+# 2026-09-25 (Craig: "so I was right, she hadn't been changing them. Now
+# having said is there even an argument for her to have them anymore?
+# Shouldn't those all be live for her now with just something like, this is
+# a first connect that is unverified as a prompt?"). No. There is no
+# argument left, and this prompt is the evidence: it used to feed her a
+# STORED line as a "voice reference", hedged with "that is only to show you
+# your own voice, not a script" — a hedge that existed because the
+# reference was already known to drag the composed line toward itself. With
+# forty of those lines being 7b jokes, the reference was pulling her voice
+# backwards, and the same text was read out verbatim whenever composing
+# failed. What is left is the situation and who she is now.
 _FRESH_PHRASE_PROMPT = """You are A.L.E.X. Your personality: "{personality}"
 
 You need to say this to someone, right now: {intent}
 
-For reference, here is how you have put it before — that is only to show you your own voice, not a script. What the line has to DO is the instruction above. Anything else that wording happens to contain is not required.
-
-    "{voice}"
-
-Say it. Your words, this time, not a repeat.{extra}
+Say it in your own words, as you are now. One or two sentences, spoken aloud, nothing else.{extra}
 
 Respond with ONLY a JSON object:
 {{"line": "<what you say>"}}"""
@@ -453,8 +482,7 @@ def _teaches_a_syntax(key: str, line: str) -> bool:
     return False
 
 
-async def _say_it_fresh(key: str, intent: str, voice: str,
-                        placeholders: set) -> str:
+async def _say_it_fresh(key: str, intent: str, placeholders: set) -> str:
     """Compose the line now, rather than reading one back.
 
     2026-09-20 (Craig, rejecting a pre-generated-variants design that
@@ -475,6 +503,11 @@ async def _say_it_fresh(key: str, intent: str, voice: str,
     Deriving from the intent each time stops a drifted wording being the
     only thing she has to work from.
 
+    2026-09-25: and the stored wording is gone entirely — it was still
+    reaching this prompt as a "voice reference" and still being spoken
+    verbatim on any failure here. The registry's default text remains, in
+    code, as the fallback only.
+
     Returns "" on anything that goes wrong. Every caller falls back to the
     stored wording, so a slow or unreachable Ollama costs her some variety
     and never costs her the line.
@@ -488,9 +521,10 @@ async def _say_it_fresh(key: str, intent: str, voice: str,
         extra += (f" Include {names}, spelled exactly like that, since other "
                   f"code fills it in. Use no other {{curly-brace}} tokens.")
 
-    # Same reasoning as the re-voicing path in core/self_reflection.py: the
-    # composing step must never be free to make a security line sound like
-    # a joke, whatever the personality says.
+    # The composing step must never be free to make a security line sound
+    # like a joke, whatever the personality says. See
+    # SECURITY_SENSITIVE_PHRASES for the wrong-code line that was rewritten
+    # into "Oopsie!... Better hit that reset button and try again".
     if key in SECURITY_SENSITIVE_PHRASES:
         extra += (" This one is about security or identity. It has to read "
                   "as serious and unambiguous — your words, never a joke.")
@@ -510,8 +544,7 @@ async def _say_it_fresh(key: str, intent: str, voice: str,
     try:
         personality = await get_personality()
         result = await ollama_manager.generate_json(
-            _FRESH_PHRASE_PROMPT.format(personality=personality, intent=intent,
-                                        voice=voice, extra=extra),
+            _FRESH_PHRASE_PROMPT.format(personality=personality, intent=intent, extra=extra),
             timeout=FRESH_PHRASE_TIMEOUT_S)
     except Exception as e:
         logger.debug(f"fresh phrase '{key}' failed: {e}")
@@ -570,10 +603,9 @@ async def get_phrase(key: str, **kwargs) -> str:
     if persona_disabled():
         return default_text.format(**kwargs)
 
-    voice = await get_learned_phrase(key, default=default_text)
     placeholders = set(_PLACEHOLDER_RE.findall(default_text))
 
-    fresh = await _say_it_fresh(key, intent, voice, placeholders)
+    fresh = await _say_it_fresh(key, intent, placeholders)
     if fresh:
         try:
             return fresh.format(**kwargs)
@@ -588,10 +620,8 @@ async def get_phrase(key: str, **kwargs) -> str:
     # _say_it_fresh's voice_verify_prompt instruction was added to prevent.
     # The rate was invisible: the composer's failures logged at DEBUG. At
     # INFO now, so a high fallback rate is a fact rather than a suspicion.
-    logger.info(f"[PHRASE] '{key}' composed nothing — saying the stored wording verbatim")
-    try:
-        return voice.format(**kwargs)
-    except Exception:
-        # a rewritten phrase that broke its {placeholder} shouldn't ever
-        # crash a live conversation — fall back to the known-good default
-        return default_text.format(**kwargs)
+    # 2026-09-25: the fallback is the registry's plain default, in code.
+    # Nothing stored, so nothing stale, and this line is measurable — a high
+    # rate here means composing is failing, which is the thing to chase.
+    logger.info(f"[PHRASE] '{key}' composed nothing — saying the plain default")
+    return default_text.format(**kwargs)

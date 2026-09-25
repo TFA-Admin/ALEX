@@ -622,7 +622,11 @@ class HerView(QWidget):
         try:
             asyncio.run(reset_all_phrases())
             asyncio.run(log_personality_change("(all reset to defaults)", "creator reset via Controller", kind="phrases"))
-            self.note("[SYSTEM] All phrases reset to default via Controller")
+            # 2026-09-25: nothing is stored any more — every standard line is
+            # composed fresh from its intent and her personality. This clears
+            # any legacy rows and is otherwise a no-op.
+            self.note("[SYSTEM] Cleared any stored phrase wording. She composes each of those lines fresh now, "
+                      "from its purpose and her personality, so there is normally nothing here to reset.")
         except Exception as e:
             self.note(f"⚠️ Failed to reset phrases: {e}")
         self.refresh_personality()

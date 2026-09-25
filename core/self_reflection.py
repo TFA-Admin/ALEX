@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 
 from db.db import (
     fetch_recent_memory_all, get_personality, set_personality, get_personality_locked,
-    log_personality_change, get_learned_phrase, set_learned_phrase,
+    log_personality_change,
     queue_curiosity_question, get_personality_hard_rules,
     fetch_undelivered_curiosity_questions, curiosity_topic_seen,
     create_conclusion, fetch_active_conclusions, create_module_build_request,
@@ -108,106 +108,11 @@ def _invents_syntax(text: str) -> bool:
     return bool(_FAKE_TEMPLATE_RE.search(text or ""))
 
 
-async def _reflect_on_phrase(key, personality):
-    """
-    2026-07-16: the placeholder-preservation instruction used to say
-    "keep any {placeholder} markers... intact" as a generic example —
-    found live, real bug: the model (qwen2.5, already known to take
-    instructions too literally for this project — same lesson as the
-    intent classifier's prompt-length regression) sometimes echoed that
-    literal example text into phrases that had NO real placeholders at
-    all (confirmed: onboard_name_too_short, denial_not_privileged,
-    denial_not_verified all came back with a bogus trailing
-    "{placeholder}" that isn't a real key anywhere). get_phrase()'s
-    .format() call safely falls back to the default when this happens
-    (a missing kwarg raises, caught, default used) — so it never broke
-    anything user-facing, but it silently discarded the personality
-    rewording every time it happened.
-
-    Fixed two ways: (1) only mention placeholder preservation when the
-    CURRENT text actually has real ones, naming them explicitly (e.g.
-    "{name}") instead of the generic word "placeholder" — nothing left
-    for the model to misinterpret when there's nothing to preserve;
-    (2) a real structural check below (not just a better prompt) rejects
-    any reword that doesn't preserve the exact same placeholder set,
-    instead of trusting the model to have followed instructions.
-    """
-    default_text, intent = PHRASE_REGISTRY[key]
-    current = await get_learned_phrase(key, default=default_text)
-
-    required_placeholders = set(_PLACEHOLDER_RE.findall(current))
-
-    if required_placeholders:
-        names = ", ".join(f"{{{p}}}" for p in sorted(required_placeholders))
-        placeholder_instruction = (
-            f" This phrase uses {names} — keep those exact tokens, spelled "
-            f"exactly like that, somewhere in your new wording, since other "
-            f"code fills them in. Don't add any other {{curly-brace}} tokens."
-        )
-    else:
-        placeholder_instruction = ""
-
-    # 2026-07-18 (Craig, watching a wrong-override-code rejection drift
-    # over several reflection passes into "Oopsie!... Better hit that
-    # reset button and try again": "I don't want to force a mood, but I
-    # would think she should be aware that something like that would be
-    # serious.") — this is the actual fix: rather than a mood tag bolted
-    # on after the response is generated, the rewording process itself
-    # should never be free to make a security rejection sound like a
-    # joke, no matter how playful/dismissive the overall personality is.
-    if key in SECURITY_SENSITIVE_PHRASES:
-        gravity_instruction = (
-            " This particular line is security-relevant — it's what you "
-            "say when someone just failed an authorization or identity "
-            "check. Whatever your personality, this one specific line "
-            "still needs to read as a real, serious refusal: no jokes, "
-            "no dismissiveness, no treating it as a trivial mistake. A "
-            "wrong code or an unverified identity could be a genuine "
-            "unauthorized attempt, not just a typo to laugh about."
-        )
-    else:
-        gravity_instruction = ""
-
-    prompt = f"""You are A.L.E.X. Your personality: "{personality}"
-
-One of your standard lines needs to keep doing its job (its purpose: {intent}), but you're free to phrase it however fits who you are.
-
-Current wording: "{current}"
-
-Do you want to rephrase this to better match your personality? Keep the exact same functional purpose.{placeholder_instruction}{gravity_instruction} Respond with ONLY a JSON object:
-{{"changed": true, "new_text": "<new wording>"}}
-or
-{{"changed": false}}"""
-
-    result = await ollama_manager.generate_json(prompt, timeout=20.0)
-
-    if not result or not result.get("changed"):
-        return None
-
-    new_text = str(result.get("new_text", "")).strip()
-
-    if not new_text or new_text == current:
-        return None
-
-    # Structural safety net, not just trusting the prompt: reject a
-    # reword outright if it doesn't preserve exactly the placeholders
-    # this phrase actually needs — either dropped one (breaks the
-    # phrase's real function) or hallucinated an extra one (exactly
-    # today's bug, now caught even if the prompt fix above ever slips).
-    if _invents_syntax(new_text):
-        logger.info(
-            f"[PERSONALITY] Rejected a re-wording of '{key}' — it invents a "
-            f"command syntax: {new_text!r}")
-        return None
-
-    if set(_PLACEHOLDER_RE.findall(new_text)) != required_placeholders:
-        logger.warning(
-            f"⚠️ Rejected reword for '{key}': placeholder mismatch "
-            f"(needed {required_placeholders}, got {new_text!r})"
-        )
-        return None
-
-    return new_text
+# 2026-09-25: _reflect_on_phrase() removed with the re-voicing pass below
+# (see core/phrasebook.py's docstring for why). Its durable lesson lives on
+# there: a composed line must keep exactly the placeholders its default had,
+# and must not invent a command syntax — both checked structurally, not
+# asked for in a prompt.
 
 
 async def _reflect_on_curiosity(recent, noticed=None):
@@ -1081,43 +986,14 @@ async def run_self_reflection():
         logger.info(f"[PERSONALITY] Personality evolved: {new_desc} (reason: {reason})")
         logger.info(f"[REFLECTION] Pass complete — {'; '.join(outcome)}")
 
-        # personality shifted — let her optionally re-voice her scripted
-        # phrases too. Capped to a small random sample per pass, NOT the
-        # whole registry — found live (2026-07-16) that re-voicing all 78
-        # entries (grown from ~4 when this was first written) meant every
-        # single personality change kicked off ~78 sequential LLM calls,
-        # monopolizing the one shared Ollama instance for several minutes at
-        # a time. Since this fires immediately on every restart (see
-        # main.py's periodic_self_reflection(), no initial delay) and
-        # personality changes happened often tonight, this was directly
-        # competing with — and badly starving — real conversational requests
-        # the whole time it ran. Phrases still drift toward her personality
-        # over time, just gradually across many reflection passes instead of
-        # all at once.
-        keys_to_revoice = random.sample(list(PHRASE_REGISTRY), min(5, len(PHRASE_REGISTRY)))
-
-        # Same deterministic guarantee as systems/llm/system.py's generation
-        # stream — found live that a reworded phrase ("Yas, gotcha! I'll
-        # update my records and give the old info the ol' boot. 👍") carried
-        # an emoji right through this same rewording path, independent of the
-        # main conversational generation.
-        hard_rules = await get_personality_hard_rules()
-        suppress_emojis = any("emoji" in r.lower() for r in hard_rules)
-
-        for key in keys_to_revoice:
-            try:
-                new_text = await _reflect_on_phrase(key, new_desc)
-            except Exception as e:
-                logger.warning(f"⚠️ Phrase reflection failed for '{key}': {e}")
-                continue
-
-            if new_text and suppress_emojis:
-                new_text = strip_emojis(new_text)
-
-            if new_text:
-                phrase_reason = f"re-voiced to match new personality ({reason})"
-                await set_learned_phrase(key, new_text)
-                await log_personality_change(new_text, phrase_reason, kind=f"phrase:{key}")
-                logger.info(f"[PERSONALITY] Re-voiced '{key}': {new_text} (reason: {phrase_reason})")
+        # 2026-09-25 (Craig: "is there even an argument for her to have them
+        # anymore?"). The phrase re-voicing pass is gone. It stored a rewritten
+        # wording per phrase, and core/phrasebook.py used that stored text both
+        # as a voice reference for composing and as the verbatim fallback when
+        # composing failed — so a July rewrite on the 7b ("Say 'hello, party
+        # animal'") was still being spoken in September, and still pulling
+        # composed lines toward itself. Every one of those lines is now composed
+        # fresh from its registry INTENT and her personality as it is, so
+        # durable drift bought nothing and cost that.
     finally:
         await send_signal_to_creator("__SELFWORK__0")
