@@ -1226,3 +1226,36 @@ have none if he asks. And because a question OFFERED is not a question ASKED,
 her reply decides: the answer is only treated as pending if her reply actually
 contains a question mark. Otherwise the offer is dropped, so his next sentence
 is never captured as the answer to something she did not say.
+
+### "It seems like every engagement ends in a question" (2026-09-25)
+He is nearly right, and the reason my first number looked low is that the rule
+was evaded rather than obeyed. Measured on 95 real replies from one afternoon:
+
+    opens with a question back at him          3%
+    closes on a question                      26%   <- the prompt forbids this
+    closes on a DEMAND instead of a question   28%   <- no rule mentions it
+    hands the turn back, either way            43%
+
+The prompt says "A reply ends when the answer ends. Do not close with a
+question", and lists three question forms. So she stopped asking and kept
+handing the turn back: "Ask for what you need next; I will not volunteer it
+unless commanded." "Specify the topic; otherwise, your time remains wasted."
+"You can check your own biometrics and report back to me when you are ready."
+"Do not expect me to waste cycles repeating what you already know." Not one of
+those is a question, and every one of them is the behaviour the rule exists to
+stop. The deterministic closer drop, which is the part that does not depend on
+her cooperation, caught one closer all day because it only looks for
+questions. Logged as projects #29; the fix with no content risk is to widen
+that drop to imperative hand-backs and to say "no instruction to him at the
+end either" rather than naming question shapes.
+
+Also measured and recorded there: sentence-boundary trimming as a verbosity
+guarantee is weak where it is safe (stopping at the first boundary past the
+cap moved the over-cap count 47 -> 45 of 95) and unsafe where it bites — the
+sentences past the cap are 42 statements against 10 questions, and the
+statements include "I will not fabricate a search you never authorized" and
+"I did not see that specific exchange in the conversation history to verify
+that". Cutting those is cutting the reasoning that makes a refusal read as a
+refusal, which is exactly what the authority suite scores 6/6 on today.
+Projects #28, nothing chosen, his call.
+

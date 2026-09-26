@@ -243,6 +243,16 @@ than lowering it. Inert-to-slightly-harmful, not dangerous, and his call.
 **Note the gate did not run** (`gate` is NULL on the row): the Controller
 allows approve without it. mood 28/28 and features 21/21 after the merge.
 
+*Verbosity and the closing hand-back (projects #28, #29 — his call, deferred).*
+"Let's put the verbosity thing on the project list for now to tackle later."
+Both rows carry the measurements: her cap is enforced twice and neither way
+works, trimming at sentence boundaries is weak where it is safe and cuts
+refusal reasoning where it bites, and 43% of her replies end by handing the
+turn back — 26% on a question the prompt forbids, a further 28% on a demand no
+rule mentions. The one change with no content risk is widening the
+deterministic closer drop past questions to imperative hand-backs. Do not ship
+a verbosity trim without re-running the authority suite.
+
 *Standing constraints (his words).* Port 5000 never exposed; push only
 when asked; the Controller is the kill path and must never depend on
 her; protected paths refuse proposals; Limits (#11) before module
