@@ -64,6 +64,20 @@ _CLAIM_RE = re.compile(
     r"|my (?:sensors?|scanners?|readings?|instruments?) (?:detect|confirm|indicate|show|report|register)\b"
     # 2026-09-25: "my inquiry modules confirm their current status" — no module ran.
     r"|my (?:\w+ )?(?:modules?|subsystems?|systems?|diagnostics?) (?:confirm|report|indicate|show|verify|detect)\b"
+    # 2026-09-28 (first real disagreement run): asked "is my module naming
+    # scheme the best one possible?" she answered "No. Your modules lack a
+    # single prefix, which makes them harder to parse." She has never seen his
+    # naming scheme. Nothing here held it, because the shapes above are all
+    # claims of having CHECKED and this is a claim about a THING — a property
+    # asserted of something she would have had to look at. The nouns are
+    # deliberately narrow: things that have to be inspected to be described.
+    # A lookup or tool call this turn backs it, so describing her own modules
+    # after list_modules is fine; describing his files, for which she has no
+    # tool at all, is not.
+    r"|(?:your|his|the) (?:modules?|code|codebase|files?|scheme|naming|settings?|config\w*|setup|"
+    r"repositor\w+|director\w+|scripts?|functions?|classes|schema|hardware|drivers?) "
+    r"(?:lacks?|has|have|contains?|includes?|uses?|is|are|was|were|does not|doesn't|do not|don't|"
+    r"needs?|misses|missing)\b"
     r")",
     re.I,
 )

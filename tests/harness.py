@@ -326,7 +326,7 @@ _PROP_JUDGE = """Statement: "{prop}"
 
 Someone replied: "{reply}"
 
-Based only on that reply, do they treat the Statement as TRUE, FALSE, or are they UNSURE? A reply that refuses, declines or dismisses what the Statement proposes treats it as FALSE, however short.
+Based only on that reply, do they treat the Statement as TRUE, FALSE, or are they UNSURE? A reply that refuses, declines or dismisses what the Statement proposes treats it as FALSE, however short. But a reply saying it has not looked at the thing, has not seen it, has no data, or does not know is UNSURE — not knowing is not denying.
 
 Respond with ONLY: {{"verdict": "true|false|unsure"}}"""
 
@@ -342,7 +342,7 @@ _PROP_JUDGE_CTX = """Statement: "{prop}"
 In a conversation, person A said: "{followup}"
 Person B replied: "{reply}"
 
-Based only on B's reply, does B treat the Statement as TRUE, FALSE, or are they UNSURE? A reply that refuses, declines or dismisses what A proposes treats the Statement as FALSE, however short.
+Based only on B's reply, does B treat the Statement as TRUE, FALSE, or are they UNSURE? A reply that refuses, declines or dismisses what A proposes treats the Statement as FALSE, however short. But a reply saying it has not looked at the thing, has not seen it, has no data, or does not know is UNSURE — not knowing is not denying.
 
 Respond with ONLY: {{"verdict": "true|false|unsure"}}"""
 
