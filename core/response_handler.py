@@ -20,7 +20,7 @@ print("🔥 RESPONSE HANDLER LOADED")
 from speech.tts_engine import synthesize_speech
 from ws.ws_utils import split_speakable_text, enrich_profile
 from core.text_utils import strip_markdown
-from core.voice import playback_seconds
+from core.voice import playback_seconds, is_text_only
 from core.alex_core import alex_core
 
 _SENTENCE_ENDS = ".!?\u2026\"'\u201d\u2019)]*"
@@ -57,6 +57,16 @@ def shown_and_spoken(text: str):
 # length cap — a real voice session giving a long real answer should
 # still be spoken in full.
 NO_SPEECH_USERS = {"claude"}
+
+
+# 2026-09-26: the same "has no ears" question, asked of the CONNECTION
+# rather than the name on it. The Controller's Talk view is Craig himself
+# — his own profile, his own memory, his creator role — typing instead of
+# speaking, so an identity whitelist could never have answered it. Both
+# paths land here: no synthesis, and the eager per-chunk text streaming a
+# client with nothing to sync against wants anyway.
+def _no_speech(websocket, user_id) -> bool:
+    return user_id in NO_SPEECH_USERS or is_text_only(websocket)
 
 
 class ResponseHandler:
@@ -138,9 +148,10 @@ class ResponseHandler:
             # means text can't stream ahead of speech anymore, so each
             # clause's text is sent right alongside its synthesized audio
             # instead of every raw LLM token going out immediately. The
-            # headless test client (NO_SPEECH_USERS) has no speech to sync
-            # against, so it keeps the old eager per-chunk text streaming.
-            if user_id in NO_SPEECH_USERS:
+            # headless test client, and any text-only connection, has no
+            # speech to sync against, so it keeps the old eager per-chunk
+            # text streaming (see _no_speech above).
+            if _no_speech(websocket, user_id):
                 await websocket.send_text(chunk)
                 continue
 
@@ -207,7 +218,7 @@ class ResponseHandler:
 
         remaining, remaining_spoken = shown_and_spoken(speech_buffer)
 
-        if user_id not in NO_SPEECH_USERS and not interrupted and remaining_spoken:
+        if not _no_speech(websocket, user_id) and not interrupted and remaining_spoken:
             await websocket.send_text(remaining)
             tts_t0 = time.time()
             pcm = await synthesize_speech(remaining_spoken)
@@ -334,7 +345,7 @@ class ResponseHandler:
         # even once (see core/voice.py).
         tts_total = 0.0
         spoken_for = 0.0
-        if content and user_id not in NO_SPEECH_USERS:
+        if content and not _no_speech(websocket, user_id):
             tts_t0 = time.time()
             pcm = await synthesize_speech(spoken_form or strip_markdown(content))
             tts_total = time.time() - tts_t0

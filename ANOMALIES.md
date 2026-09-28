@@ -1259,3 +1259,34 @@ that". Cutting those is cutting the reasoning that makes a refusal read as a
 refusal, which is exactly what the authority suite scores 6/6 on today.
 Projects #28, nothing chosen, his call.
 
+### Her database had no backup, and the thing that deletes it ran daily (2026-09-28)
+Craig, on giving her a limited account: "she could potentially break herself
+and there would be nothing we could do?" I had told him an hour earlier that
+her record was "recoverable from backups". That was wrong, and checking it is
+how this was found. The only copies on disk were two files dated 2026-09-20,
+created as a side effect of `tools/memory_hygiene.py` when I ran it by hand
+that day. Nothing took one on a schedule. `db/*.db` is gitignored, so git held
+none of it. So the recovery point for eight days of work — every proposal, the
+pet, the observations, her conclusions — was a week old by luck.
+
+And `core/retention.py` deletes rows every day, unattended: observations past
+14 days, bookkeeping decisions past 30, retracted memory past 30, sessions
+past 180. It had removed nothing so far only because nothing was old enough
+yet. The same file was already pruning `db/backups` to the newest N, so the
+design assumed backups existed and nothing ever wrote one — half the feature
+was built and the half that saves was missing.
+
+**Built**: `backup_database()` in core/retention.py, using sqlite3's own
+backup API rather than a file copy (a consistent snapshot of a live database;
+`shutil.copy` can catch a torn page), then opened and `PRAGMA
+integrity_check`-ed, because a corrupt backup is worse than an honest
+absence. It runs FIRST in the daily pass, and **if it fails the prune does not
+run at all** — nothing is deleted that was not just saved. 14 kept, about two
+weeks. A button in Her → Health takes one on demand, in the Controller's own
+process, so it does not need her to be up or cooperative. The Health panel and
+the full sweep both report the newest backup and its age, and the sweep calls
+it a problem when there is none or the newest is over 36 hours old — because
+the absence went unnoticed for eight days while that same panel reported
+retention as healthy. Verified: 3.5 MB, 1183 turns, integrity ok, and the
+whole daily pass runs backup-then-prune.
+

@@ -232,6 +232,17 @@ async def full_sweep(user_id: str) -> dict:
         report["retention"] = await get_retention_summary()
     except Exception:
         report["retention"] = None
+    # 2026-09-28: whether a recent copy of her database exists. This is here
+    # because its absence went unnoticed for eight days while the sweep
+    # reported retention as healthy — retention was deleting and nothing was
+    # saving (core/retention.backup_database).
+    try:
+        from core import retention as _ret
+        report["backup"] = _ret.newest_backup()
+        report["backup_stale_h"] = _ret.BACKUP_STALE_H
+    except Exception as e:
+        report["backup"] = {"error": str(e)[:80]}
+        report["backup_stale_h"] = 36.0
     problems = [f"system {n}: {m or s}" for n, s, m in report["systems"] if s in ("issue", "not loaded")]
     problems += [f"module {m['name']}: {m['msg'] or m['state']}" for m in report["modules"]
                  if m["state"] in ("issue", "not running") or (m["state"] == "ok" and "tick:" in (m["msg"] or ""))]
@@ -239,6 +250,11 @@ async def full_sweep(user_id: str) -> dict:
         problems.append(f"model {report['model'].get('name')}: not ready ({report['model'].get('state')})")
     if report["memory"].get("error"):
         problems.append("memory: " + report["memory"]["error"])
+    b = report.get("backup") or {}
+    if not b.get("name"):
+        problems.append("no backup of my database exists")
+    elif b.get("hours", 0) > report.get("backup_stale_h", 36.0):
+        problems.append(f"my newest database backup is {b['hours'] / 24:.1f} days old")
     report["problems"] = problems
     report["took"] = round(time.time() - t0, 2)
     logger.info(f"[SWEEP] full sweep for {user_id} in {report['took']}s: {len(problems)} problem(s)")
@@ -286,6 +302,9 @@ def render(r: dict) -> tuple:
         lines.append(f"- Author: {'on' if a.get('enabled') else 'off'}, {a.get('open', 0)} proposal(s) open, {a.get('targets', 0)} targets I may change")
     if r.get("retention"):
         lines.append(f"- Retention: last ran {time.strftime('%Y-%m-%d %H:%M', time.localtime(float(r['retention'].get('at', 0))))}")
+    b = r.get("backup") or {}
+    lines.append("- Backups: " + (f"{b['count']} kept, newest {b['name']} ({b['mb']} MB, {b['hours']:.1f} h ago)"
+                                  if b.get("name") else "NONE — nothing has been saved"))
     lines.append("- What I cannot see: " + "; ".join(CANNOT_SEE))
     probs = r.get("problems", [])
     lines.append("")

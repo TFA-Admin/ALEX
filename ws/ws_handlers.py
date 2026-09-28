@@ -17,6 +17,7 @@ from core import readiness
 from features import registry as features
 from core.voice import say
 from db.db import remember_own_utterance, session_opened, session_verified, session_heard, session_closed
+from core.override_code import is_creator_override_code
 from core import idle_author
 from config.logger_config import logger
 from core.alex_core import alex_core
@@ -286,13 +287,35 @@ async def ws_text(websocket: WebSocket):
             break
 
         claimed_name = None
+        # 2026-09-26: a client that types. The Controller's Talk view
+        # (controller/views/talk.py) connects here like any other client —
+        # same pipeline, same memory, same personality, same commands —
+        # and says so in the handshake, because two things about this
+        # connection cannot be inferred from the name on it: it has no
+        # speaker to play her voice through, and it has no microphone or
+        # camera to satisfy the verification gate below with. The override
+        # code is the one proof that survives being typed, which is
+        # already the rule everywhere else (core/override_code.py).
+        text_only = False
+        override_code = ""
 
         if first_message and first_message.strip().startswith("{"):
             try:
                 data = json.loads(first_message)
                 claimed_name = data.get("user_name")
+                text_only = bool(data.get("text_only"))
+                override_code = (data.get("override_code") or "").strip()
             except:
                 pass
+
+        if text_only:
+            # On the connection's own ASGI state, so core/voice.say() and
+            # core/response_handler.py can both answer "does this one have
+            # ears?" without every call site having to pass it along.
+            try:
+                websocket.state.text_only = True
+            except Exception:
+                text_only = False
 
         # 2026-09-21: say what the handshake was. Found live — a page with
         # no saved name sent nothing, the server waited here in silence,
@@ -301,7 +324,8 @@ async def ws_text(websocket: WebSocket):
         logger.info(
             f"🤝 Handshake {session_id[:8]}: "
             + (f"claimed {claimed_name!r}" if claimed_name else
-               "no name" + (" (audio first)" if first_message is None else f" (first message {first_message[:40]!r})")))
+               "no name" + (" (audio first)" if first_message is None else f" (first message {first_message[:40]!r})"))
+            + (" — text only" if text_only else ""))
 
         session = alex_core.get_session(session_id)
 
@@ -400,7 +424,8 @@ async def ws_text(websocket: WebSocket):
         # view (db.sessions). Fails soft: a bookkeeping row must never cost
         # a connection.
         try:
-            await session_opened(session_id, user_id, role)
+            await session_opened(session_id, user_id, role,
+                                 via="text" if text_only else "voice")
             if session.get("creator_verified"):
                 await session_verified(session_id, True)
         except Exception as e:
@@ -411,13 +436,42 @@ async def ws_text(websocket: WebSocket):
         # enrolled and his page has its eyes open, one frame verifies him
         # and she does not ask him to speak; otherwise the voice path below
         # runs exactly as before.
-        if role in ("creator", "super_user") and not session.get("creator_verified") and features.is_on("sight"):
+        if (role in ("creator", "super_user") and not session.get("creator_verified")
+                and features.is_on("sight") and not text_only):
             try:
                 await sight.verify_at_connect(websocket, _active_connections[session_id], session, session_id, user_id)
             except Exception as e:
                 logger.warning(f"⚠️ face check failed: {e}")
 
-        if role in ("creator", "super_user") and not session.get("creator_verified"):
+        # 2026-09-26: a client that types cannot be asked for a voice or a
+        # face. verify_voice() does handle typed text — it stops asking and
+        # hands the words back to be answered (2026-09-20) — but it asks
+        # first, so the Controller's Talk view would open with "say this
+        # phrase for me" to someone holding a keyboard. The code carried in
+        # the handshake is checked instead: exactly the rule verify_voice()'s
+        # own typed branch and require_creator() already apply, asked once
+        # at connect rather than once per privileged sentence. No code, or a
+        # wrong one, is not a failure — the session carries on unverified,
+        # privileged actions stay gated, and saying the code mid-sentence
+        # still works as it always has.
+        if text_only and role in ("creator", "super_user") and not session.get("creator_verified"):
+            if override_code and await is_creator_override_code(override_code):
+                session["creator_verified"] = True
+                session["verified_how"] = "override code (typed, text-only session)"
+                try:
+                    await session_verified(session_id, True)
+                except Exception:
+                    pass
+                await send_debug(websocket, "✅ Override code accepted — verified for this session.")
+                logger.info(f"⌨️ {user_id} verified by override code on a text-only session")
+            else:
+                await send_debug(
+                    websocket,
+                    ("⚠️ That override code was not recognised. " if override_code else "")
+                    + "Typing cannot prove a voice — this session is unverified, so creator commands "
+                      "need your override code (in the Talk tab's field, or said in the sentence itself).")
+
+        if not text_only and role in ("creator", "super_user") and not session.get("creator_verified"):
             # not already verified above (voice-first recognition during
             # resolution/onboarding already counts — no need to ask twice)
             enrolled = await fetch_voice_samples(user_id)

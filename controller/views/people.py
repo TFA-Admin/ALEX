@@ -41,12 +41,18 @@ class PeopleView(QWidget):
         layout.addWidget(self.live_label)
 
         self.sessions_table = QTableWidget()
-        self.sessions_table.setColumnCount(7)
+        # 2026-09-26: "How" — the Talk view (controller/views/talk.py) is a
+        # real session on the same socket as the browser, and without this
+        # column a tab left open in this very window read as "craig,
+        # creator, voice check: not passed", which is exactly what a stale
+        # row looks like. Typing cannot pass a voice check; saying so is
+        # the difference between a gap and a fault.
+        self.sessions_table.setColumnCount(8)
         self.sessions_table.setHorizontalHeaderLabels(
-            ["Who", "Role", "Voice check", "Connected", "For", "Last heard", "Session"])
+            ["Who", "Role", "How", "Voice check", "Connected", "For", "Last heard", "Session"])
         self.sessions_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.sessions_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        make_readable(self.sessions_table, wrap_column=6)
+        make_readable(self.sessions_table, wrap_column=7)
         self.sessions_table.setMaximumHeight(220)
         layout.addWidget(self.sessions_table)
 
@@ -181,8 +187,16 @@ class PeopleView(QWidget):
         self.sessions_table.setRowCount(len(self._sessions))
         for row, s in enumerate(self._sessions):
             open_ = not s.get("disconnected_at")
+            # NULL via is every row written before the column existed, and
+            # voice was the only way in then.
+            text_session = (s.get("via") or "voice") == "text"
+            how = "typed" if text_session else "voice"
             if open_:
                 voice = "passed" if s.get("verified") else ("not required" if s.get("role") == "user" else "not passed")
+                if text_session and not s.get("verified"):
+                    voice = "n/a — typed"
+                elif text_session:
+                    voice = "override code"
                 for_ = ago(s.get("connected_at"))
                 heard = (ago(s.get("last_heard_at")) + " ago") if s.get("last_heard_at") else "not yet"
             else:
@@ -190,7 +204,7 @@ class PeopleView(QWidget):
                 for_ = f"ended {ago(s['disconnected_at'])} ago ({s.get('closed_by') or 'disconnect'})"
                 heard = (ago(s.get("last_heard_at")) + " ago") if s.get("last_heard_at") else ""
             fill_row(self.sessions_table, row, [
-                s.get("user") or "?", s.get("role") or "", voice,
+                s.get("user") or "?", s.get("role") or "", how, voice,
                 to_local(s.get("connected_at")), for_, heard, s["session_id"]])
         self.sessions_table.resizeRowsToContents()
 

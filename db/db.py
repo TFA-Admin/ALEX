@@ -640,6 +640,13 @@ async def ensure_access_tier_columns(db):
         # then dropped them, having been told the answer each time.
         ("curiosity_queue", "answer", "TEXT"),
         ("curiosity_queue", "answered_at", "TEXT"),
+        # 2026-09-26: how they are talking to her. The Controller's Talk
+        # view is a real session on the same socket, so without this the
+        # People view showed "craig, creator, voice check: no" for a tab
+        # sitting open in another window and looked exactly like a stale
+        # row. NULL is every row written before this — voice, since that
+        # was the only way in.
+        ("sessions", "via", "TEXT"),
     ]
 
     for table, col, col_type in additions:
@@ -673,13 +680,13 @@ async def add_memory(user, prompt, response, category="conversation", embedding=
 # -------------------------
 # SESSIONS (2026-09-21) — see the table comment in init_db()
 # -------------------------
-async def session_opened(session_id: str, user: str, role: str):
+async def session_opened(session_id: str, user: str, role: str, via: str = "voice"):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT OR REPLACE INTO sessions(session_id, user, role, verified, "
-            "connected_at, last_heard_at, disconnected_at, closed_by) "
-            "VALUES(?,?,?,0,CURRENT_TIMESTAMP,NULL,NULL,NULL)",
-            (session_id, user, role))
+            "connected_at, last_heard_at, disconnected_at, closed_by, via) "
+            "VALUES(?,?,?,0,CURRENT_TIMESTAMP,NULL,NULL,NULL,?)",
+            (session_id, user, role, via))
         await db.commit()
 
 
@@ -718,7 +725,7 @@ async def sessions_reset_on_boot():
 
 async def fetch_sessions(live_only: bool = True, limit: int = 50):
     sql = ("SELECT session_id, user, role, verified, connected_at, last_heard_at, "
-           "disconnected_at, closed_by FROM sessions")
+           "disconnected_at, closed_by, via FROM sessions")
     if live_only:
         sql += " WHERE disconnected_at IS NULL"
     sql += " ORDER BY connected_at DESC LIMIT ?"
@@ -726,7 +733,7 @@ async def fetch_sessions(live_only: bool = True, limit: int = 50):
         cursor = await db.execute(sql, (limit,))
         rows = await cursor.fetchall()
     keys = ["session_id", "user", "role", "verified", "connected_at",
-            "last_heard_at", "disconnected_at", "closed_by"]
+            "last_heard_at", "disconnected_at", "closed_by", "via"]
     return [dict(zip(keys, r)) for r in rows]
 
 

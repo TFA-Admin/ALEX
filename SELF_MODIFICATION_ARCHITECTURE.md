@@ -253,6 +253,18 @@ rule mentions. The one change with no content risk is widening the
 deterministic closer drop past questions to imperative hand-backs. Do not ship
 a verbosity trim without re-running the authority suite.
 
+*Backups (built 2026-09-28).* Her database now gets a verified snapshot
+before every retention pass, and the prune is skipped entirely if the backup
+fails — `core/retention.backup_database()`, sqlite3's backup API plus an
+integrity check, 14 kept in `db/backups`, a button in Her → Health for one on
+demand. The sweep and the Health panel report the newest and its age, and
+treat "none" or "older than 36 h" as a problem. Before this there was no
+scheduled backup at all: the only copies were two files from 2026-09-20 left
+by a manual tool run, `db/*.db` is gitignored, and retention was deleting rows
+daily. If a recovery is ever needed: stop her at the Controller, copy the
+chosen file over `db/memory.db`, start her. Code needs no backup — it is all
+in git and she cannot write a file.
+
 *Standing constraints (his words).* Port 5000 never exposed; push only
 when asked; the Controller is the kill path and must never depend on
 her; protected paths refuse proposals; Limits (#11) before module
@@ -2018,6 +2030,72 @@ had been launched from the IDE and once from the network share (a staged
 copy took 113 s to come up over SMB); the Controller warns when its
 path is a share.
 
+## 2026-09-26 — a typed conversation, in the Controller
+
+Craig: "can we add a direct conversation interface into the controller
+purely for text interactions?"
+
+The Controller could do everything **about** her and nothing **with**
+her: to say a word to her you opened a browser, let it take the
+microphone, and spoke. Now the `Talk` tab
+(`controller/views/talk.py`) is an ordinary client on the same `/ws`
+endpoint the avatar page uses — a `QWebSocket`, so no thread and no
+second event loop — which means a turn typed there is a real turn:
+alex_core, personality, facts, memory, modules, commands, and she
+remembers it afterward. Typed text already skipped the wake-word gate
+(`ws/ws_handlers.py` has never applied it to anything but audio), so
+there is no "Alex," to say.
+
+**What a keyboard genuinely cannot do, and how each is answered.** The
+handshake carries `text_only: true`, and that one flag settles both:
+
+*No ears.* Synthesizing a reply nobody can hear costs a Piper turn and
+sends bytes into a window with no speaker. The flag lands on the
+connection's own ASGI state (`scope["state"]`, which uvicorn copies per
+connection), so `core.voice.is_text_only()` can answer for every caller
+instead of the flag being threaded through each one — one check inside
+`say()`, one in `response_handler._no_speech()`. That replaces a
+whitelist of *names* (`NO_SPEECH_USERS = {"claude"}`) that could never
+have covered this case, because this client is Craig: his profile, his
+role, his memory. Measured on a real turn: `TOTAL turn ... 10.55s (of
+which TTS synthesis: 0.00s)`, zero audio frames sent. `tests/harness.py`
+and `tools/claude_client.py` now declare it too — both had been
+receiving synthesized audio for every turn and discarding it, one
+comment literally reading "this client has no ears".
+
+*No voice to verify.* The creator's connect-time voice check, and the
+face check before it, cannot be satisfied by typing. `verify_voice()`
+already handled typed text — since 2026-09-20 it stops asking and hands
+the words back to be answered — but it asks *first*, so this tab would
+have opened with "say a random sentence" to someone holding a keyboard.
+Instead the two gates are skipped for a text session and the override
+code is checked once, from the handshake: exactly the rule
+`core/override_code.py` and `require_creator()` already apply, asked
+once at connect rather than once per privileged sentence. No code, or a
+wrong one, is **not** a failure — she talks, the session carries on
+unverified, and every privileged command stays gated in her process.
+The tab says which of the two it is, and the code is never stored:
+not in `config/controller_settings.json`, not in the widget after use.
+
+Verified live against an isolated copy on :5001 (own DB, her real
+instance untouched): no voice prompt, `via='text'`, unverified with no
+code, "not recognised" with a wrong one, `verified=1` with the real one,
+a full text reply with zero audio frames — and two controls, a normal
+session still synthesizing and a creator over voice still being asked
+for the phrase and the frame.
+
+**One existing view had to stop lying.** A Talk tab left open is a real
+row in `db.sessions`, so People showed "craig, creator, voice check: not
+passed" for a window sitting in the Controller itself — which is
+precisely what a stale row looks like. `sessions.via` ("voice"/"text",
+NULL for every row written before it) and a "How" column: typing cannot
+pass a voice check, and saying so is the difference between a gap and a
+fault. For the same reason the tab connects when it is first opened
+rather than at launch — a session registered as the creator is one
+`core/proactive.py` counts as him being present, and an idle check-in
+pushed into a window nobody opened is how she ends up talking to
+herself.
+
 ## Her personality, as Craig wrote it (2026-09-21 21:39)
 
 Kept here because it was overwritten once the same evening (personality_log
@@ -2734,10 +2812,15 @@ decision). Two commands: `register` (one-time) and `chat "message"`.
       (Component 2). Still advisory/unprivileged in the conversational
       sense (Foundational Decisions) — it operates outside her process,
       picking up already-approved requests, not granting itself anything.
-- Known rough edge: each `chat` call triggers her normal `speak()` — the
-  response is audibly spoken through the server's real speakers, same as
-  any live session (confirmed harmless, but noisy for rapid-fire testing,
-  and shares Ollama's request queue with real usage).
+- Was a rough edge: each `chat` call triggered her normal `speak()`.
+  Closed in two steps — `NO_SPEECH_USERS` excluded the name "claude", and
+  as of 2026-09-26 the client declares `text_only` in its handshake, so
+  nothing synthesizes for it regardless of the name it logs in as (see
+  "2026-09-26 — a typed conversation, in the Controller"). It still
+  shares Ollama's request queue with real usage.
+- 2026-09-26: the same channel shape now carries Craig's own typed
+  conversation, from the Controller's `Talk` tab — same endpoint, same
+  handshake flag, but as himself rather than as an unprivileged advisor.
 
 ### 9. Self-Directed Storage & Implementation Choice
 **Status: not built.** Today everything is hardcoded to sqlite via

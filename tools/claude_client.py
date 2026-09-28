@@ -47,9 +47,17 @@ ONBOARDING_SCRIPT = ["claude", "yes"]
 ONBOARDING_FILLER = "text-only client, no microphone available"
 
 
+# 2026-09-26: `text_only` says in the handshake what this client has always
+# been. It used to depend on response_handler.py's NO_SPEECH_USERS knowing
+# the name "claude"; the flag is a property of the connection instead, so
+# nothing synthesizes and no audio is sent to a client with no ears
+# regardless of who it logs in as. The name list stays for other reasons.
+HANDSHAKE = {"user_name": "claude", "text_only": True}
+
+
 async def register():
     async with websockets.connect(URI, ssl=SSL_CONTEXT) as ws:
-        await ws.send(json.dumps({"user_name": "claude"}))
+        await ws.send(json.dumps(HANDSHAKE))
 
         step = 0
         while True:
@@ -76,7 +84,7 @@ async def register():
 
 async def chat(message: str):
     async with websockets.connect(URI, ssl=SSL_CONTEXT) as ws:
-        await ws.send(json.dumps({"user_name": "claude"}))
+        await ws.send(json.dumps(HANDSHAKE))
 
         # Drain handshake/profile messages until she's ready for real input.
         # A first-time (unregistered) connection would land in onboarding

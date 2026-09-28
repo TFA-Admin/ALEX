@@ -13,6 +13,7 @@ from PySide6.QtCore import QTimer
 from controller.common import LOG_DIR, LogFileTailer
 from controller.procs import ProcessManager
 from controller.views.run import RunView
+from controller.views.talk import TalkView
 from controller.views.inbox import InboxView
 from controller.views.her import HerView
 from controller.views.people import PeopleView
@@ -56,6 +57,7 @@ class AlexController(QWidget):
         self.run.status_changed = self.update_status
         note = self.run.note
 
+        self.talk = TalkView(note, self.procs)
         self.inbox = InboxView(note)
         self.her = HerView(note)
         self.people = PeopleView(note)
@@ -70,6 +72,10 @@ class AlexController(QWidget):
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self.run, "Run")
+        # 2026-09-26: second, next to Run — talking to her is the thing the
+        # Controller could not do, and everything after this tab is about
+        # her rather than with her.
+        self.tabs.addTab(self.talk, "Talk")
         self.tabs.addTab(self.inbox, "Inbox")
         self.tabs.addTab(self.her, "Her")
         self.tabs.addTab(self.people, "People")
@@ -177,7 +183,12 @@ class AlexController(QWidget):
 
     def _tab_changed(self, index: int):
         widget = self.tabs.widget(index)
-        if widget is self.her:
+        if widget is self.talk:
+            # Connects on first open, not at launch: a session registered as
+            # the creator is one core/proactive.py counts as him being
+            # present. See TalkView.open_tab().
+            self.talk.open_tab()
+        elif widget is self.her:
             self.her.refresh_all()
         elif widget is self.inbox:
             self.inbox.refresh()
@@ -258,6 +269,9 @@ class AlexController(QWidget):
             if tailer:
                 tailer.stop()
                 tailer.wait(2000)
+        # 2026-09-26: and the Talk socket, so her sessions table does not
+        # keep a creator session open until her next start sweeps it.
+        self.talk.shutdown()
         super().closeEvent(event)
 
 

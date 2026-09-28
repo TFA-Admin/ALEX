@@ -1121,6 +1121,15 @@ class HerView(QWidget):
         self.refresh_mood_btn = QPushButton("🔄 Refresh mood")
         self.refresh_mood_btn.clicked.connect(self.refresh_mood)
         mood_btns.addWidget(self.refresh_mood_btn)
+        # 2026-09-28 (Craig: "she could potentially break herself and there
+        # would be nothing we could do?"). A snapshot on demand, for before
+        # approving anything that worries him. Her retention pass takes one
+        # daily; this is the same function (core/retention.backup_database).
+        self.backup_btn = QPushButton("💾 Back up her database now")
+        self.backup_btn.setToolTip("A consistent copy of db/memory.db, taken while she runs and integrity-checked. "
+                                   "Kept in db/backups; the newest 14 are held.")
+        self.backup_btn.clicked.connect(self.back_up_database)
+        mood_btns.addWidget(self.backup_btn)
         mood_btns.addStretch(1)
         lay.addLayout(mood_btns)
         lay.addWidget(QLabel(
@@ -1216,6 +1225,19 @@ class HerView(QWidget):
             lines.append("Retention (daily, core/retention.py): last run "
                          + _time.strftime("%Y-%m-%d %H:%M", _time.localtime(float(ret.get("at", 0))))
                          + (f", removed {removed}" if removed else ", nothing to remove"))
+        # 2026-09-28: the backups, because their absence went unnoticed for
+        # eight days while this panel reported retention as healthy.
+        try:
+            from core import retention as _ret
+            b = _ret.newest_backup()
+            if b.get("name"):
+                age = f"{b['hours']:.1f} h ago" if b["hours"] < 48 else f"{b['hours'] / 24:.1f} days ago"
+                warn = "  ← STALE" if b["hours"] > _ret.BACKUP_STALE_H else ""
+                lines.append(f"Backups: {b['count']} kept, newest {b['name']} ({b['mb']} MB, {age}){warn}")
+            else:
+                lines.append("Backups: NONE — nothing has been saved. Her retention pass takes one daily.")
+        except Exception as e:
+            lines.append(f"Backups: could not be read ({e})")
         self.mood_output.setPlainText("\n".join(lines))
 
     # =====================================================================
@@ -1302,6 +1324,26 @@ class HerView(QWidget):
         except Exception as e:
             self.note(f"⚠️ Could not tend the pet: {e}")
         self.refresh_pet()
+
+    def back_up_database(self):
+        """One snapshot, now. Runs in the Controller's own process, which is
+        the point: it does not need her to be up or cooperative."""
+        self.backup_btn.setEnabled(False)
+        try:
+            from core import retention
+            result = retention.backup_database("manual")
+            if result.get("ok"):
+                self.note(f"[SYSTEM] Backed up her database: {os.path.basename(result['path'])} "
+                          f"({result['mb']} MB, {result['turns']} turns kept)")
+                newest = retention.newest_backup()
+                self.note(f"[SYSTEM] {newest.get('count', 0)} backup(s) in db/backups; retention keeps the newest 14")
+            else:
+                self.note(f"⚠️ The backup did not succeed: {result.get('error')}")
+        except Exception as e:
+            self.note(f"⚠️ Could not back up her database: {e}")
+        finally:
+            self.backup_btn.setEnabled(True)
+        self.refresh_mood()
 
     def run_fault_check(self):
         self.fault_check_output.setPlainText("Running diagnostic check...")

@@ -34,6 +34,13 @@ database row" is worse than a rephrase.
 | End it politely | **"that's all / that's it / that's enough / that'll be all / we're done / I'm done / never mind / goodbye / good night / talk (to you) later / catch you later"**, near the end of the sentence | She replies once, then the window closes. |
 | Interrupt her | start talking | Barge-in: she stops. A word said over her long reply may be lost to the recorder; say it again after she stops. |
 
+**None of this row applies to typing.** Everything above exists because a
+microphone hears the whole room; a keyboard does not. Text — her page's
+box, or the Controller's **Talk** tab (2026-09-26) — is addressed to her
+by definition: no name, no window, no "not addressed". A typed session
+cannot pass her voice check either, so creator commands there need your
+override code, in the Talk tab's field or said in the sentence itself.
+
 ## 2. What she now decides for herself — no phrase needed
 
 Ask naturally. She chooses to look before answering; these are her tools

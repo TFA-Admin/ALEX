@@ -220,7 +220,12 @@ class WSSession:
 
     async def __aenter__(self):
         self.ws = await websockets.connect(WS_URI, ssl=_SSL, max_size=None)
-        await self.ws.send(json.dumps({"user_name": self.user}))
+        # 2026-09-26: `text_only`. Every reply used to be synthesized and
+        # sent to a client whose own comment says it "has no ears" — Piper
+        # for each turn of every case, and the handshake's say(wait=True)
+        # sleeping out a playback nobody heard. The flag skips both; what
+        # she SAYS is unchanged, since synthesis happens after generation.
+        await self.ws.send(json.dumps({"user_name": self.user, "text_only": True}))
         # Drain the handshake. A brand-new throwaway profile lands in
         # onboarding, which tolerates a client that never sends audio, so any
         # non-empty text moves each prompt along until __PROFILE__ arrives.

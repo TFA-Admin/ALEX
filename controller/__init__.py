@@ -5,11 +5,13 @@ The A.L.E.X. Controller — her window, split into one module per view.
 2026-09-21. ALEX_Controller.py had grown to 2,637 lines in a single class
 with ten tabs, and Craig said what anyone would: "It's gotten a bit messy
 and busy... I would like a better cleaner ui without losing and possibly
-even gaining functionality." Six views now, each its own file, every
-function kept and the reasons behind them kept with the code that has
-them:
+even gaining functionality." Six views now (seven since 2026-09-26),
+each its own file, every function kept and the reasons behind them kept
+with the code that has them:
 
     Run       start, stop, restart, model, Ollama, live consoles
+    Talk      a typed conversation with her, on the same socket the browser
+              uses (2026-09-26 — the one thing this window could not do)
     Inbox     everything waiting on him, in one list; settled items in History
     Her       personality, standing rules, beliefs, decisions, curiosity,
               modules, health

@@ -114,6 +114,22 @@ from speech.tts_engine import SAMPLE_RATE as _RATE
 SETTLE_S = 0.4
 
 
+# 2026-09-26: a connection with no ears. The Controller's Talk view
+# (controller/views/talk.py) is a real client on the same /ws endpoint —
+# same pipeline, same memory, same personality — that types instead of
+# speaking, and synthesizing audio for it would cost Piper a turn and
+# send bytes nobody plays. The flag is set once on the connection's own
+# ASGI state at handshake (ws/ws_handlers.py) rather than plumbed through
+# every caller, so the one function that makes her speak can answer the
+# question for all of them. `scope["state"]` is copied per connection by
+# uvicorn, so this is genuinely per-socket and not shared.
+def is_text_only(websocket) -> bool:
+    try:
+        return bool(getattr(websocket.state, "text_only", False))
+    except Exception:
+        return False
+
+
 def playback_seconds(pcm: bytes) -> float:
     """How long that audio takes to play. The browser never reports
     end-of-playback — it only ever sends the handshake, text, audio,
@@ -158,7 +174,7 @@ async def say(websocket, text: str, *, user_id: str = None,
             await websocket.send_text("__START__")
             await websocket.send_text(text)
 
-            pcm = await synthesize_speech(text) if speak else None
+            pcm = await synthesize_speech(text) if speak and not is_text_only(websocket) else None
             if pcm:
                 await websocket.send_bytes(pcm)
 
