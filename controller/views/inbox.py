@@ -752,22 +752,36 @@ class InboxView(QWidget):
         if not p:
             return
         from controller import review as rv
+
+        # 2026-09-28 (Craig: "clicked the button, it failed and wrote a
+        # proposal. I'd like it just work instead"). So the button always
+        # produces a note, now, from her own record — how often she has
+        # proposed this setting, what he decided last time and why, whether
+        # this value retreads accepted ground or rewords something he already
+        # refused, whether her own measurement supports a change, whether the
+        # suites have run, whether the diff is the one line it should be.
+        # None of that needs anything installed.
+        try:
+            note = rv.deterministic_note(p)
+            asyncio.run(update_proposal(p["id"], review=note,
+                                        reviewed_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")))
+            self.note(f"[REVIEW] Note on #{p['id']} written from her record — it is under the proposal now.")
+        except Exception as e:
+            self.note(f"⚠️ [REVIEW] could not write the note on #{p['id']}: {e}")
+        self.refresh()
+
+        # Then the part a model adds: whether her REASONING holds. That still
+        # wants Claude; without it the packet waits for a session and the note
+        # above stands on its own meanwhile.
         cli = rv.find_cli()
         if not cli:
             try:
                 path = rv.queue(p)
+                self.note(f"[REVIEW] A reading of her reasoning needs Claude Code, which is not installed here, "
+                          f"so it is queued as {os.path.basename(path)} and will be appended when a session picks "
+                          f"it up. Install once with: npm i -g @anthropic-ai/claude-code")
             except Exception as e:
-                self.note(f"⚠️ Could not write the review request: {e}")
-                return
-            self.note(f"[REVIEW] Claude Code is not installed on this machine, so #{p['id']} is queued for the "
-                      f"next session: {os.path.basename(path)}")
-            self.note("[REVIEW] To make the button answer here and now, install it once "
-                      "(npm i -g @anthropic-ai/claude-code) or put the path in config/controller_settings.json "
-                      "as \"claude_cli\".")
-            QMessageBox.information(
-                self, "Queued for review",
-                f"Claude Code is not installed, so proposal #{p['id']} was written to\n{path}\n\n"
-                "The next session that is open will pick it up and the note will appear under the proposal.")
+                self.note(f"⚠️ [REVIEW] could not queue the reasoning review: {e}")
             return
         self._asking = True
         self._version_selection_changed()
@@ -784,9 +798,15 @@ class InboxView(QWidget):
             self.note(f"⚠️ [REVIEW] #{pid}: {err}")
         if text:
             try:
-                asyncio.run(update_proposal(pid, review=text, reviewed_at=datetime.now(timezone.utc)
+                # Appended, not replaced: the note written from her record when
+                # the button was pressed is the part that is always true, and
+                # this is the reading of her reasoning on top of it.
+                from db.db import get_proposal
+                existing = (asyncio.run(get_proposal(pid)) or {}).get("review") or ""
+                combined = (existing.rstrip() + "\n\n— Claude on her reasoning —\n" + text) if existing else text
+                asyncio.run(update_proposal(pid, review=combined, reviewed_at=datetime.now(timezone.utc)
                                             .strftime("%Y-%m-%d %H:%M:%S")))
-                self.note(f"[REVIEW] Claude's note on #{pid} is under the proposal ({len(text)} chars).")
+                self.note(f"[REVIEW] Claude's reading of #{pid} is under the proposal ({len(text)} chars).")
             except Exception as e:
                 self.note(f"⚠️ [REVIEW] could not store the note on #{pid}: {e}")
                 self.note(f"[REVIEW] the note said: {text[:600]}")

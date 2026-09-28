@@ -44,6 +44,7 @@ the whole point of the container she proposes into.
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -178,3 +179,160 @@ def ask_cli(p: dict, cli: str) -> tuple:
     except OSError:
         pass
     return text, ""
+
+# ---------------------------------------------------------------------------
+# THE NOTE THAT NEEDS NOTHING INSTALLED (2026-09-28)
+# ---------------------------------------------------------------------------
+# Craig: "clicked the button, it failed and wrote a proposal. I'd like it just
+# work instead." Fair. A button that answers "I have written a file somewhere"
+# is not a button that works.
+#
+# Most of what a review of one of these actually says is mechanical, and the
+# facts are all in her database: how many times she has proposed this same
+# setting, what Craig decided last time and why, whether this value retreads
+# ground he has already accepted or is a reworded version of something he has
+# already refused, whether her own measurement supports a change at all,
+# whether the suites have been run against it, and whether the diff is the one
+# line it should be. None of that needs a model. It is computed here, it is
+# instant, it is offline, and it is the same reasoning that has produced every
+# rejection in this table so far.
+#
+# What a model adds on top is judgement about her RATIONALE — whether the
+# argument holds, what she has misread. That part still wants Claude, and it is
+# appended when the CLI exists. The note below is never empty.
+_MEASURE_NO_EVIDENCE = ("no reply has ever been tied", "the evidence to decide",
+                        "can never read zero", "no value of either setting")
+
+
+def _overlap(a: str, b: str) -> float:
+    """Share of the shorter text's content words that the other also has. For
+    spotting a reworded repeat of something he already refused."""
+    def words(t):
+        return {w for w in re.findall(r"[a-z']{4,}", (t or "").lower())}
+    wa, wb = words(a), words(b)
+    if not wa or not wb:
+        return 0.0
+    return len(wa & wb) / min(len(wa), len(wb))
+
+
+def deterministic_note(p: dict) -> str:
+    """Everything that can be said about this proposal from her own record,
+    with no model involved. Facts first, then one summary line."""
+    import asyncio
+
+    from db.db import fetch_proposals
+    facts, flags = [], []
+    target = p.get("target")
+    value = str(p.get("value") or "").strip()
+
+    try:
+        rows = asyncio.run(fetch_proposals(limit=400))
+    except Exception as e:
+        return f"Could not read her proposal history ({e}), so there is nothing to compare this against."
+
+    # ---- how often this setting has come round, and what he did ----------
+    if target:
+        same = [r for r in rows if r.get("target") == target and r["id"] != p["id"]]
+        declined = [r for r in same if r.get("status") == "declined"]
+        rejected = [r for r in same if r.get("status") == "rejected"]
+        merged = [r for r in same if r.get("status") == "merged"]
+        facts.append(f"She has looked at {target} {len(same) + 1} times. "
+                     f"{len(declined)} concluded no change, you rejected {len(rejected)}, "
+                     f"you accepted {len(merged)}.")
+        if rejected:
+            last = rejected[0]
+            why = (last.get("reason") or "").strip()
+            facts.append(f"Your last refusal on it was #{last['id']} ({str(last.get('updated_at'))[:16]})"
+                         + (f': "{why[:240]}"' if why else "."))
+        # exactly this value, already refused
+        folded = " ".join(value.split()).casefold()
+        for r in rejected:
+            if " ".join(str(r.get("value") or "").split()).casefold() == folded and folded:
+                flags.append(f"This is the same value you rejected as #{r['id']}.")
+                break
+        else:
+            # a reworded version of something refused
+            for r in rejected:
+                ov = _overlap(value, str(r.get("value") or ""))
+                if ov >= 0.75 and len(value.split()) > 8:
+                    flags.append(f"This is a reworded version of what you rejected as #{r['id']} "
+                                 f"({ov * 100:.0f}% of the same words).")
+                    break
+        # a value inside ground already accepted
+        try:
+            from core.self_author import _oscillates, current_value
+            accepted = [str(r.get("value") or "") for r in reversed(merged) if r.get("value")]
+            problem = _oscillates(target, current_value(target), value, accepted)
+            if problem:
+                flags.append(problem[0].upper() + problem[1:] + ".")
+        except Exception:
+            pass
+
+    # ---- does her own measurement support a change at all ---------------
+    if target:
+        try:
+            from core.self_author import measure
+            m = asyncio.run(measure(target))
+            facts.append("The measurement she was shown: " + " ".join(m.split())[:420])
+            low = m.lower()
+            if any(k in low for k in _MEASURE_NO_EVIDENCE):
+                flags.append("Her own measurement says the evidence to decide this does not exist. "
+                             "On her own rule the right proposal was no change.")
+            for zero in ("0 had two resources", "0 had three or more", "0 looked something up"):
+                if zero in low:
+                    flags.append("The measurement reports zero cases a change would affect.")
+                    break
+            m84 = re.search(r"latest intent suite (\d+)/(\d+)", low)
+            if m84 and m84.group(1) == m84.group(2):
+                flags.append(f"The intent suite is {m84.group(1)}/{m84.group(2)} on the current line: "
+                             "there is no failing case for this clause to fix.")
+        except Exception as e:
+            facts.append(f"(the measurement could not be recomputed: {e})")
+
+    # ---- has it been tested ---------------------------------------------
+    if p.get("gate"):
+        try:
+            g = json.loads(p["gate"]) if isinstance(p["gate"], str) else p["gate"]
+            bad = [f"{k} {v.get('passed')}/{v.get('total')}" for k, v in (g or {}).items()
+                   if v.get("passed") != v.get("total")]
+            facts.append("Gate: " + (", ".join(f"{k} {v.get('passed')}/{v.get('total')}" for k, v in (g or {}).items())
+                                     or "empty"))
+            if bad:
+                flags.append("The gate has failing suites: " + ", ".join(bad) + ".")
+        except Exception:
+            facts.append(f"Gate: {str(p['gate'])[:200]}")
+    else:
+        flags.append("Not gated: her suites have not been run against this version yet.")
+
+    # ---- is the change the one line it should be ------------------------
+    tree = p.get("worktree")
+    if tree and os.path.isdir(tree):
+        stat = _run(["git", "diff", "--stat", "HEAD~1"], cwd=tree).strip()
+        if stat:
+            files = [ln for ln in stat.splitlines() if "|" in ln]
+            facts.append(f"The diff touches {len(files)} file(s): " + "; ".join(f.strip()[:70] for f in files[:4]))
+            if len(files) > 1:
+                flags.append(f"The diff touches {len(files)} files. A setting change should be one line in one file "
+                             "— read it before approving.")
+    elif p.get("status") in ("proposed", "gated"):
+        flags.append("No worktree on disk, so there is no diff to read.")
+
+    # ---- one summary line ------------------------------------------------
+    if flags:
+        verdict = ("Nothing here is new information for you. " if len(flags) > 1
+                   else "There is a reason to be careful here. ")
+    else:
+        verdict = ("Nothing mechanical argues against this one; what is left is whether her reasoning holds, "
+                   "which is a judgement call. ")
+
+    out = [verdict.strip(), ""]
+    if flags:
+        out.append("What stands out:")
+        out += [f"  - {f}" for f in flags]
+        out.append("")
+    out.append("The record:")
+    out += [f"  - {f}" for f in facts]
+    out.append("")
+    out.append("Written from her database by the Controller, with no model involved. A reading of her "
+               "reasoning needs Claude and is appended when it answers.")
+    return "\n".join(out)

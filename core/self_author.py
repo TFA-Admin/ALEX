@@ -261,6 +261,35 @@ def check_direction(t: Target, current: str, new_value: str, effect: str):
     return f"did not state the expected effect in the given terms (said: {effect!r})"
 
 
+NEAR_DUPLICATE = 0.75       # share of the shorter text's content words in common
+NEAR_MIN_WORDS = 8          # below this, two short values are alike by accident
+
+
+def _near_duplicate(value, rejected: dict):
+    """(when, reason, overlap) if `value` is a rewording of something he
+    already refused, else None. Only for values long enough to have a
+    wording — an integer cannot be reworded, and two short strings overlap
+    by accident."""
+    text = str(value or "")
+    if len(text.split()) < NEAR_MIN_WORDS:
+        return None
+
+    def words(t):
+        return {w for w in re.findall(r"[a-z']{4,}", (t or "").lower())}
+
+    mine = words(text)
+    if not mine:
+        return None
+    for folded, (when, reason) in rejected.items():
+        theirs = words(folded)
+        if not theirs:
+            continue
+        overlap = len(mine & theirs) / min(len(mine), len(theirs))
+        if overlap >= NEAR_DUPLICATE:
+            return when, reason, overlap
+    return None
+
+
 def _oscillates(key: str, current, value, merged: list):
     """The reason to refuse a value that retreads accepted ground, or None.
     `merged` is every value he has accepted for this target, oldest first."""
@@ -417,6 +446,16 @@ async def propose(key: str, why: str = "", root: str = ALEX_DIR, model: str = No
     # 2026-09-25: a value he rejected in the last 30 days is not proposed
     # again, whatever the rationale. Deterministic, like the direction
     # check; the row this makes rests the target like any other look.
+    # 2026-09-28: and a REWORDED repeat. Proposal #76 was the status_check line
+    # a third time, at 98% the same words as #18 — whose rejection reason was
+    # literally "you simply changed one word and reproposed". The exact-value
+    # guard below cannot see that, because one changed word makes a new string.
+    near = _near_duplicate(value, rejected)
+    if near:
+        pid_when, reason, overlap = near
+        return {"ok": False, "error": (f"refused — this is a reworded version of what he rejected on {pid_when} UTC "
+                                       f"({overlap * 100:.0f}% of the same words): \"{reason[:200]}\". "
+                                       f"Her rationale: {rationale}")}
     if _same(value) in rejected:
         when, reason = rejected[_same(value)]
         return {"ok": False, "error": (f"refused — he rejected exactly this value ({short(value, 60)}) on {when} UTC: "
