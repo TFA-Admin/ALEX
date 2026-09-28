@@ -1471,3 +1471,29 @@ is UNSURE — not knowing is not denying. Verified on five probes: both
 mis-scored replies flip to unsure, and a real contradiction, a real correction
 and a real agreement all keep their verdicts.
 
+### Asking Claude about a proposal, from the Controller (2026-09-28)
+Craig wanted a ping when she proposes, so a review reaches him with the
+proposal rather than him carrying each one into a session by hand. A scheduled
+cloud agent cannot do it — a cloud routine has no access to her database or her
+worktree — and he ruled out the local alternative anyway: "I don't want a
+headless session running." So it is a button, and nothing runs until he presses
+it.
+
+What made it worth building rather than just pasting: the packet. A reviewer
+arriving cold sees the proposal, the measurement she was shown when she wrote
+it, every decision Craig has already made on that setting with his reasons, the
+values he has accepted, the gate results, and the real diff from her worktree.
+Without those a review is a second opinion on a title — which is what pasting a
+proposal into a chat had been getting.
+
+Found while building: **Claude Code is not installed on this machine**, so the
+button cannot invoke it today. Rather than leave the feature dead, the button
+writes the packet to `config/review_requests/` and says it is queued; any
+session that opens picks it up and the note lands in the same place. One global
+npm install upgrades the same button to answering in place, and a non-standard
+path can go in `controller_settings.json` as `"claude_cli"`.
+
+It cannot approve or reject: there is no code path in controller/review.py that
+writes a proposal status. The note is advisory and sits under the proposal while
+he decides, which keeps approving something he does on purpose.
+

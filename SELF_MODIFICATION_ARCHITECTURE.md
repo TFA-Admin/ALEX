@@ -265,6 +265,25 @@ daily. If a recovery is ever needed: stop her at the Controller, copy the
 chosen file over `db/memory.db`, start her. Code needs no backup — it is all
 in git and she cannot write a file.
 
+*Reviewing her proposals ("Ask Claude to review", built 2026-09-28).* Craig
+asked for a ping when she proposes, then ruled out a scheduled headless run:
+"I don't want a headless session running. We can connect you to her controller
+and when I see a proposal just hit an 'ask claude' button." So it is a button in
+the Inbox next to a selected proposal. It assembles a packet — the proposal, the
+measurement she was shown, every decision he has made on that setting with his
+reasons, the values he has accepted, the gate results and the real `git diff`
+from her worktree — and either runs Claude Code once in print mode (if `claude`
+is on PATH or `controller_settings.json` has `"claude_cli"`) or writes the
+packet to `config/review_requests/` and says it is queued. **Claude Code is NOT
+installed on this machine as of 2026-09-28**, so the queue is the live path
+today; one `npm i -g @anthropic-ai/claude-code` makes the button answer in
+place. The note lands in `proposals.review` and shows under the proposal in the
+Inbox. **It can never approve or reject — no code path in controller/review.py
+writes a status.** IF YOU ARE A SESSION STARTING WORK HERE: check
+`controller.review.pending()` (or just `ls config/review_requests/`) and answer
+anything waiting, writing the note with
+`update_proposal(pid, review=..., reviewed_at=...)`.
+
 *Standing constraints (his words).* Port 5000 never exposed; push only
 when asked; the Controller is the kill path and must never depend on
 her; protected paths refuse proposals; Limits (#11) before module

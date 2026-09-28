@@ -284,6 +284,20 @@ async def init_db():
         except Exception:
             pass
 
+        # 🧠 CLAUDE'S NOTE ON A PROPOSAL (2026-09-28). Craig: "hit an 'ask
+        # claude' button and have it hit you with the proposal that way".
+        # Advisory only — nothing in controller/review.py writes a status, so
+        # a note can never approve or reject. Shown under the proposal in the
+        # Inbox while he decides.
+        try:
+            await db.execute("ALTER TABLE proposals ADD COLUMN review TEXT")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE proposals ADD COLUMN reviewed_at TIMESTAMP")
+        except Exception:
+            pass
+
         # 🚫 RETRACTED MEMORY (2026-09-21). A reply of hers that turned out
         # to be invented ("I checked", when she had not) stays in the table
         # for Craig to see but never reaches her context or her memory
@@ -770,9 +784,10 @@ async def fetch_profile_names() -> list:
 # PROPOSALS (2026-09-21) — see the table comment in init_db()
 # -------------------------
 _PROPOSAL_KEYS = ["id", "title", "rationale", "author", "target", "branch", "worktree",
-                  "status", "gate", "reason", "staging_pid", "value", "created_at", "updated_at"]
+                  "status", "gate", "reason", "staging_pid", "value", "review", "reviewed_at",
+                  "created_at", "updated_at"]
 _PROPOSAL_WRITABLE = {"title", "rationale", "author", "target", "branch", "worktree",
-                      "status", "gate", "reason", "staging_pid", "value"}
+                      "status", "gate", "reason", "staging_pid", "value", "review", "reviewed_at"}
 
 
 async def create_proposal(title: str, rationale: str, author: str, target: str = None,

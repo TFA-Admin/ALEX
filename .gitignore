@@ -21,3 +21,6 @@ db/backups/
 
 # Controller per-machine settings (model choice)
 config/controller_settings.json
+
+# Review packets the Controller writes for a Claude session (transient)
+config/review_requests/

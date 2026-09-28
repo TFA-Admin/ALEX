@@ -22,7 +22,9 @@ Kinds of item, and where each came from:
 """
 import json
 import asyncio
+import os
 import webbrowser
+from datetime import datetime, timezone
 
 
 def _plain(p: dict) -> str:
@@ -58,7 +60,7 @@ from PySide6.QtCore import QThread, Signal
 from db.db import (
     fetch_recent_module_build_requests, fetch_recent_query_reports,
     fetch_active_conclusions, fetch_unacknowledged_security_events,
-    fetch_unacknowledged_personality_changes,
+    fetch_unacknowledged_personality_changes, update_proposal,
 )
 from controller.common import make_readable, fill_row, selected_rows, to_local, tint_by_column
 from controller import actions
@@ -125,6 +127,27 @@ class _GateThread(QThread):
             results = {"error": str(e)}
             self.line.emit(f"⚠️ Gate failed: {e}")
         self.done.emit(results)
+
+
+class _ReviewThread(QThread):
+    """2026-09-28: asking Claude about a proposal takes as long as a real
+    review takes, and the window must stay usable. One invocation, then this
+    thread ends — Craig: "I don't want a headless session running"."""
+    line = Signal(str)
+    done = Signal(str, str)      # (review, error)
+
+    def __init__(self, proposal, cli):
+        super().__init__()
+        self.proposal = proposal
+        self.cli = cli
+
+    def run(self):
+        from controller import review as rv
+        try:
+            text, err = rv.ask_cli(self.proposal, self.cli)
+        except Exception as e:
+            text, err = "", f"{type(e).__name__}: {e}"
+        self.done.emit(text, err)
 
 
 class InboxView(QWidget):
@@ -517,6 +540,17 @@ class InboxView(QWidget):
         row2 = QHBoxLayout()
         self.v_approve_btn = QPushButton("✅ Approve — merge and restart her")
         self.v_approve_btn.clicked.connect(lambda: self._v_approve(self._selected_version()))
+        # 2026-09-28 (Craig: "when I see a proposal just hit an 'ask claude'
+        # button and have it hit you with the proposal that way"). Advisory
+        # only: it writes a note under the proposal and can never approve or
+        # reject. See controller/review.py for what gets sent.
+        self.v_ask_btn = QPushButton("🧠 Ask Claude to review")
+        self.v_ask_btn.setToolTip("Sends the proposal, the measurement she was shown, your past decisions on that "
+                                  "setting, the gate results and the real diff. The note appears below. "
+                                  "It never approves or rejects.")
+        self.v_ask_btn.clicked.connect(lambda: self._v_ask(self._selected_version()))
+        row2.addWidget(self.v_ask_btn)
+
         self.v_reject_btn = QPushButton("❌ Reject with reason")
         self.v_reject_btn.clicked.connect(lambda: self._v_reject(self._selected_version()))
         row2.addWidget(self.v_approve_btn)
@@ -607,6 +641,7 @@ class InboxView(QWidget):
         self.v_kill_btn.setEnabled(versions.staging_up() and not busy)
         self.v_approve_btn.setEnabled(has_tree and status in ("proposed", "gated") and not busy)
         self.v_reject_btn.setEnabled(bool(p) and status in ("requested", "proposed", "gated", "idea") and not busy)
+        self.v_ask_btn.setEnabled(bool(p) and not busy and not getattr(self, "_asking", False))
         if not p:
             self.version_detail.setText("Select a proposal.")
             return
@@ -619,6 +654,9 @@ class InboxView(QWidget):
             text += f"\nBranch {p['branch']}"
         if p.get("gate"):
             text += "\nGate: " + _gate_summary(p["gate"], long=True)
+        if p.get("review"):
+            when = to_local(p.get("reviewed_at")) if p.get("reviewed_at") else ""
+            text += f"\n\n— Claude's note{(' (' + when + ')') if when else ''} —\n{p['review']}"
         if p.get("reason"):
             text += f"\nReason: {p['reason']}"
         self.version_detail.setText(text)
@@ -706,6 +744,53 @@ class InboxView(QWidget):
             self.restart_her()
         self.refresh()
         self.changed()
+
+    def _v_ask(self, p):
+        """Send one proposal to Claude for a note. Advisory only: nothing here
+        writes a status, so it can never approve or reject. If Claude Code is
+        not installed the packet is queued instead and nothing is lost."""
+        if not p:
+            return
+        from controller import review as rv
+        cli = rv.find_cli()
+        if not cli:
+            try:
+                path = rv.queue(p)
+            except Exception as e:
+                self.note(f"⚠️ Could not write the review request: {e}")
+                return
+            self.note(f"[REVIEW] Claude Code is not installed on this machine, so #{p['id']} is queued for the "
+                      f"next session: {os.path.basename(path)}")
+            self.note("[REVIEW] To make the button answer here and now, install it once "
+                      "(npm i -g @anthropic-ai/claude-code) or put the path in config/controller_settings.json "
+                      "as \"claude_cli\".")
+            QMessageBox.information(
+                self, "Queued for review",
+                f"Claude Code is not installed, so proposal #{p['id']} was written to\n{path}\n\n"
+                "The next session that is open will pick it up and the note will appear under the proposal.")
+            return
+        self._asking = True
+        self._version_selection_changed()
+        self.note(f"[REVIEW] Asking Claude about #{p['id']} — the packet is the proposal, the measurement she was "
+                  f"shown, your past decisions on that setting, the gate and the real diff. This takes a minute.")
+        self._review_thread = _ReviewThread(p, cli)
+        self._review_thread.line.connect(self.note)
+        self._review_thread.done.connect(lambda text, err, pid=p["id"]: self._review_done(pid, text, err))
+        self._review_thread.start()
+
+    def _review_done(self, pid: int, text: str, err: str):
+        self._asking = False
+        if err:
+            self.note(f"⚠️ [REVIEW] #{pid}: {err}")
+        if text:
+            try:
+                asyncio.run(update_proposal(pid, review=text, reviewed_at=datetime.now(timezone.utc)
+                                            .strftime("%Y-%m-%d %H:%M:%S")))
+                self.note(f"[REVIEW] Claude's note on #{pid} is under the proposal ({len(text)} chars).")
+            except Exception as e:
+                self.note(f"⚠️ [REVIEW] could not store the note on #{pid}: {e}")
+                self.note(f"[REVIEW] the note said: {text[:600]}")
+        self.refresh()
 
     def _v_reject(self, p):
         if not p:
