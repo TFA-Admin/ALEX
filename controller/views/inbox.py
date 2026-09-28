@@ -54,6 +54,7 @@ def _plain(p: dict) -> str:
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTabWidget,
     QTableWidget, QAbstractItemView, QMessageBox, QInputDialog, QCheckBox,
+    QTextEdit,
 )
 from PySide6.QtCore import QThread, Signal
 
@@ -517,8 +518,14 @@ class InboxView(QWidget):
         self.versions_table.itemSelectionChanged.connect(self._version_selection_changed)
         lay.addWidget(self.versions_table)
 
-        self.version_detail = QLabel()
-        self.version_detail.setWordWrap(True)
+        # 2026-09-28 (Craig: "it's cutting off the claude reasoning under the
+        # review"). A QLabel takes whatever height the layout leaves it and
+        # clips the rest with no way to scroll — fine for a one-line title,
+        # not fine now that a proposal carries a note. Read-only text box: it
+        # scrolls, and he can select and copy out of it.
+        self.version_detail = QTextEdit()
+        self.version_detail.setReadOnly(True)
+        self.version_detail.setMinimumHeight(190)
         lay.addWidget(self.version_detail)
 
         row1 = QHBoxLayout()
@@ -643,7 +650,7 @@ class InboxView(QWidget):
         self.v_reject_btn.setEnabled(bool(p) and status in ("requested", "proposed", "gated", "idea") and not busy)
         self.v_ask_btn.setEnabled(bool(p) and not busy and not getattr(self, "_asking", False))
         if not p:
-            self.version_detail.setText("Select a proposal.")
+            self.version_detail.setPlainText("Select a proposal.")
             return
         text = f"#{p['id']} — {p['title']}"
         plain = _plain(p)
@@ -659,7 +666,7 @@ class InboxView(QWidget):
             text += f"\n\n— Claude's note{(' (' + when + ')') if when else ''} —\n{p['review']}"
         if p.get("reason"):
             text += f"\nReason: {p['reason']}"
-        self.version_detail.setText(text)
+        self.version_detail.setPlainText(text)
 
     def _v_author(self, p):
         if not p:
@@ -815,8 +822,16 @@ class InboxView(QWidget):
     def _v_reject(self, p):
         if not p:
             return
-        reason, ok = QInputDialog.getText(
-            self, "Reject version", f"Why? The reason stays with #{p['id']}.\n\n{p['title']}")
+        # 2026-09-28 (Craig: "when I click reject, if there is a claude review
+        # autoplace that review output in the field"). Prefilled and editable,
+        # and multi-line because a note is not one line — getText() put a
+        # paragraph in a box it could not be read in.
+        prefill = (p.get("review") or "").strip()
+        reason, ok = QInputDialog.getMultiLineText(
+            self, "Reject version",
+            f"Why? The reason stays with #{p['id']}, and she reads it before proposing on this setting again."
+            f"\n\n{p['title']}",
+            prefill)
         if not ok:
             return
         reason = reason.strip() or "rejected by Craig at the Controller"

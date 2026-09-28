@@ -350,7 +350,13 @@ async def decisions_on(key: str, days: int = 30):
             pass
         verb = "REJECTED" if r["status"] == "rejected" else "APPROVED"
         # the value he accepted, for _oscillates(); newest first here
-        reason = (r.get("reason") or "").strip()
+        # 2026-09-28: capped. His rejection reason can now be a whole review
+        # note, prefilled from the Controller's Reject dialog, and six of those
+        # verbatim would be thousands of tokens of her prompt. The first part
+        # is the verdict; that is what she needs to not repeat herself.
+        reason = " ".join((r.get("reason") or "").split())
+        if len(reason) > 350:
+            reason = reason[:349].rstrip() + "…"
         lines.append(f"- {when} UTC — he {verb} \"{r.get('title')}\"" + (f": \"{reason}\"" if reason else ""))
         value = _same(r.get("value"))
         if r["status"] == "rejected" and value:
