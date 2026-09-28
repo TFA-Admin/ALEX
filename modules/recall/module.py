@@ -3,6 +3,13 @@ import re
 from db.db import fetch_recent_memory, fetch_vector_memories
 
 
+def _short(text, n: int = 220) -> str:
+    """One line, trimmed. 2026-09-28: the whole reason this module's output
+    was unspeakable was that it carried entire replies verbatim."""
+    t = " ".join(str(text or "").split())
+    return (t if len(t) <= n else t[:n - 1].rstrip() + "\u2026")
+
+
 def init():
     return "memory module ready — backed by real conversation history"
 
@@ -66,8 +73,9 @@ async def handle(command, state, user_id=None):
         if not matches:
             return f"I don't have anything stored about '{topic}'.", state
 
-        lines = [f"- {m['prompt']} -> {m['response']}" for m in matches[:5]]
-        return f"Here's what I remember about '{topic}':\n" + "\n".join(lines), state
+        lines = [f"- he said {_short(m['prompt'])}; you answered {_short(m['response'])}"
+                 for m in matches[:5]]
+        return f"What your record holds about '{topic}':\n" + "\n".join(lines), state
 
     if "remember" in cmd or "recall" in cmd or "memories" in cmd:
         recent = await fetch_recent_memory(user_id, limit=10)
@@ -83,15 +91,23 @@ async def handle(command, state, user_id=None):
         # also the shape that was just removed from her prompt context for
         # inviting her to continue it; there is no reason to show it to him
         # either.
+        # 2026-09-28: no transcript layout and no storage markers. This used
+        # to build 'You: "..."' / 'Me: "..."' / 'I said, unprompted: "..."'
+        # and hand it back as her reply, which was then read aloud verbatim —
+        # 455 words of her own stored conversation, including the marker
+        # db.remember_own_utterance() adds. The system that calls this now
+        # passes the result to her as context to answer FROM, so what it owes
+        # is plain, compact facts with no shape to copy.
         lines = []
         for m in recent:
             said = (m["prompt"] or "").strip()
             replied = (m["response"] or "").strip()
+            when = str(m.get("created_at") or "")[:16]
             if said.startswith("(unprompted"):
-                lines.append(f'- I said, unprompted: "{replied}"')
+                lines.append(f"- {when}: unprompted, you said {_short(replied)}")
             else:
-                lines.append(f'- You: "{said}"\n  Me: "{replied}"')
+                lines.append(f"- {when}: he said {_short(said)}; you answered {_short(replied)}")
 
-        return "Here's what I remember from our recent conversations:\n" + "\n".join(lines), state
+        return "Your last exchanges with him, newest last:\n" + "\n".join(lines), state
 
     return "Ask me what I remember, or what I remember about a specific topic.", state

@@ -389,12 +389,35 @@ _STOCK_CLOSER_RE = re.compile(
     r"|(?:are|is) there (?:\w+ ){0,2}(?:command|commands|instruction|instructions|task|tasks|queries|directives?)\b[^.!?]*\?"
     r"|(?:do|will|would) you (?:require|wish|want|need|desire) (?:\w+ ){0,3}(?:further|another|additional|more|else|next|now|from me)\b[^.!?]*\?"
     r"|what (?:do|will|would) you (?:require|need|want|desire|command)(?: (?:next|now|from me|of me))?\?"
-    r"|what (?:else|now|next)(?: (?:do|would) you \w+)?\?"
+    # "What next?" bare, and "What else do you want...?" — but NOT "What
+    # else did you change in the code?", which is the one question the rule
+    # above deliberately allows her.
+    r"|what (?:else|now|next)\s*\?"
+    r"|what (?:else|now|next) (?:do|would|shall|will) you (?:want|need|require|wish|desire|command|ask)\b[^.!?]*\?"
     r"|(?:my )?(?:processing )?cycles (?:await|are waiting)[^.!?]*[.!?]"
     r"|(?:i )?(?:await|awaiting) (?:your )?(?:next )?(?:command|instruction|input|orders?)[^.!?]*[.!?]"
     r"|(?:i )?(?:require|need|am ready for) (?:further |your |the next )?(?:instruction|instructions|command|commands)[^.!?]*[.!?]"
-    r"|(?:shall|should) (?:we|i) (?:proceed|continue|begin)\??"
+    # Bare only: "Shall I proceed with the search?" is a real offer to act.
+    r"|(?:shall|should) (?:we|i) (?:proceed|continue|begin)(?: to the next (?:command|step|task|matter))?\s*\??"
     r"|speak\.|proceed\."
+    # 2026-09-28 (Craig: "half her replies end by handing the turn back to
+    # you — this does need a fix"). Measured on 95 replies: 26% closed on a
+    # question, which this pattern was built for, and a FURTHER 28% closed on
+    # a demand no rule mentioned. The prompt forbade closing questions and
+    # named three question shapes, so she kept the behaviour and dropped the
+    # question mark. Each shape below is one she actually used and carries no
+    # information whatever follows it; a concrete offer to act ("Do you wish
+    # me to feed him now?") is deliberately NOT here.
+    r"|(?:do not|don'?t) expect me to [^.!?]*[.!?]"
+    r"|ask (?:me )?(?:for )?what you (?:need|want|require)\b[^.!?]*[.!?]"
+    r"|(?:is|are) there (?:anything|something) else\b[^.!?]*\?"
+    r"|how shall we proceed\s*\??"
+    r"|(?:report|check) back to me\b[^.!?]*[.!?]"
+    r"|do not trouble me\b[^.!?]*[.!?]"
+    r"|i will not volunteer\b[^.!?]*[.!?]"
+    r"|(?:state|provide) (?:your business|confirmation|your intent|your purpose)\b[^.!?]*[.!?]"
+    r"|(?:the )?next (?:move|step) is yours\b[^.!?]*[.!?]"
+    r"|your move\s*\.?"
     r")\s*$",
     re.I,
 )

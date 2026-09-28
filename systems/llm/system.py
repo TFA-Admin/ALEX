@@ -628,6 +628,14 @@ class System(BaseSystem):
         except Exception as e:
             logger.warning(f"⚠️ could not read her slips: {e}")
 
+        # 2026-09-28: what one of her modules just returned, as data she
+        # answers from (systems/modules/system.py). Her own record, never a
+        # script to read out.
+        module_context = session.pop("module_context", None)
+        if module_context:
+            context_blocks.append(module_context)
+            evidence["lookups"] = True      # a module ran: a claim of looking is backed
+
         # 2026-09-25 (live, 16:20-16:30): a search was proposed, his answer
         # was not read as yes or no, the gate dropped the question, and she —
         # knowing nothing about it — said "the web surfacing operation has

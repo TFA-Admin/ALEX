@@ -177,9 +177,26 @@ class System(BaseSystem):
             await set_module_state(user_id, module_name, new_state)
 
         if result:
-            return {
-                "type": "response",
-                "content": result
-            }
+            # 2026-09-28 (Craig: "the defect is that she never answered the
+            # question at all, and that the module recites internal
+            # formatting. Fix it"). He asked "remember you named it?"; the
+            # word "remember" routed the turn here, and the recall module's
+            # raw output became her whole reply — a 455-word transcript read
+            # aloud, markers and all: 'You: "..."', 'Me: "..."', 'I said,
+            # unprompted: ...'. The question was never answered.
+            #
+            # A module's output is DATA, the same as a lookup or a tool
+            # result. It goes into the turn as context and she answers from
+            # it in her own words (the shape systems/diagnostics/system.py
+            # was moved to on 2026-09-25 for the same reason). Falling
+            # through returns None, so systems/llm/system.py takes the turn.
+            session["module_context"] = (
+                f"YOUR '{module_name}' MODULE RAN AND RETURNED THIS (it is your own record, not his "
+                f"words, and not something to read out):\n{result}\n"
+                "Answer what he actually asked, in your own words, from this. Never quote it, never "
+                "repeat its layout, and never speak the markers in it (\"You:\", \"Me:\", "
+                "\"I said, unprompted\") — they are how it is stored, not something he said or you said.")
+            logger.info(f"[MODULE] {module_name} answered into context ({len(result)} chars); she speaks")
+            return None
 
         return None

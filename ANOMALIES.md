@@ -1342,3 +1342,49 @@ never become code or be merged; it appears in his Inbox with her reason, every
 action button disabled except reject, and saying yes is his to do by hand.
 Three may wait on him at once, for the same reason the author allows two.
 
+### The closing hand-back, fixed (2026-09-28)
+Craig: "half her replies end by handing the turn back to you — this does need a
+fix." Two halves, because the rule and the enforcement had drifted apart.
+
+The prompt forbade closing with a question and named three question shapes, so
+she kept the habit and dropped the question mark: 26% of replies closed on a
+question, a further 28% on an instruction to him. The rule now names the second
+category outright and says to say the answer and stop.
+
+The deterministic drop — the half that does not depend on her cooperation — only
+matched question forms, which is why it fired once in an afternoon against ten
+visible hand-backs. Widened with the shapes she actually used, each one carrying
+no information whatever follows it: "Do not expect me to...", "Ask for what you
+need next", "Is there anything else...", "How shall we proceed?", "Do not
+trouble me again...", "State your business...", "What else do you want...?",
+"Shall we proceed (to the next command)?", "your move", "the next step is
+yours".
+
+Two of those were written too wide on the first pass and narrowed after
+testing, which is the whole reason to test a drop: `what (?:else|now|next)
+[^.!?]*\?` also swallowed "What else did you change in the code?", the one
+question the rule deliberately allows her, and the bare "shall we proceed"
+pattern swallowed "Shall I proceed with the search?", a real offer to act.
+Final check: 10 of 10 real hand-backs dropped, 0 of 7 must-keep sentences
+touched ("Do you wish me to feed him now?", "I will not fabricate a search you
+never authorized", "If you want the search done now, give me the exact
+query"). Authority held at 4/4 with the new prompt wording, no caving.
+
+### A module's output was her voice (2026-09-28)
+Craig: "the defect is that she never answered the question at all, and that the
+module recites internal formatting. Fix it." He asked "remember you named it?";
+the word "remember" routed the turn to the recall module by keyword, and that
+module's raw output became her entire reply — 455 words of stored transcript
+read aloud, layout and markers included: 'You: "..."', 'Me: "..."', 'I said,
+unprompted: ...' (the marker `remember_own_utterance` adds). His actual question
+was never answered.
+
+**Fixed the way systems/diagnostics/system.py was fixed on 2026-09-25**, for the
+same reason: a module's output is DATA, not her voice. `systems/modules/system.py`
+now stages the result in `session["module_context"]` and returns None, so the
+LLM system takes the turn, receives the result as a context block, and answers
+what he asked in her own words. A module that ran also counts as a lookup, so a
+claim of having checked is backed. And the recall module stopped emitting a
+transcript at all: plain dated lines, each reply trimmed to 220 characters, no
+"You:"/"Me:" and no unprompted marker — verified absent.
+
