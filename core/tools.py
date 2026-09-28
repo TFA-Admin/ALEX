@@ -140,6 +140,20 @@ TOOLS = [
         ["path", "start_line"]),
     _fn("current_time",
         "The current local date, time and day of the week."),
+    # 2026-09-28 (Craig: "give her a channel for a proposal that isn't a
+    # number"). Everything she could propose until now was one of nine
+    # whitelisted settings, so anything she worked out about herself that was
+    # not an integer had nowhere to go — her reflection wrote conclusions and
+    # nobody was asked to decide them.
+    _fn("propose_in_words",
+        "Ask your creator to change something about you that is NOT one of your settings: how you "
+        "speak, something you keep doing that you think is wrong, something you cannot do and think "
+        "you should, a rule of yours you think is mistaken. Use it when you have worked something "
+        "out about yourself, not to ask for a task. Nothing changes when you call this — it puts "
+        "what you said in his Inbox for him to read and decide, and he may do nothing.",
+        {"what": {"type": "string", "description": "what you want changed, in one or two plain sentences"},
+         "why": {"type": "string", "description": "what makes you think so — what you noticed, and when"}},
+        ["what", "why"]),
     _fn("propose_change",
         "Ask your creator to consider a change to one of your own settings. "
         "You may only name a whitelisted target (deliberation.threshold, "
@@ -451,6 +465,39 @@ async def _my_scores() -> str:
     return "Your measured scores, latest per suite:\n" + "\n".join(lines)
 
 
+# At most this many of her worded proposals may wait on him at once. The same
+# reasoning as the author's MAX_OPEN: a queue nobody can get through is the
+# failure mode he has objected to everywhere else.
+MAX_OPEN_IDEAS = 3
+
+
+async def _propose_in_words(user_id: str, what: str, why: str) -> str:
+    """Her one write that is not a number: a row he reads and decides. Status
+    'idea', no target, no branch — the Controller's builder only ever picks up
+    'authored', so nothing here can become code or be merged. 2026-09-28."""
+    from db.db import create_proposal, fetch_proposals
+    what, why = (what or "").strip(), (why or "").strip()
+    if len(what) < 15:
+        return "Say what you want changed, in a sentence he could act on."
+    if len(why) < 15:
+        return "Say what made you think so — what you noticed, and when."
+    open_ideas = [p for p in await fetch_proposals(limit=100) if p.get("status") == "idea"]
+    if len(open_ideas) >= MAX_OPEN_IDEAS:
+        return (f"You already have {len(open_ideas)} of these waiting for him: "
+                + "; ".join(p["title"][:60] for p in open_ideas[:3])
+                + ". Wait until he has read those.")
+    title = what if len(what) <= 90 else what[:89].rstrip() + "\u2026"
+    pid = await create_proposal(title, f"{what}\n\nWhy: {why}", "alex", target=None, status="idea")
+    await record_decision(
+        "proposal", f"She asked him to change something about her (#{pid})",
+        reasoning=why[:600], evidence=what[:600],
+        outcome="waiting in his Inbox as an idea; nothing was changed and nothing will build",
+        actor="alex", ref=f"proposals#{pid}")
+    logger.info(f"[ACTION] She proposed in words (#{pid}): {what[:120]!r}")
+    return (f"Recorded as #{pid}. He will see it in his Inbox with your reason. Nothing about you has "
+            "changed, and nothing will unless he decides to act on it.")
+
+
 async def _propose_change(user_id: str, target: str, why: str) -> str:
     """Her one write in the self-modification loop, and it is a request: a
     'requested' row in `proposals`. The Controller (controller/versions.py,
@@ -536,6 +583,8 @@ async def run_tool(name: str, args, user_id: str) -> str:
             coro = _my_projects()
         elif name == "propose_change":
             coro = _propose_change(user_id, str(args.get("target", "")), str(args.get("why", "")))
+        elif name == "propose_in_words":
+            coro = _propose_in_words(user_id, str(args.get("what", "")), str(args.get("why", "")))
         elif name == "current_time":
             coro = asyncio.to_thread(_current_time)
         else:

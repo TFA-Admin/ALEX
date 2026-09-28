@@ -1290,3 +1290,55 @@ the absence went unnoticed for eight days while that same panel reported
 retention as healthy. Verified: 3.5 MB, 1183 turns, integrity ok, and the
 whole daily pass runs backup-then-prune.
 
+### She could only ever propose one thing, and the measurement made her walk in circles (2026-09-28)
+Craig, twice: "is she being limited to this one item? Why is this memory thing
+the only thing she's proposed?" Yes, and harder than it looked. Both routes —
+her idle author and her own `propose_change` tool — check one whitelist, and it
+held five settings: two lookup numbers, two memory numbers, one line of the
+intent prompt. Of those five, her own measurements correctly reported four as
+inert ("0 had two resources worth looking up", "the suite is 84/84"), so she
+declined them, which is the rule working. The fifth, the recent-memory
+character budget, has a measurement that can NEVER read zero, because any
+finite budget cuts some windows. So the rule "a change needs a number behind
+it" fired there every time and nowhere else. 64 proposals, 24 of the last 27
+concluding no change, and the one live target walked 4000 -> 5000 -> 4500 ->
+4800 -> 4950 with each merge moving the number that justified the next one. My
+own 30-day rejected-value guard made it worse in one way: it blocked the exact
+value he had refused, so she drifted to a nearby new one instead of repeating.
+
+Three things, all built:
+  * **The measurement stopped lying.** It now says plainly that nothing ties a
+    cut window to a worse reply, that cutting is what a budget does rather
+    than evidence it is wrong, and that no value can be shown better than
+    another until that link exists — so the honest proposal is no change.
+  * **An oscillation guard**, deterministic like the direction check: a value
+    inside the range he has already accepted, or one that reverses the
+    direction of his last accepted change, is refused before it reaches him.
+    Verified against her real history: 4800 -> 4950 is refused as inside
+    4500-5000, 4800 -> 4000 as a reversal, 4800 -> 5200 allowed.
+  * **Four more doors**, chosen because their measurements CAN say nothing is
+    wrong: values.short_words, values.window_days, mood.keep_events,
+    proactive.curiosity_quiet_s. Nine targets now. Measured on the spot, three
+    of the four honestly report no change is warranted (her short-words
+    threshold splits her replies 48/52, which is what it is for; her mood
+    keeps 30 events but only names reasons from the last 45 minutes; four
+    value signals exist in total and three are needed) and one is a real
+    decision (16% of the gaps between his turns reach the 120-second lull she
+    waits for).
+
+Found while doing it: `decisions_on()` filtered his verdicts to
+("rejected", "approved"), and an approval actually lands as **"merged"** —
+so the history she reads before proposing had never once contained a change he
+ACCEPTED, only his refusals.
+
+### A proposal that is not a number (2026-09-28)
+Craig: "give her a channel for a proposal that isn't a number." Until now
+everything she could propose was one of nine integers or one prompt line, so
+anything she worked out about herself that was not a setting had nowhere to go
+— reflection wrote conclusions and nobody was ever asked to decide one. New
+tool `propose_in_words(what, why)`: a row with status 'idea', no target and no
+branch. The Controller's builder only ever picks up 'authored', so an idea can
+never become code or be merged; it appears in his Inbox with her reason, every
+action button disabled except reject, and saying yes is his to do by hand.
+Three may wait on him at once, for the same reason the author allows two.
+

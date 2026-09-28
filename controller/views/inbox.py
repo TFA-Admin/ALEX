@@ -559,8 +559,13 @@ class InboxView(QWidget):
             self._proposals = []
         # 2026-09-23: settled rows out of the way unless asked for
         if not self.v_show_settled.isChecked():
+            # 2026-09-28: "idea" is one of her worded proposals (her
+            # propose_in_words tool) — no target, no branch, nothing to build
+            # or merge. It shows here because this is where her requests live;
+            # every action button below stays disabled for it except reject,
+            # which is how he says no. Saying yes is his to do by hand.
             self._proposals = [p for p in self._proposals
-                               if p.get("status") in ("requested", "authored", "proposed", "gated")]
+                               if p.get("status") in ("requested", "authored", "proposed", "gated", "idea")]
         up = versions.staging_up()
         self.versions_label.setText(
             f"Proposed versions of her. Staging port {versions.STAGING_PORT}: "
@@ -601,7 +606,7 @@ class InboxView(QWidget):
         self.v_gate_btn.setEnabled(has_tree and status in ("proposed", "gated") and not busy)
         self.v_kill_btn.setEnabled(versions.staging_up() and not busy)
         self.v_approve_btn.setEnabled(has_tree and status in ("proposed", "gated") and not busy)
-        self.v_reject_btn.setEnabled(bool(p) and status in ("requested", "proposed", "gated") and not busy)
+        self.v_reject_btn.setEnabled(bool(p) and status in ("requested", "proposed", "gated", "idea") and not busy)
         if not p:
             self.version_detail.setText("Select a proposal.")
             return

@@ -66,6 +66,35 @@ WHITELIST = {
         "memory.context_chars", "systems/memory/system.py", "int", "MEMORY_CONTEXT_MAX_CHARS",
         "The character budget for that recent-memory block.", 1500, 6000,
         up="more memory text in her context", down="less memory text in her context"),
+    # 2026-09-28 (Craig, twice: "why is this memory thing the only thing she's
+    # proposed?" then "widen what she can propose"). Five targets, four of
+    # which her own measurements correctly report as inert, left exactly one
+    # door — and that one's measurement can never read zero, because any
+    # finite budget cuts some windows. These four are settings that shape how
+    # she behaves and whose measurements CAN say "nothing is wrong", which is
+    # the test a target has to pass to be worth her time.
+    "values.short_words": Target(
+        "values.short_words", "core/values.py", "int", "SHORT_WORDS",
+        "How few words make a reply 'short' when she works out what he values from his thanks and "
+        "his corrections. It decides which shape each of his signals is filed under; it does not "
+        "change how long she speaks.", 10, 60,
+        up="more of her replies count as short", down="fewer of her replies count as short"),
+    "values.window_days": Target(
+        "values.window_days", "core/values.py", "int", "WINDOW_DAYS",
+        "How many days of his thanks and corrections count towards what he values. Older signals "
+        "fall away.", 7, 90,
+        up="she weighs more of his past signals", down="she weighs only his more recent signals"),
+    "mood.keep_events": Target(
+        "mood.keep_events", "core/mood.py", "int", "KEEP_EVENTS",
+        "How many recent things-that-happened-to-her are kept in her mood state. They are what she "
+        "names when she says why she feels as she does; the feeling itself decays on its own clock "
+        "either way.", 10, 60,
+        up="she can name older reasons for her mood", down="she can only name the most recent reasons"),
+    "proactive.curiosity_quiet_s": Target(
+        "proactive.curiosity_quiet_s", "core/proactive.py", "int", "CURIOSITY_QUIET_S",
+        "How many seconds of nobody speaking to her must pass before she will raise a question of "
+        "her own unprompted. Higher means she waits for a longer lull.", 30, 600,
+        up="she waits for a longer silence before asking", down="she speaks up after a shorter silence"),
     "intent.status_check": Target(
         "intent.status_check", "core/intent_classifier.py", "prompt_line", '4. "status_check"',
         "The one line of the intent prompt that decides when a message is a request to "
@@ -232,6 +261,29 @@ def check_direction(t: Target, current: str, new_value: str, effect: str):
     return f"did not state the expected effect in the given terms (said: {effect!r})"
 
 
+def _oscillates(key: str, current, value, merged: list):
+    """The reason to refuse a value that retreads accepted ground, or None.
+    `merged` is every value he has accepted for this target, oldest first."""
+    try:
+        now, new = int(current), int(value)
+        seen = [int(v) for v in merged]
+    except (TypeError, ValueError):
+        return None                     # not a number: the direction check owns it
+    if len(seen) < 2:
+        return None                     # no history to retread
+    lo, hi = min(seen), max(seen)
+    if lo < new < hi and new not in seen:
+        return (f"{new} sits inside the range he has already accepted for this setting "
+                f"({lo}-{hi}, {len(seen)} times). Moving inside old ground is not new information")
+    if len(seen) >= 2 and new != now:
+        last_dir = 1 if seen[-1] > seen[-2] else -1 if seen[-1] < seen[-2] else 0
+        this_dir = 1 if new > now else -1
+        if last_dir and this_dir != last_dir:
+            return (f"the last change he accepted moved this setting {'up' if last_dir > 0 else 'down'} "
+                    f"({seen[-2]} to {seen[-1]}) and {now} to {new} moves it back the other way")
+    return None
+
+
 def _same(value) -> str:
     """2026-09-25: the rejected-value guard compared exact strings, and
     proposal #18 re-proposed #10's line with one letter's case changed. Case
@@ -248,14 +300,18 @@ async def decisions_on(key: str, days: int = 30):
     {rejected value: (when, reason)}) from the proposals table."""
     from datetime import datetime, timedelta
     from db.db import fetch_proposals
-    lines, rejected = [], {}
+    lines, rejected, merged = [], {}, []
     since = datetime.utcnow() - timedelta(days=days)
     try:
         rows = await fetch_proposals(limit=300)
     except Exception:
         rows = []
     for r in rows:
-        if r.get("target") != key or r.get("status") not in ("rejected", "approved"):
+        # 2026-09-28: "merged" is the status an approval actually lands as
+        # (controller/versions.approve), so this filter was dropping every
+        # change he ever accepted — the history he reads and the oscillation
+        # guard both saw only rejections.
+        if r.get("target") != key or r.get("status") not in ("rejected", "approved", "merged"):
             continue
         when = str(r.get("updated_at") or r.get("created_at") or "")[:16]
         try:
@@ -264,13 +320,16 @@ async def decisions_on(key: str, days: int = 30):
         except ValueError:
             pass
         verb = "REJECTED" if r["status"] == "rejected" else "APPROVED"
+        # the value he accepted, for _oscillates(); newest first here
         reason = (r.get("reason") or "").strip()
         lines.append(f"- {when} UTC — he {verb} \"{r.get('title')}\"" + (f": \"{reason}\"" if reason else ""))
         value = _same(r.get("value"))
         if r["status"] == "rejected" and value:
             rejected.setdefault(value, (when, reason or "no reason given"))
+        if r["status"] in ("merged", "approved") and value:
+            merged.append(value)
     history = "\n".join(lines[:6]) if lines else f"(nothing decided on this setting in the last {days} days)"
-    return history, rejected
+    return history, rejected, merged
 
 
 async def propose(key: str, why: str = "", root: str = ALEX_DIR, model: str = None,
@@ -315,7 +374,8 @@ async def propose(key: str, why: str = "", root: str = ALEX_DIR, model: str = No
         numbers = await measure(key)
     except Exception as e:
         numbers = f"(no measurement: {e})"
-    history, rejected = await decisions_on(key)
+    history, rejected, merged = await decisions_on(key)
+    merged = list(reversed(merged))         # fetch_proposals is newest first; oldest first here
 
     prompt = _PROMPT.format(key=key, about=t.about, file=t.file, current=cur,
                             context=_context(text, idx), scores=scores, numbers=numbers,
@@ -344,6 +404,16 @@ async def propose(key: str, why: str = "", root: str = ALEX_DIR, model: str = No
     problem = check_direction(t, cur, value, effect)
     if problem:
         return {"ok": False, "error": f"refused — {problem}. Her rationale: {rationale}"}
+    # 2026-09-28: and a value that only walks back over ground already
+    # covered is refused. Measured on memory.context_chars: seven proposals,
+    # 4000 -> 5000 -> 4500 -> 4800 -> 4950, each merge moving the number that
+    # justified the next one. Deterministic, like the direction check: if the
+    # proposal sits between two values he has already accepted, there is no
+    # new information in it.
+    problem = _oscillates(key, cur, value, merged)
+    if problem:
+        return {"ok": False, "error": f"refused — {problem}. Her rationale: {rationale}"}
+
     # 2026-09-25: a value he rejected in the last 30 days is not proposed
     # again, whatever the rationale. Deterministic, like the direction
     # check; the row this makes rests the target like any other look.
@@ -456,7 +526,96 @@ async def measure(key: str) -> str:
                 f"(only those would be affected by raising the limit above 2).")
     if key in ("memory.window_turns", "memory.context_chars"):
         from systems.memory.system import MEMORY_WINDOW_TURNS, MEMORY_CONTEXT_MAX_CHARS
-        return await _memory_windows(MEMORY_WINDOW_TURNS, MEMORY_CONTEXT_MAX_CHARS)
+        windows = await _memory_windows(MEMORY_WINDOW_TURNS, MEMORY_CONTEXT_MAX_CHARS)
+        # 2026-09-28. This measurement was the reason she proposed the same
+        # setting seven times and walked its value 4000 -> 5000 -> 4500 ->
+        # 4800 -> 4950 with no direction in it: "the budget cut 22% of
+        # windows" reads like a defect and is simply what a finite budget
+        # does. It can never report zero, so her rule ("a change needs a
+        # number behind it") always fired here and never fired anywhere else.
+        # What is missing is a link from a cut window to a WORSE REPLY, and
+        # nothing in her data carries one. Until something does, the honest
+        # measurement says so, and the honest proposal is no change.
+        return (windows + "\n\nNo reply has ever been tied to a window that was cut: nothing measures "
+                "whether the turns that fell out of a window were needed. Cutting is what a budget does, "
+                "not evidence that the budget is wrong, and this number can never read zero at any value. "
+                "So no value of either setting can be shown to be better than the one before it. Propose "
+                "no change, and say that the evidence to decide it does not exist yet.")
+    if key == "values.short_words":
+        import sqlite3
+        from db.db import DB_PATH, fetch_value_signals
+        from core.values import SHORT_WORDS, LONG_WORDS
+        from core.self_reflection import get_creator_name
+        conn = sqlite3.connect(DB_PATH)
+        lens = [len((r[0] or "").split()) for r in conn.execute(
+            "SELECT response FROM memory WHERE created_at > datetime('now','-14 days') "
+            "AND COALESCE(retracted,0)=0 AND response IS NOT NULL")]
+        conn.close()
+        if not lens:
+            return "no replies in the last 14 days to measure"
+        lens.sort()
+        mid = lens[len(lens) // 2]
+        under = sum(1 for n in lens if n <= SHORT_WORDS)
+        signals = await fetch_value_signals((await get_creator_name() or "craig").lower(), days=30)
+        s_short = sum(1 for s in signals if int(s.get("words") or 0) <= SHORT_WORDS)
+        return (f"{len(lens)} replies in 14 days: median {mid} words, {under} ({100 * under / len(lens):.0f}%) "
+                f"at or under the current {SHORT_WORDS}. Of his {len(signals)} thanks-and-correction signals in "
+                f"30 days, {s_short} followed a reply counted short and {len(signals) - s_short} did not. "
+                f"'Long' begins at {LONG_WORDS}. A threshold that puts nearly every reply on one side of the "
+                f"line tells her nothing about what he values; one that splits them can.")
+    if key == "values.window_days":
+        from db.db import fetch_value_signals
+        from core.self_reflection import get_creator_name
+        from core.values import WINDOW_DAYS, MIN_SIGNALS
+        who = (await get_creator_name() or "craig").lower()
+        inside = await fetch_value_signals(who, days=WINDOW_DAYS)
+        wider = await fetch_value_signals(who, days=365)
+        return (f"{len(inside)} of his signals fall inside the current {WINDOW_DAYS} days; {len(wider)} exist in "
+                f"the last year. A preference needs {MIN_SIGNALS} signals before it counts at all, so a window "
+                f"that holds fewer than that produces nothing whatever its length. Widening it only helps if "
+                f"the extra signals are still true of him.")
+    if key == "mood.keep_events":
+        import json
+        import sqlite3
+        from db.db import DB_PATH
+        from core.mood import KEEP_EVENTS, REASON_WINDOW_S
+        conn = sqlite3.connect(DB_PATH)
+        row = conn.execute("SELECT value FROM system_learning WHERE key='mood_state'").fetchone()
+        conn.close()
+        events = (json.loads(row[0]).get("events") or []) if row else []
+        if not events:
+            return "her mood has no recorded events yet"
+        span_h = (max(e.get("t", 0) for e in events) - min(e.get("t", 0) for e in events)) / 3600.0
+        return (f"{len(events)} events kept of a limit of {KEEP_EVENTS}, spanning {span_h:.1f} hours. She only "
+                f"ever names a reason from the last {REASON_WINDOW_S / 60:.0f} minutes, so events older than that "
+                f"are held and never spoken. Keeping more only matters if the list is full AND the extra events "
+                f"would fall inside that window.")
+    if key == "proactive.curiosity_quiet_s":
+        import sqlite3
+        from db.db import DB_PATH
+        from core.proactive import CURIOSITY_QUIET_S
+        conn = sqlite3.connect(DB_PATH)
+        stamps = [r[0] for r in conn.execute(
+            "SELECT created_at FROM memory WHERE created_at > datetime('now','-14 days') "
+            "AND prompt NOT LIKE '(unprompted%' ORDER BY id")]
+        conn.close()
+        from datetime import datetime
+        gaps = []
+        for a, b in zip(stamps, stamps[1:]):
+            try:
+                gaps.append((datetime.strptime(b[:19], "%Y-%m-%d %H:%M:%S")
+                             - datetime.strptime(a[:19], "%Y-%m-%d %H:%M:%S")).total_seconds())
+            except ValueError:
+                continue
+        if not gaps:
+            return "no conversation in the last 14 days to measure the gaps between his turns"
+        gaps.sort()
+        over = sum(1 for g in gaps if g >= CURIOSITY_QUIET_S)
+        med = gaps[len(gaps) // 2]
+        return (f"{len(gaps)} gaps between his turns in 14 days: median {med:.0f}s, and {over} "
+                f"({100 * over / len(gaps):.0f}%) were at least the current {CURIOSITY_QUIET_S}s. Lower and she "
+                f"speaks into shorter pauses, which is how she once cut across his own sentence; higher and she "
+                f"waits for a lull that may not come in a working conversation.")
     if key == "intent.status_check":
         from db.db import fetch_eval_runs
         # 2026-09-25: only runs from a CLEAN tree, and not gate runs. Proposal
