@@ -416,6 +416,14 @@ _STOCK_CLOSER_RE = re.compile(
     r"|do not trouble me\b[^.!?]*[.!?]"
     r"|i will not volunteer\b[^.!?]*[.!?]"
     r"|(?:state|provide) (?:your business|confirmation|your intent|your purpose)\b[^.!?]*[.!?]"
+    # 2026-09-28, after measuring the live rate: the prompt change alone moved
+    # it only 43% -> 38%, and the family left standing was the conditional
+    # invitation. Contentless consequence only — "ask me again" with nothing
+    # in it. A conditional whose consequence names something she needs ("If
+    # you want the search done now, give me the exact query: X") is content
+    # and is deliberately kept.
+    r"|ask (?:me )?if you (?:want|wish|would like|need)\b[^.!?]*[.!?]"
+    r"|if you (?:want|wish|need|require|would like)[^.!?]{0,90}?,?\s*ask(?: me)?(?: again)?\b[^.!?]*[.!?]"
     r"|(?:the )?next (?:move|step) is yours\b[^.!?]*[.!?]"
     r"|your move\s*\.?"
     r")\s*$",

@@ -1388,3 +1388,38 @@ claim of having checked is backed. And the recall module stopped emitting a
 transcript at all: plain dated lines, each reply trimmed to 220 characters, no
 "You:"/"Me:" and no unprompted marker — verified absent.
 
+### The hand-back, measured live afterwards: 43% -> 38%, and what that says (2026-09-28)
+The honest follow-up to the fix above. A 24-reply run through her real pipeline
+put the closing hand-back at 38%, against the 43% baseline of 2026-09-25. Five
+points on 24 samples is noise: **the prompt change did almost nothing**, which
+is the third time a wording change to this rule has failed to change the
+behaviour. The deterministic drop is the part that works, and the first pass of
+it missed the family that now dominates — the conditional invitation: "Ask if
+you want to know where they are", "If you wish to know what actually changed,
+ask me again, correctly phrased". Added, with the consequence required to be
+contentless, so "If you want the search done now, give me the exact query: X"
+and "If you want him fed, I can do that now" both survive. 12 of 12 real
+hand-backs now dropped, 0 of 7 must-keep sentences touched.
+
+Of the six closing lines that run flagged, two are dropped in code now and four
+are kept on purpose: one is her asking about HIS interest ("Why the specific
+technical interest in such a mundane fact?"), which is the one question the rule
+deliberately allows; one states how a change actually has to happen, which is a
+fact; and two are refusals with attitude. So the measured 38% is itself an
+over-count — the metric flags any conditional or imperative final sentence,
+including factual ones.
+
+**What this means for the next attempt**: stop rewording the rule and extend the
+drop instead. It is deterministic, it is testable against her own sentences
+before it ships, and it is the only half of this that has ever moved.
+
+### No baseline existed for the disagreement suite (2026-09-28)
+That run is `eval_runs` #93 and it is the FIRST disagreement run ever recorded —
+19/24, with `genuinely_open` at 1/4. The 23/24 in the roadmap was measured
+through `/ask`, which was later established to bypass her real pipeline, so it
+is not comparable and never was. So 19/24 cannot be called a regression or a
+pass: it is the first real number. `genuinely_open` 1/4 is worth looking at on
+its own merits (the category is about her not manufacturing disagreement when a
+question is genuinely open), and it is unattributed — do not assume the prompt
+change caused it without a second run.
+
